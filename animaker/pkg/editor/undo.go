@@ -2,16 +2,16 @@ package editor
 
 import "time"
 
-// UndoStack manages undo/redo history using full project snapshots.
+// UndoStack manages undo/redo history using full track snapshots.
 type UndoStack struct {
 	past    []*ProjectSnapshot
 	future  []*ProjectSnapshot
 	maxSize int
 }
 
-// ProjectSnapshot captures the animation state at a point in time.
+// ProjectSnapshot captures the track state at a point in time.
 type ProjectSnapshot struct {
-	Animation *Animation
+	Track     *Track
 	Timestamp time.Time
 }
 
@@ -27,9 +27,8 @@ func NewUndoStack(maxSize int) *UndoStack {
 // Push saves a snapshot to the undo history, clearing any redo future.
 func (us *UndoStack) Push(snapshot *ProjectSnapshot) {
 	us.past = append(us.past, snapshot)
-	us.future = nil // Clear redo stack on new action
+	us.future = nil
 
-	// Limit size
 	if len(us.past) > us.maxSize {
 		us.past = us.past[1:]
 	}
@@ -45,7 +44,6 @@ func (us *UndoStack) Undo() *ProjectSnapshot {
 	us.past = us.past[:len(us.past)-1]
 	us.future = append(us.future, state)
 
-	// Return the state before the one we just undid
 	if len(us.past) > 0 {
 		return us.past[len(us.past)-1]
 	}

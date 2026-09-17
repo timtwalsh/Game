@@ -6,387 +6,325 @@ import (
 	"strconv"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
 
-// PropertiesPanel displays and edits properties of the currently selected keyframe.
+// PropertiesPanel edits the schema (props), the active direction's part
+// list, preview overrides, and the selected keyframe's transform/cell/
+// bindings.
 type PropertiesPanel struct {
 	project *editor.Project
 
-	// Widgets
-	frameLabel    *widget.Label
-	durationEntry *widget.Entry
-	speedSlider   *widget.Slider
-	speedLabel    *widget.Label
+	propsSection    *fyne.Container
+	previewSection  *fyne.Container
+	partsSection    *fyne.Container
+	keyframeSection *fyne.Container
 
-	// Hitbox fields
-	collisionSection fyne.CanvasObject
-	attackSection    fyne.CanvasObject
-
-	// Sprite picker
-	sheetSelect   *widget.Select
-	spriteGrid    *fyne.Container
-
-	// Events list
-	eventsSection fyne.CanvasObject
-
-	// Callbacks
-	OnDurationChanged func(uint32)
-	OnSpeedChanged    func(float32)
-	OnSpriteSelected  func(sheetName string, index int)
-	OnBoxChanged      func()
-	OnAddEvent        func(eventType string)
-	OnDeleteEvent     func(int)
+	OnPropsChanged     func()
+	OnPartRemoved      func(idx int)
+	OnKeyframeChanged  func()
+	OnPreviewChanged   func()
 }
 
-// NewPropertiesPanel creates a new properties panel.
 func NewPropertiesPanel(project *editor.Project) *PropertiesPanel {
-	return &PropertiesPanel{
-		project: project,
-	}
+	return &PropertiesPanel{project: project}
 }
 
-// SetProject updates the project reference.
 func (pp *PropertiesPanel) SetProject(project *editor.Project) {
 	pp.project = project
 }
 
-// Build creates the full properties panel container.
 func (pp *PropertiesPanel) Build() fyne.CanvasObject {
-	// -- Frame Info Section --
-	pp.frameLabel = widget.NewLabel("No frame selected")
-	pp.frameLabel.TextStyle = fyne.TextStyle{Bold: true}
+	pp.propsSection = container.NewVBox()
+	pp.previewSection = container.NewVBox()
+	pp.partsSection = container.NewVBox()
+	pp.keyframeSection = container.NewVBox()
 
-	pp.durationEntry = widget.NewEntry()
-	pp.durationEntry.SetPlaceHolder("100")
-	pp.durationEntry.OnChanged = func(s string) {
-		if val, err := strconv.ParseUint(s, 10, 32); err == nil {
-			kf := pp.project.GetCurrentKeyFrame()
-			if kf != nil {
-				kf.Duration = uint32(val)
-				pp.project.Dirty = true
-				if pp.OnDurationChanged != nil {
-					pp.OnDurationChanged(uint32(val))
-				}
-			}
-		}
-	}
+	pp.Refresh()
 
-	pp.speedSlider = widget.NewSlider(0.1, 3.0)
-	pp.speedSlider.Step = 0.1
-	pp.speedSlider.Value = 1.0
-	pp.speedLabel = widget.NewLabel("1.0x")
-	pp.speedSlider.OnChanged = func(v float64) {
-		pp.speedLabel.SetText(fmt.Sprintf("%.1fx", v))
-		kf := pp.project.GetCurrentKeyFrame()
-		if kf != nil {
-			kf.Speed = float32(v)
-			pp.project.Dirty = true
-			if pp.OnSpeedChanged != nil {
-				pp.OnSpeedChanged(float32(v))
-			}
-		}
-	}
-
-	frameSection := container.NewVBox(
-		pp.frameLabel,
+	all := container.NewVBox(
+		newSectionHeader("PROPS (schema)"),
+		pp.propsSection,
 		widget.NewSeparator(),
-		container.NewGridWithColumns(2,
-			widget.NewLabel("Duration (ms):"), pp.durationEntry,
-		),
-		container.NewGridWithColumns(3,
-			widget.NewLabel("Speed:"), pp.speedSlider, pp.speedLabel,
-		),
+		newSectionHeader("PREVIEW OVERRIDES"),
+		pp.previewSection,
+		widget.NewSeparator(),
+		newSectionHeader("PARTS (this direction)"),
+		pp.partsSection,
+		widget.NewSeparator(),
+		newSectionHeader("SELECTED KEYFRAME"),
+		pp.keyframeSection,
 	)
 
-	// -- Sprite Picker Section --
-	sheetNames := pp.getSheetNames()
-	pp.sheetSelect = widget.NewSelect(sheetNames, func(name string) {
-		pp.refreshSpritePicker(name)
-	})
-	if len(sheetNames) > 0 {
-		pp.sheetSelect.SetSelected(sheetNames[0])
-	}
-
-	pp.spriteGrid = container.NewGridWrap(fyne.NewSize(36, 36))
-
-	spriteSection := container.NewVBox(
-		newSectionHeader("SPRITE PICKER"),
-		pp.sheetSelect,
-		container.NewVScroll(pp.spriteGrid),
-	)
-
-	// -- Collision Box Section --
-	collisionContent := pp.buildHitboxSection("COLLISION BOX", editor.Box{}, func() *editor.Box {
-		kf := pp.project.GetCurrentKeyFrame()
-		if kf != nil {
-			return kf.HitBox
-		}
-		return nil
-	}, func(box *editor.Box) {
-		kf := pp.project.GetCurrentKeyFrame()
-		if kf != nil {
-			kf.HitBox = box
-			pp.project.RecordUndo()
-		}
-	})
-
-	// -- Attack Box Section --
-	attackContent := pp.buildHitboxSection("ATTACK BOX", editor.Box{}, func() *editor.Box {
-		kf := pp.project.GetCurrentKeyFrame()
-		if kf != nil {
-			return kf.AttackHitBox
-		}
-		return nil
-	}, func(box *editor.Box) {
-		kf := pp.project.GetCurrentKeyFrame()
-		if kf != nil {
-			kf.AttackHitBox = box
-			pp.project.RecordUndo()
-		}
-	})
-
-	// -- Events Section --
-	addSoundBtn := widget.NewButton("+ Sound", func() {
-		if pp.OnAddEvent != nil {
-			pp.OnAddEvent("sound")
-		}
-	})
-	addParticleBtn := widget.NewButton("+ Particles", func() {
-		if pp.OnAddEvent != nil {
-			pp.OnAddEvent("particle")
-		}
-	})
-	addShakeBtn := widget.NewButton("+ Shake", func() {
-		if pp.OnAddEvent != nil {
-			pp.OnAddEvent("shake")
-		}
-	})
-	addFlashBtn := widget.NewButton("+ Flash", func() {
-		if pp.OnAddEvent != nil {
-			pp.OnAddEvent("flash")
-		}
-	})
-
-	eventsSection := container.NewVBox(
-		newSectionHeader("EVENTS"),
-		pp.buildEventsList(),
-		container.NewGridWithColumns(2,
-			addSoundBtn, addParticleBtn,
-			addShakeBtn, addFlashBtn,
-		),
-	)
-
-	// Assemble all sections
-	allSections := container.NewVBox(
-		frameSection,
-		widget.NewSeparator(),
-		spriteSection,
-		widget.NewSeparator(),
-		collisionContent,
-		widget.NewSeparator(),
-		attackContent,
-		widget.NewSeparator(),
-		eventsSection,
-	)
-
-	scroll := container.NewVScroll(allSections)
-	scroll.SetMinSize(fyne.NewSize(250, 400))
-
+	scroll := container.NewVScroll(all)
+	scroll.SetMinSize(fyne.NewSize(300, 400))
 	return scroll
 }
 
-// Refresh updates the panel to reflect the current keyframe state.
+// Refresh rebuilds every section from current project state.
 func (pp *PropertiesPanel) Refresh() {
-	kf := pp.project.GetCurrentKeyFrame()
-	if kf == nil {
-		pp.frameLabel.SetText("No frame selected")
-		pp.durationEntry.SetText("")
+	pp.refreshProps()
+	pp.refreshPreview()
+	pp.refreshParts()
+	pp.refreshKeyframe()
+}
+
+// -- Props schema --
+
+func (pp *PropertiesPanel) refreshProps() {
+	if pp.propsSection == nil {
 		return
 	}
-
-	pp.frameLabel.SetText(fmt.Sprintf("Frame %d of %d", kf.ID, len(pp.project.CurrentAnimation.KeyFrames)))
-	pp.durationEntry.SetText(strconv.FormatUint(uint64(kf.Duration), 10))
-	pp.speedSlider.SetValue(float64(kf.Speed))
-	pp.speedLabel.SetText(fmt.Sprintf("%.1fx", kf.Speed))
-
-	// Update sheet selector
-	sheetNames := pp.getSheetNames()
-	pp.sheetSelect.Options = sheetNames
-	pp.sheetSelect.Refresh()
-}
-
-// RefreshSheetList updates the sprite picker sheet selector options.
-func (pp *PropertiesPanel) RefreshSheetList() {
-	sheetNames := pp.getSheetNames()
-	pp.sheetSelect.Options = sheetNames
-	pp.sheetSelect.Refresh()
-	if len(sheetNames) > 0 && pp.sheetSelect.Selected == "" {
-		pp.sheetSelect.SetSelected(sheetNames[0])
-	}
-}
-
-// -- Private helpers --
-
-func (pp *PropertiesPanel) getSheetNames() []string {
-	names := []string{}
-	for name := range pp.project.LoadedSheets {
-		names = append(names, name)
-	}
-	return names
-}
-
-func (pp *PropertiesPanel) refreshSpritePicker(sheetName string) {
-	pp.spriteGrid.RemoveAll()
-
-	sheet, ok := pp.project.LoadedSheets[sheetName]
-	if !ok {
-		return
-	}
-
-	for i := 0; i < sheet.SpriteCount(); i++ {
-		idx := i // capture
-		label := fmt.Sprintf("%d", idx)
-		btn := widget.NewButton(label, func() {
-			if pp.OnSpriteSelected != nil {
-				pp.OnSpriteSelected(sheetName, idx)
+	pp.propsSection.RemoveAll()
+	for i, prop := range pp.project.CurrentTrack.Props {
+		idx := i
+		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, prop.Default))
+		delBtn := widget.NewButton("x", func() {
+			pp.project.RecordUndo()
+			editor.RemoveProp(pp.project.CurrentTrack, idx)
+			pp.project.Dirty = true
+			if pp.OnPropsChanged != nil {
+				pp.OnPropsChanged()
 			}
 		})
-		btn.Importance = widget.LowImportance
-		pp.spriteGrid.Add(btn)
+		delBtn.Importance = widget.DangerImportance
+		pp.propsSection.Add(container.NewBorder(nil, nil, nil, delBtn, label))
 	}
-
-	pp.spriteGrid.Refresh()
+	pp.propsSection.Refresh()
 }
 
-func (pp *PropertiesPanel) buildHitboxSection(title string, _ editor.Box, getBox func() *editor.Box, setBox func(*editor.Box)) fyne.CanvasObject {
-	header := newSectionHeader(title)
+// -- Preview overrides --
 
-	xEntry := widget.NewEntry()
-	xEntry.SetPlaceHolder("0")
-	yEntry := widget.NewEntry()
-	yEntry.SetPlaceHolder("0")
-	wEntry := widget.NewEntry()
-	wEntry.SetPlaceHolder("0")
-	hEntry := widget.NewEntry()
-	hEntry.SetPlaceHolder("0")
-
-	updateFields := func() {
-		box := getBox()
-		if box != nil {
-			xEntry.SetText(strconv.Itoa(box.X))
-			yEntry.SetText(strconv.Itoa(box.Y))
-			wEntry.SetText(strconv.Itoa(box.W))
-			hEntry.SetText(strconv.Itoa(box.H))
+func (pp *PropertiesPanel) refreshPreview() {
+	if pp.previewSection == nil {
+		return
+	}
+	pp.previewSection.RemoveAll()
+	for _, prop := range pp.project.CurrentTrack.Props {
+		name := prop.Name
+		entry := widget.NewEntry()
+		if v, ok := pp.project.PreviewProps[name]; ok {
+			entry.SetText(v)
 		} else {
-			xEntry.SetText("")
-			yEntry.SetText("")
-			wEntry.SetText("")
-			hEntry.SetText("")
+			entry.SetText(prop.Default)
 		}
+		entry.OnChanged = func(v string) {
+			pp.project.PreviewProps[name] = v
+			if pp.OnPreviewChanged != nil {
+				pp.OnPreviewChanged()
+			}
+		}
+		row := container.NewBorder(nil, nil, widget.NewLabel(name+":"), nil, entry)
+		pp.previewSection.Add(row)
+	}
+	pp.previewSection.Refresh()
+}
+
+// -- Parts list --
+
+func (pp *PropertiesPanel) refreshParts() {
+	if pp.partsSection == nil {
+		return
+	}
+	pp.partsSection.RemoveAll()
+	dir := pp.project.ActiveDirection()
+	if dir == nil {
+		return
+	}
+	sel := pp.project.Selection
+	for i, part := range dir.Parts {
+		idx := i
+		kindTag := "sheet"
+		if part.Kind == editor.PartKindNestedAni {
+			kindTag = "nested"
+		}
+		btn := widget.NewButton(fmt.Sprintf("%s [%s]", part.Name, kindTag), func() {
+			pp.project.Selection.PartIndex = idx
+			pp.project.Selection.KeyframeIndex = -1
+			pp.Refresh()
+		})
+		if sel != nil && sel.PartIndex == idx {
+			btn.Importance = widget.HighImportance
+		}
+		delBtn := widget.NewButton("x", func() {
+			pp.project.RecordUndo()
+			editor.RemovePart(dir, idx)
+			if pp.OnPartRemoved != nil {
+				pp.OnPartRemoved(idx)
+			}
+		})
+		delBtn.Importance = widget.DangerImportance
+		pp.partsSection.Add(container.NewBorder(nil, nil, nil, delBtn, btn))
+	}
+	pp.partsSection.Refresh()
+}
+
+// -- Selected keyframe --
+
+func (pp *PropertiesPanel) refreshKeyframe() {
+	if pp.keyframeSection == nil {
+		return
+	}
+	pp.keyframeSection.RemoveAll()
+
+	part := pp.project.SelectedPart()
+	if part == nil {
+		pp.keyframeSection.Add(widget.NewLabel("No part selected"))
+		pp.keyframeSection.Refresh()
+		return
+	}
+	kf := pp.project.SelectedKeyframe()
+	if kf == nil {
+		pp.keyframeSection.Add(widget.NewLabel(fmt.Sprintf("%s: no keyframe selected", part.Name)))
+		pp.keyframeSection.Refresh()
+		return
 	}
 
-	applyFields := func() {
-		box := getBox()
-		if box == nil {
+	xEntry := numEntry(fmt.Sprintf("%v", kf.X), func(v float32) { kf.X = v; pp.notifyKeyframeChanged() })
+	yEntry := numEntry(fmt.Sprintf("%v", kf.Y), func(v float32) { kf.Y = v; pp.notifyKeyframeChanged() })
+	zEntry := numEntry(fmt.Sprintf("%v", kf.Z), func(v float32) { kf.Z = v; pp.notifyKeyframeChanged() })
+	rotEntry := numEntry(fmt.Sprintf("%v", kf.RotationDeg), func(v float32) { kf.RotationDeg = v; pp.notifyKeyframeChanged() })
+
+	transformGrid := container.NewGridWithColumns(2,
+		widget.NewLabel("X"), xEntry,
+		widget.NewLabel("Y"), yEntry,
+		widget.NewLabel("Z"), zEntry,
+		widget.NewLabel("Rotation"), rotEntry,
+	)
+	pp.keyframeSection.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms", part.Name, kf.TimeMs)))
+	pp.keyframeSection.Add(transformGrid)
+
+	if part.Kind == editor.PartKindSheet {
+		pp.keyframeSection.Add(pp.buildCellPicker(part, kf))
+	} else {
+		pp.keyframeSection.Add(pp.buildNestedBindingsEditor(part))
+	}
+
+	pp.keyframeSection.Refresh()
+}
+
+func (pp *PropertiesPanel) notifyKeyframeChanged() {
+	pp.project.Dirty = true
+	if pp.OnKeyframeChanged != nil {
+		pp.OnKeyframeChanged()
+	}
+}
+
+func (pp *PropertiesPanel) buildCellPicker(part *editor.Part, kf *editor.Keyframe) fyne.CanvasObject {
+	rowEntry := intEntry(kf.Row, func(v int) { kf.Row = v; pp.notifyKeyframeChanged(); pp.refreshKeyframe() })
+	colEntry := intEntry(kf.Col, func(v int) { kf.Col = v; pp.notifyKeyframeChanged(); pp.refreshKeyframe() })
+
+	grid := container.NewGridWithColumns(2,
+		widget.NewLabel("Row"), rowEntry,
+		widget.NewLabel("Col"), colEntry,
+	)
+
+	sheet := pp.project.ResolveActiveSheet(part)
+	preview := container.NewVBox(grid)
+	if sheet == nil {
+		preview.Add(widget.NewLabel(fmt.Sprintf("Active sheet %q not loaded", pp.project.ResolveActiveSheetName(part))))
+		return preview
+	}
+	preview.Add(widget.NewLabel(fmt.Sprintf("Sheet %q: %dx%d cells", sheet.Name, sheet.Cols(), sheet.Rows())))
+	if img, err := sheet.CellImage(kf.Row, kf.Col); err == nil {
+		ci := canvas.NewImageFromImage(img)
+		ci.ScaleMode = canvas.ImageScalePixels
+		ci.FillMode = canvas.ImageFillOriginal
+		ci.SetMinSize(fyne.NewSize(float32(sheet.CellW)*2, float32(sheet.CellH)*2))
+		preview.Add(ci)
+	} else {
+		preview.Add(widget.NewLabel(err.Error()))
+	}
+	return preview
+}
+
+func (pp *PropertiesPanel) buildNestedBindingsEditor(part *editor.Part) fyne.CanvasObject {
+	box := container.NewVBox(widget.NewLabel("Nested: " + part.NestedAniPath))
+
+	for propName, binding := range part.NestedBindings {
+		name := propName
+		b := binding
+		modeSelect := widget.NewSelect([]string{"passthrough", "static"}, nil)
+		valueEntry := widget.NewEntry()
+		if b.PassthroughFrom != "" {
+			modeSelect.SetSelected("passthrough")
+			valueEntry.SetText(b.PassthroughFrom)
+		} else {
+			modeSelect.SetSelected("static")
+			valueEntry.SetText(b.StaticValue)
+		}
+		apply := func() {
+			nb := part.NestedBindings[name]
+			if modeSelect.Selected == "passthrough" {
+				nb.PassthroughFrom = valueEntry.Text
+				nb.StaticValue = ""
+			} else {
+				nb.StaticValue = valueEntry.Text
+				nb.PassthroughFrom = ""
+			}
+			part.NestedBindings[name] = nb
+			pp.notifyKeyframeChanged()
+		}
+		modeSelect.OnChanged = func(string) { apply() }
+		valueEntry.OnChanged = func(string) { apply() }
+
+		delBtn := widget.NewButton("x", func() {
+			delete(part.NestedBindings, name)
+			pp.notifyKeyframeChanged()
+			pp.refreshKeyframe()
+		})
+		delBtn.Importance = widget.DangerImportance
+
+		row := container.NewBorder(nil, nil, widget.NewLabel(name), delBtn,
+			container.NewHBox(modeSelect, valueEntry))
+		box.Add(row)
+	}
+
+	newPropEntry := widget.NewEntry()
+	newPropEntry.SetPlaceHolder("prop name, e.g. direction")
+	addBtn := widget.NewButton("+ Binding", func() {
+		if newPropEntry.Text == "" {
 			return
 		}
-		if v, err := strconv.Atoi(xEntry.Text); err == nil {
-			box.X = v
+		if part.NestedBindings == nil {
+			part.NestedBindings = map[string]editor.PropBinding{}
 		}
-		if v, err := strconv.Atoi(yEntry.Text); err == nil {
-			box.Y = v
-		}
-		if v, err := strconv.Atoi(wEntry.Text); err == nil {
-			box.W = v
-		}
-		if v, err := strconv.Atoi(hEntry.Text); err == nil {
-			box.H = v
-		}
-		pp.project.Dirty = true
-		if pp.OnBoxChanged != nil {
-			pp.OnBoxChanged()
-		}
-	}
-
-	xEntry.OnChanged = func(_ string) { applyFields() }
-	yEntry.OnChanged = func(_ string) { applyFields() }
-	wEntry.OnChanged = func(_ string) { applyFields() }
-	hEntry.OnChanged = func(_ string) { applyFields() }
-
-	addBtn := widget.NewButton("Add "+title, func() {
-		newBox := &editor.Box{X: 4, Y: 4, W: 24, H: 24}
-		setBox(newBox)
-		updateFields()
-		if pp.OnBoxChanged != nil {
-			pp.OnBoxChanged()
-		}
+		part.NestedBindings[newPropEntry.Text] = editor.PropBinding{}
+		newPropEntry.SetText("")
+		pp.notifyKeyframeChanged()
+		pp.refreshKeyframe()
 	})
+	box.Add(container.NewBorder(nil, nil, nil, addBtn, newPropEntry))
 
-	deleteBtn := widget.NewButton("Delete", func() {
-		setBox(nil)
-		updateFields()
-		if pp.OnBoxChanged != nil {
-			pp.OnBoxChanged()
-		}
-	})
-	deleteBtn.Importance = widget.DangerImportance
-
-	fields := container.NewGridWithColumns(4,
-		container.NewVBox(widget.NewLabel("X"), xEntry),
-		container.NewVBox(widget.NewLabel("Y"), yEntry),
-		container.NewVBox(widget.NewLabel("W"), wEntry),
-		container.NewVBox(widget.NewLabel("H"), hEntry),
-	)
-
-	// Show fields or "Add" button based on whether box exists
-	updateFields()
-
-	return container.NewVBox(
-		header,
-		fields,
-		container.NewHBox(addBtn, layout.NewSpacer(), deleteBtn),
-	)
+	return box
 }
 
-func (pp *PropertiesPanel) buildEventsList() fyne.CanvasObject {
-	kf := pp.project.GetCurrentKeyFrame()
-	if kf == nil || len(kf.Events) == 0 {
-		return widget.NewLabel("No events")
-	}
+// -- Helpers --
 
-	items := []fyne.CanvasObject{}
-	for i, e := range kf.Events {
-		idx := i
-		label := fmt.Sprintf("%s", e.EventType())
-		switch v := e.(type) {
-		case *editor.SoundEvent:
-			label = fmt.Sprintf("♪ Sound: %s (pitch: %.1f)", v.FilePath, v.Pitch)
-		case *editor.ParticleEvent:
-			label = fmt.Sprintf("✦ Particle: %s at (%d,%d)", v.Type, v.X, v.Y)
-		case *editor.ShakeEvent:
-			label = fmt.Sprintf("⚡ Shake: %dms (%.0f%%)", v.DurationMs, v.Intensity*100)
-		case *editor.FlashEvent:
-			label = fmt.Sprintf("◆ Flash: %s %dms", v.Color, v.DurationMs)
+func numEntry(initial string, onChange func(float32)) *widget.Entry {
+	e := widget.NewEntry()
+	e.SetText(initial)
+	e.OnChanged = func(s string) {
+		if v, err := strconv.ParseFloat(s, 32); err == nil {
+			onChange(float32(v))
 		}
-
-		deleteBtn := widget.NewButton("✕", func() {
-			if pp.OnDeleteEvent != nil {
-				pp.OnDeleteEvent(idx)
-			}
-		})
-		deleteBtn.Importance = widget.DangerImportance
-
-		row := container.NewBorder(nil, nil, nil, deleteBtn, widget.NewLabel(label))
-		items = append(items, row)
 	}
-
-	return container.NewVBox(items...)
+	return e
 }
 
-// newSectionHeader creates a styled section header.
+func intEntry(initial int, onChange func(int)) *widget.Entry {
+	e := widget.NewEntry()
+	e.SetText(strconv.Itoa(initial))
+	e.OnChanged = func(s string) {
+		if v, err := strconv.Atoi(s); err == nil {
+			onChange(v)
+		}
+	}
+	return e
+}
+
 func newSectionHeader(text string) fyne.CanvasObject {
 	label := widget.NewLabel(text)
 	label.TextStyle = fyne.TextStyle{Bold: true}

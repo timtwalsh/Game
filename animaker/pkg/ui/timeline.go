@@ -3,7 +3,6 @@ package ui
 import (
 	"animaker/pkg/editor"
 	"fmt"
-	"image/color"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -11,67 +10,46 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// TimelineWidget displays animation frames horizontally with playback controls.
+// TimelineWidget shows one row per Part in the active direction, each row
+// listing that part's keyframes in time order. Clicking a keyframe selects
+// it; each row has an "Add here" button that inserts a keyframe for that
+// part at the current playhead time.
 type TimelineWidget struct {
-	project       *editor.Project
-	selectedFrame int
-	infoLabel     *widget.Label
+	project   *editor.Project
+	infoLabel *widget.Label
+	rowsBox   *fyne.Container
 
-	// Callbacks
-	OnFrameSelected   func(int)
-	OnFrameDuplicated func(int)
-	OnFrameDeleted    func(int)
-	OnPlayToggle      func()
-	OnStepForward     func()
-	OnStepBackward    func()
-	OnAddFrame        func()
+	OnPartSelected     func(partIdx int)
+	OnKeyframeSelected func(partIdx, kfIdx int)
+	OnKeyframeAdded    func(partIdx int)
+	OnKeyframeDeleted  func(partIdx, kfIdx int)
+	OnPlayToggle       func()
+	OnStepForward      func()
+	OnStepBackward     func()
 }
 
-// NewTimelineWidget creates a new timeline widget.
 func NewTimelineWidget(project *editor.Project) *TimelineWidget {
-	return &TimelineWidget{
-		project:       project,
-		selectedFrame: 0,
-	}
+	return &TimelineWidget{project: project}
 }
 
-// SetProject updates the project reference.
 func (tw *TimelineWidget) SetProject(project *editor.Project) {
 	tw.project = project
-	tw.selectedFrame = 0
 }
 
-// SetSelectedFrame updates which frame is highlighted.
-func (tw *TimelineWidget) SetSelectedFrame(idx int) {
-	tw.selectedFrame = idx
-}
-
-// SelectedFrame returns the currently selected frame index.
-func (tw *TimelineWidget) SelectedFrame() int {
-	return tw.selectedFrame
-}
-
-// Build creates the full timeline container with controls and frame boxes.
 func (tw *TimelineWidget) Build() fyne.CanvasObject {
-	// Playback controls
-	playBtn := widget.NewButton("▶ Play", func() {
+	playBtn := widget.NewButton("Play/Pause", func() {
 		if tw.OnPlayToggle != nil {
 			tw.OnPlayToggle()
 		}
 	})
-	stepBackBtn := widget.NewButton("◀", func() {
+	stepBackBtn := widget.NewButton("<", func() {
 		if tw.OnStepBackward != nil {
 			tw.OnStepBackward()
 		}
 	})
-	stepFwdBtn := widget.NewButton("▶▶", func() {
+	stepFwdBtn := widget.NewButton(">", func() {
 		if tw.OnStepForward != nil {
 			tw.OnStepForward()
-		}
-	})
-	addFrameBtn := widget.NewButton("+ Frame", func() {
-		if tw.OnAddFrame != nil {
-			tw.OnAddFrame()
 		}
 	})
 
@@ -98,157 +76,116 @@ func (tw *TimelineWidget) Build() fyne.CanvasObject {
 		widget.NewLabel("Speed:"), speedSelect,
 		widget.NewSeparator(),
 		loopCheck,
-		widget.NewSeparator(),
-		addFrameBtn,
 	)
 
-	// Info bar
 	tw.infoLabel = widget.NewLabel(tw.buildInfoText())
 
-	// Timeline background
-	timelineBg := canvas.NewRectangle(ColorTimelineBackground)
-	timelineBg.SetMinSize(fyne.NewSize(0, 140))
-
-	frameBoxes := tw.BuildFrameBoxes()
-	frameScroll := container.NewHScroll(frameBoxes)
-	frameScroll.SetMinSize(fyne.NewSize(0, 80))
+	tw.rowsBox = container.NewVBox()
+	tw.refreshRows()
 
 	content := container.NewVBox(
 		controls,
-		frameScroll,
+		container.NewVScroll(tw.rowsBox),
 		tw.infoLabel,
 	)
 
-	return container.NewStack(timelineBg, content)
+	bg := canvas.NewRectangle(ColorTimelineBackground)
+	bg.SetMinSize(fyne.NewSize(0, 220))
+
+	return container.NewStack(bg, content)
 }
 
-// BuildFrameBoxes creates the horizontal list of frame boxes.
-func (tw *TimelineWidget) BuildFrameBoxes() *fyne.Container {
-	boxes := []fyne.CanvasObject{}
-
-	anim := tw.project.CurrentAnimation
-	for i, kf := range anim.KeyFrames {
-		idx := i // capture for closure
-		box := tw.createFrameBox(kf, idx)
-		boxes = append(boxes, box)
-	}
-
-	if len(boxes) == 0 {
-		emptyLabel := widget.NewLabel("No frames — click '+ Frame' to add one")
-		emptyLabel.Alignment = fyne.TextAlignCenter
-		return container.NewHBox(emptyLabel)
-	}
-
-	return container.NewHBox(boxes...)
+// Refresh rebuilds the part rows and info text to match current project state.
+func (tw *TimelineWidget) Refresh() {
+	tw.refreshRows()
+	tw.RefreshInfo()
 }
 
-// RefreshInfo updates the info label text.
 func (tw *TimelineWidget) RefreshInfo() {
 	if tw.infoLabel != nil {
 		tw.infoLabel.SetText(tw.buildInfoText())
 	}
 }
 
-// createFrameBox creates a single frame box for the timeline.
-func (tw *TimelineWidget) createFrameBox(kf *editor.KeyFrame, idx int) fyne.CanvasObject {
-	// Determine background color
-	bgColor := ColorFrameBox
-	if idx == tw.selectedFrame {
-		bgColor = ColorFrameBoxSelected
+func (tw *TimelineWidget) refreshRows() {
+	if tw.rowsBox == nil {
+		return
+	}
+	tw.rowsBox.RemoveAll()
+
+	dir := tw.project.ActiveDirection()
+	if dir == nil || len(dir.Parts) == 0 {
+		tw.rowsBox.Add(widget.NewLabel("No parts in this direction — add one from the Rig menu"))
+		return
 	}
 
-	bg := canvas.NewRectangle(bgColor)
-	bg.SetMinSize(fyne.NewSize(90, 60))
+	for i, part := range dir.Parts {
+		tw.rowsBox.Add(tw.buildPartRow(i, part))
+	}
+	tw.rowsBox.Refresh()
+}
 
-	// Frame label
-	frameLabel := canvas.NewText(fmt.Sprintf("Frame %d", kf.ID), color.RGBA{R: 200, G: 200, B: 210, A: 255})
-	frameLabel.TextSize = 10
-
-	// Duration
-	durLabel := canvas.NewText(fmt.Sprintf("%d ms", kf.Duration), color.RGBA{R: 240, G: 240, B: 245, A: 255})
-	durLabel.TextSize = 14
-	durLabel.TextStyle = fyne.TextStyle{Bold: true}
-
-	// Event icons
-	eventIcons := tw.buildEventIcons(kf)
-
-	content := container.NewVBox(
-		frameLabel,
-		durLabel,
-		eventIcons,
-	)
-
-	// Wrap in a tappable button
-	btn := widget.NewButton("", func() {
-		tw.selectedFrame = idx
-		if tw.OnFrameSelected != nil {
-			tw.OnFrameSelected(idx)
+func (tw *TimelineWidget) buildPartRow(partIdx int, part *editor.Part) fyne.CanvasObject {
+	kindTag := "[sheet]"
+	if part.Kind == editor.PartKindNestedAni {
+		kindTag = "[nested]"
+	}
+	nameLabel := widget.NewLabel(fmt.Sprintf("%s %s", part.Name, kindTag))
+	nameLabel.TextStyle = fyne.TextStyle{Bold: true}
+	selectBtn := widget.NewButton("select", func() {
+		if tw.OnPartSelected != nil {
+			tw.OnPartSelected(partIdx)
 		}
 	})
-	btn.Importance = widget.LowImportance
+	selectBtn.Importance = widget.LowImportance
 
-	return container.NewStack(bg, content, btn)
-}
-
-// buildEventIcons creates a line of event indicator icons.
-func (tw *TimelineWidget) buildEventIcons(kf *editor.KeyFrame) fyne.CanvasObject {
-	icons := ""
-
-	hasSound := false
-	hasParticle := false
-	hasShake := false
-	hasFlash := false
-
-	for _, e := range kf.Events {
-		switch e.EventType() {
-		case "sound":
-			hasSound = true
-		case "particle":
-			hasParticle = true
-		case "shake":
-			hasShake = true
-		case "flash":
-			hasFlash = true
+	addBtn := widget.NewButton("+ here", func() {
+		if tw.OnKeyframeAdded != nil {
+			tw.OnKeyframeAdded(partIdx)
 		}
+	})
+	addBtn.Importance = widget.LowImportance
+
+	kfRow := container.NewHBox()
+	sel := tw.project.Selection
+	for kfIdx, kf := range part.Keyframes {
+		kIdx := kfIdx
+		label := fmt.Sprintf("%dms", kf.TimeMs)
+		btn := widget.NewButton(label, func() {
+			if tw.OnKeyframeSelected != nil {
+				tw.OnKeyframeSelected(partIdx, kIdx)
+			}
+		})
+		if sel != nil && sel.PartIndex == partIdx && sel.KeyframeIndex == kIdx {
+			btn.Importance = widget.HighImportance
+		} else {
+			btn.Importance = widget.LowImportance
+		}
+		delBtn := widget.NewButton("x", func() {
+			if tw.OnKeyframeDeleted != nil {
+				tw.OnKeyframeDeleted(partIdx, kIdx)
+			}
+		})
+		delBtn.Importance = widget.DangerImportance
+		kfRow.Add(container.NewHBox(btn, delBtn))
 	}
 
-	if hasSound {
-		icons += "♪ "
-	}
-	if hasParticle {
-		icons += "✦ "
-	}
-	if hasShake {
-		icons += "⚡ "
-	}
-	if hasFlash {
-		icons += "◆ "
-	}
-	if kf.HitBox != nil {
-		icons += "█ "
-	}
-	if kf.AttackHitBox != nil {
-		icons += "⚔ "
-	}
-
-	if icons == "" {
-		icons = "—"
-	}
-
-	iconColor := color.RGBA{R: 150, G: 170, B: 200, A: 200}
-	text := canvas.NewText(icons, iconColor)
-	text.TextSize = 10
-	return text
+	row := container.NewBorder(nil, nil, container.NewHBox(nameLabel, selectBtn, addBtn), nil, container.NewHScroll(kfRow))
+	return container.NewVBox(row, widget.NewSeparator())
 }
 
-// buildInfoText creates the info bar text.
 func (tw *TimelineWidget) buildInfoText() string {
-	anim := tw.project.CurrentAnimation
-	totalMs := anim.TotalDurationMs()
+	dir := tw.project.ActiveDirection()
+	total := uint32(0)
+	partCount := 0
+	if dir != nil {
+		total = dir.TotalDurationMs()
+		partCount = len(dir.Parts)
+	}
 	loopStr := "No"
 	if tw.project.Playback.LoopEnabled {
 		loopStr = "Yes"
 	}
-	return fmt.Sprintf("Frame: %d / %d   |   Total: %dms   |   Loop: %s",
-		tw.selectedFrame, len(anim.KeyFrames), totalMs, loopStr)
+	return fmt.Sprintf("Direction: %s   |   Elapsed: %dms / %dms   |   Parts: %d   |   Loop: %s",
+		tw.project.Playback.ActiveDirection, tw.project.Playback.ElapsedMs, total, partCount, loopStr)
 }

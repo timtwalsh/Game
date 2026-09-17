@@ -2,65 +2,50 @@ package ui
 
 import (
 	"animaker/pkg/editor"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
 
-// ShowNewAnimationDialog displays a dialog for creating a new animation.
-func ShowNewAnimationDialog(win fyne.Window, onCreate func(name string, charSize string, loop bool, anchor string)) {
+// ShowNewTrackDialog displays a dialog for creating a new track (.anif).
+func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText("untitled")
-	nameEntry.SetPlaceHolder("animation_name")
-
-	sizeSelect := widget.NewSelect(
-		[]string{"16x16", "24x24", "32x32", "48x32", "64x64", "custom"},
-		nil,
-	)
-	sizeSelect.SetSelected("32x32")
-
-	loopCheck := widget.NewCheck("Loop animation", nil)
-	loopCheck.Checked = true
-
-	anchorSelect := widget.NewSelect([]string{"feet", "center"}, nil)
-	anchorSelect.SetSelected("feet")
+	nameEntry.SetPlaceHolder("human_walk")
 
 	form := dialog.NewForm(
-		"New Animation",
+		"New Track",
 		"Create", "Cancel",
 		[]*widget.FormItem{
 			{Text: "Name", Widget: nameEntry},
-			{Text: "Character Size", Widget: sizeSelect},
-			{Text: "Loop", Widget: loopCheck},
-			{Text: "Root Anchor", Widget: anchorSelect},
 		},
 		func(confirmed bool) {
 			if confirmed && onCreate != nil {
-				onCreate(nameEntry.Text, sizeSelect.Selected, loopCheck.Checked, anchorSelect.Selected)
+				onCreate(nameEntry.Text)
 			}
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(400, 300))
+	form.Resize(fyne.NewSize(400, 200))
 	form.Show()
 }
 
-// ShowImportSheetDialog displays a dialog for importing a sprite sheet.
-func ShowImportSheetDialog(win fyne.Window, onImport func(filePath string, config editor.GridConfig)) {
-	// Step 1: File picker
+// ShowImportSheetDialog displays a dialog for importing a sprite sheet
+// template: pick a file, then define its fixed cell size and one pivot for
+// the whole sheet.
+func ShowImportSheetDialog(win fyne.Window, onImport func(filePath, name string, cellW, cellH int, pivotX, pivotY float32)) {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
 		}
 		filePath := reader.URI().Path()
 		reader.Close()
-
-		// Step 2: Grid config dialog
-		showGridConfigDialog(win, filePath, onImport)
+		showSheetGridDialog(win, filePath, onImport)
 	}, win)
 
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
@@ -68,213 +53,148 @@ func ShowImportSheetDialog(win fyne.Window, onImport func(filePath string, confi
 	fd.Show()
 }
 
-// showGridConfigDialog shows the grid configuration after a file is selected.
-func showGridConfigDialog(win fyne.Window, filePath string, onImport func(string, editor.GridConfig)) {
-	colsEntry := widget.NewEntry()
-	colsEntry.SetText("4")
-	colsEntry.SetPlaceHolder("Columns")
+func showSheetGridDialog(win fyne.Window, filePath string, onImport func(string, string, int, int, float32, float32)) {
+	baseName := filepath.Base(filePath)
+	defaultName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
-	rowsEntry := widget.NewEntry()
-	rowsEntry.SetText("4")
-	rowsEntry.SetPlaceHolder("Rows")
+	nameEntry := widget.NewEntry()
+	nameEntry.SetText(defaultName)
 
-	tileWEntry := widget.NewEntry()
-	tileWEntry.SetText("32")
-	tileWEntry.SetPlaceHolder("Tile Width")
-
-	tileHEntry := widget.NewEntry()
-	tileHEntry.SetText("32")
-	tileHEntry.SetPlaceHolder("Tile Height")
+	cellWEntry := widget.NewEntry()
+	cellWEntry.SetText("32")
+	cellHEntry := widget.NewEntry()
+	cellHEntry.SetText("32")
+	pivotXEntry := widget.NewEntry()
+	pivotXEntry.SetText("16")
+	pivotYEntry := widget.NewEntry()
+	pivotYEntry.SetText("16")
 
 	form := dialog.NewForm(
 		"Import Sprite Sheet",
 		"Import", "Cancel",
 		[]*widget.FormItem{
 			{Text: "File", Widget: widget.NewLabel(filePath)},
-			{Text: "Columns", Widget: colsEntry},
-			{Text: "Rows", Widget: rowsEntry},
-			{Text: "Tile Width", Widget: tileWEntry},
-			{Text: "Tile Height", Widget: tileHEntry},
+			{Text: "Sheet Name", Widget: nameEntry},
+			{Text: "Cell Width", Widget: cellWEntry},
+			{Text: "Cell Height", Widget: cellHEntry},
+			{Text: "Pivot X", Widget: pivotXEntry},
+			{Text: "Pivot Y", Widget: pivotYEntry},
 		},
 		func(confirmed bool) {
 			if !confirmed || onImport == nil {
 				return
 			}
-
-			cols, _ := strconv.Atoi(colsEntry.Text)
-			rows, _ := strconv.Atoi(rowsEntry.Text)
-			tileW, _ := strconv.Atoi(tileWEntry.Text)
-			tileH, _ := strconv.Atoi(tileHEntry.Text)
-
-			if cols <= 0 {
-				cols = 1
+			cellW, _ := strconv.Atoi(cellWEntry.Text)
+			cellH, _ := strconv.Atoi(cellHEntry.Text)
+			pivotX, _ := strconv.ParseFloat(pivotXEntry.Text, 32)
+			pivotY, _ := strconv.ParseFloat(pivotYEntry.Text, 32)
+			if cellW <= 0 {
+				cellW = 32
 			}
-			if rows <= 0 {
-				rows = 1
+			if cellH <= 0 {
+				cellH = 32
 			}
-			if tileW <= 0 {
-				tileW = 32
-			}
-			if tileH <= 0 {
-				tileH = 32
-			}
-
-			onImport(filePath, editor.GridConfig{
-				Cols:  cols,
-				Rows:  rows,
-				TileW: tileW,
-				TileH: tileH,
-			})
+			onImport(filePath, nameEntry.Text, cellW, cellH, float32(pivotX), float32(pivotY))
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(400, 350))
+	form.Resize(fyne.NewSize(420, 380))
 	form.Show()
 }
 
-// ShowSoundEventDialog displays a dialog for adding/editing a sound event.
-func ShowSoundEventDialog(win fyne.Window, existing *editor.SoundEvent, onSave func(*editor.SoundEvent)) {
-	fileEntry := widget.NewEntry()
-	fileEntry.SetPlaceHolder("path/to/sound.wav")
-	pitchEntry := widget.NewEntry()
-	pitchEntry.SetText("1.0")
-
-	if existing != nil {
-		fileEntry.SetText(existing.FilePath)
-		pitchEntry.SetText(strconv.FormatFloat(float64(existing.Pitch), 'f', 1, 32))
-	}
+// ShowAddDirectionDialog displays a dialog for adding a new direction.
+func ShowAddDirectionDialog(win fyne.Window, onCreate func(name string)) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("up / right / down / left / default")
 
 	form := dialog.NewForm(
-		"Sound Event",
-		"Save", "Cancel",
+		"Add Direction",
+		"Add", "Cancel",
 		[]*widget.FormItem{
-			{Text: "File Path", Widget: fileEntry},
-			{Text: "Pitch", Widget: pitchEntry},
+			{Text: "Name", Widget: nameEntry},
 		},
 		func(confirmed bool) {
-			if confirmed && onSave != nil {
-				pitch, _ := strconv.ParseFloat(pitchEntry.Text, 32)
-				if pitch <= 0 {
-					pitch = 1.0
-				}
-				onSave(&editor.SoundEvent{FilePath: fileEntry.Text, Pitch: float32(pitch)})
+			if confirmed && onCreate != nil && nameEntry.Text != "" {
+				onCreate(nameEntry.Text)
 			}
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(400, 200))
+	form.Resize(fyne.NewSize(400, 180))
 	form.Show()
 }
 
-// ShowParticleEventDialog displays a dialog for adding/editing a particle event.
-func ShowParticleEventDialog(win fyne.Window, existing *editor.ParticleEvent, onSave func(*editor.ParticleEvent)) {
-	typeEntry := widget.NewEntry()
-	typeEntry.SetPlaceHolder("slash_spark")
-	xEntry := widget.NewEntry()
-	xEntry.SetText("0")
-	yEntry := widget.NewEntry()
-	yEntry.SetText("0")
-
-	if existing != nil {
-		typeEntry.SetText(existing.Type)
-		xEntry.SetText(strconv.Itoa(existing.X))
-		yEntry.SetText(strconv.Itoa(existing.Y))
-	}
+// ShowAddPropDialog displays a dialog for declaring a new prop on the track.
+func ShowAddPropDialog(win fyne.Window, onCreate func(name, defaultSheet string)) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("hair, arms, legs, ...")
+	defaultEntry := widget.NewEntry()
+	defaultEntry.SetPlaceHolder("sheet name to use by default")
 
 	form := dialog.NewForm(
-		"Particle Event",
-		"Save", "Cancel",
+		"Add Prop",
+		"Add", "Cancel",
 		[]*widget.FormItem{
-			{Text: "Type", Widget: typeEntry},
-			{Text: "X Offset", Widget: xEntry},
-			{Text: "Y Offset", Widget: yEntry},
+			{Text: "Name", Widget: nameEntry},
+			{Text: "Default Sheet", Widget: defaultEntry},
 		},
 		func(confirmed bool) {
-			if confirmed && onSave != nil {
-				x, _ := strconv.Atoi(xEntry.Text)
-				y, _ := strconv.Atoi(yEntry.Text)
-				onSave(&editor.ParticleEvent{Type: typeEntry.Text, X: x, Y: y})
+			if confirmed && onCreate != nil && nameEntry.Text != "" {
+				onCreate(nameEntry.Text, defaultEntry.Text)
 			}
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(400, 250))
+	form.Resize(fyne.NewSize(400, 220))
 	form.Show()
 }
 
-// ShowShakeEventDialog displays a dialog for adding/editing a shake event.
-func ShowShakeEventDialog(win fyne.Window, existing *editor.ShakeEvent, onSave func(*editor.ShakeEvent)) {
-	durEntry := widget.NewEntry()
-	durEntry.SetText("50")
-	intensitySlider := widget.NewSlider(0, 1)
-	intensitySlider.Step = 0.05
-	intensitySlider.Value = 0.5
+// ShowAddPartDialog displays a dialog for adding a part to the active
+// direction. propNames lists the track's declared props, for the
+// governing-prop dropdown.
+func ShowAddPartDialog(win fyne.Window, propNames []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("Body, Hair, Arm_Left, ...")
 
-	if existing != nil {
-		durEntry.SetText(strconv.FormatUint(uint64(existing.DurationMs), 10))
-		intensitySlider.Value = float64(existing.Intensity)
-	}
+	kindSelect := widget.NewSelect([]string{"sheet", "nested_ani"}, nil)
+	kindSelect.SetSelected("sheet")
 
-	items := []*widget.FormItem{
-		{Text: "Duration (ms)", Widget: durEntry},
-		{Text: "Intensity", Widget: container.NewHBox(intensitySlider)},
-	}
+	propOptions := append([]string{"(none - fixed sheet)"}, propNames...)
+	propSelect := widget.NewSelect(propOptions, nil)
+	propSelect.SetSelected(propOptions[0])
 
-	form := dialog.NewForm(
-		"Shake Event",
-		"Save", "Cancel",
-		items,
-		func(confirmed bool) {
-			if confirmed && onSave != nil {
-				dur, _ := strconv.ParseUint(durEntry.Text, 10, 32)
-				onSave(&editor.ShakeEvent{
-					DurationMs: uint32(dur),
-					Intensity:  float32(intensitySlider.Value),
-				})
-			}
-		},
-		win,
-	)
-	form.Resize(fyne.NewSize(400, 200))
-	form.Show()
-}
+	fixedSheetEntry := widget.NewEntry()
+	fixedSheetEntry.SetPlaceHolder("sheet name (used when no governing prop)")
 
-// ShowFlashEventDialog displays a dialog for adding/editing a flash event.
-func ShowFlashEventDialog(win fyne.Window, existing *editor.FlashEvent, onSave func(*editor.FlashEvent)) {
-	colorEntry := widget.NewEntry()
-	colorEntry.SetText("#FFFFFF")
-	durEntry := widget.NewEntry()
-	durEntry.SetText("30")
-	opacitySlider := widget.NewSlider(0, 1)
-	opacitySlider.Step = 0.05
-	opacitySlider.Value = 0.3
-
-	if existing != nil {
-		colorEntry.SetText(existing.Color)
-		durEntry.SetText(strconv.FormatUint(uint64(existing.DurationMs), 10))
-		opacitySlider.Value = float64(existing.Opacity)
-	}
+	nestedPathEntry := widget.NewEntry()
+	nestedPathEntry.SetPlaceHolder("base_wood_torch.anif")
 
 	form := dialog.NewForm(
-		"Flash Event",
-		"Save", "Cancel",
+		"Add Part",
+		"Add", "Cancel",
 		[]*widget.FormItem{
-			{Text: "Color (hex)", Widget: colorEntry},
-			{Text: "Duration (ms)", Widget: durEntry},
-			{Text: "Opacity", Widget: container.NewHBox(opacitySlider)},
+			{Text: "Name", Widget: nameEntry},
+			{Text: "Kind", Widget: kindSelect},
+			{Text: "Governing Prop", Widget: propSelect},
+			{Text: "Fixed Sheet", Widget: fixedSheetEntry},
+			{Text: "Nested .anif Path", Widget: nestedPathEntry},
 		},
 		func(confirmed bool) {
-			if confirmed && onSave != nil {
-				dur, _ := strconv.ParseUint(durEntry.Text, 10, 32)
-				onSave(&editor.FlashEvent{
-					Color:      colorEntry.Text,
-					DurationMs: uint32(dur),
-					Opacity:    float32(opacitySlider.Value),
-				})
+			if !confirmed || onCreate == nil || nameEntry.Text == "" {
+				return
 			}
+			kind := editor.PartKindSheet
+			if kindSelect.Selected == "nested_ani" {
+				kind = editor.PartKindNestedAni
+			}
+			governingProp := propSelect.Selected
+			if governingProp == propOptions[0] {
+				governingProp = ""
+			}
+			onCreate(nameEntry.Text, kind, governingProp, fixedSheetEntry.Text, nestedPathEntry.Text)
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(400, 250))
+	form.Resize(fyne.NewSize(450, 420))
 	form.Show()
 }

@@ -10,23 +10,25 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/widget"
 )
 
 // Application is the main coordinator tying together project state, UI, and file operations.
 type Application struct {
-	FyneApp  fyne.App
-	Window   fyne.Window
-	Project  *editor.Project
+	FyneApp fyne.App
+	Window  fyne.Window
+	Project *editor.Project
 
-	// UI components
 	canvasWidget *ui.CanvasWidget
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
+	directionSel *widget.Select
+	titleLabel   *widget.Label
 
-	// Playback ticker
 	playbackTicker *time.Ticker
 	playbackDone   chan bool
 }
@@ -43,53 +45,104 @@ func New(fyneApp fyne.App) *Application {
 // Run initializes the UI and starts the application.
 func (a *Application) Run() {
 	a.Window = a.FyneApp.NewWindow("ANIFile Animation Maker")
-	a.Window.Resize(fyne.NewSize(1200, 800))
+	a.Window.Resize(fyne.NewSize(1300, 850))
 
-	// Create UI components
 	a.canvasWidget = ui.NewCanvasWidget(a.Project)
 	a.timeline = ui.NewTimelineWidget(a.Project)
 	a.properties = ui.NewPropertiesPanel(a.Project)
 
-	// Wire up callbacks
 	a.wireCallbacks()
 
-	// Build layout
+	directionBar := a.buildDirectionBar()
 	propertiesPanel := a.properties.Build()
 	timelinePanel := a.timeline.Build()
-	mainLayout := ui.BuildMainLayout(a.canvasWidget, propertiesPanel, timelinePanel)
+	mainLayout := ui.BuildMainLayout(directionBar, a.canvasWidget, propertiesPanel, timelinePanel)
 
-	// Build menu
 	menu := ui.BuildMenuBar(
-		a.onNewAnimation,
-		a.onOpenAnimation,
-		a.onSaveAnimation,
-		a.onSaveAsAnimation,
+		a.onNewTrack,
+		a.onOpenTrack,
+		a.onSaveTrack,
+		a.onSaveAsTrack,
 		a.onImportSpriteSheet,
 		a.onUndo,
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
-		a.canvasWidget.ToggleHitboxes,
 		a.onZoom,
+		a.onAddDirection,
+		a.onAddProp,
+		a.onAddPart,
 	)
 	a.Window.SetMainMenu(menu)
 
-	// Register keyboard shortcuts
 	a.registerShortcuts()
 
 	a.Window.SetContent(mainLayout)
 	a.Window.SetOnClosed(a.onClose)
 
-	// Start playback loop
 	go a.playbackLoop()
 
 	a.Window.ShowAndRun()
 }
 
-// wireCallbacks connects UI callbacks to application logic.
+func (a *Application) buildDirectionBar() fyne.CanvasObject {
+	a.titleLabel = widget.NewLabel(a.Project.CurrentTrack.Metadata.Name)
+	a.titleLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	a.directionSel = widget.NewSelect(a.Project.CurrentTrack.SortedDirectionNames(), func(name string) {
+		a.Project.SetActiveDirection(name)
+		a.refreshAll()
+	})
+	a.refreshDirectionSelect()
+
+	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel)
+}
+
+func (a *Application) refreshDirectionSelect() {
+	names := a.Project.CurrentTrack.SortedDirectionNames()
+	a.directionSel.Options = names
+	if len(names) > 0 {
+		a.directionSel.SetSelected(a.Project.Playback.ActiveDirection)
+	}
+	a.directionSel.Refresh()
+}
+
 func (a *Application) wireCallbacks() {
-	// Timeline callbacks
-	a.timeline.OnFrameSelected = func(idx int) {
-		a.Project.Playback.CurrentFrame = idx
+	a.timeline.OnPartSelected = func(idx int) {
+		a.Project.Selection.PartIndex = idx
+		a.Project.Selection.KeyframeIndex = -1
+		a.refreshAll()
+	}
+	a.timeline.OnKeyframeSelected = func(partIdx, kfIdx int) {
+		a.Project.Selection.PartIndex = partIdx
+		a.Project.Selection.KeyframeIndex = kfIdx
+		a.refreshAll()
+	}
+	a.timeline.OnKeyframeAdded = func(partIdx int) {
+		dir := a.Project.ActiveDirection()
+		if dir == nil || partIdx < 0 || partIdx >= len(dir.Parts) {
+			return
+		}
+		a.Project.RecordUndo()
+		kf := editor.AddKeyframe(dir.Parts[partIdx], a.Project.Playback.ElapsedMs)
+		a.Project.Selection.PartIndex = partIdx
+		for i, k := range dir.Parts[partIdx].Keyframes {
+			if k == kf {
+				a.Project.Selection.KeyframeIndex = i
+				break
+			}
+		}
+		a.Project.Dirty = true
+		a.refreshAll()
+	}
+	a.timeline.OnKeyframeDeleted = func(partIdx, kfIdx int) {
+		dir := a.Project.ActiveDirection()
+		if dir == nil || partIdx < 0 || partIdx >= len(dir.Parts) {
+			return
+		}
+		a.Project.RecordUndo()
+		_ = editor.DeleteKeyframe(dir.Parts[partIdx], kfIdx)
+		a.Project.Selection.KeyframeIndex = -1
+		a.Project.Dirty = true
 		a.refreshAll()
 	}
 	a.timeline.OnPlayToggle = func() {
@@ -97,119 +150,60 @@ func (a *Application) wireCallbacks() {
 	}
 	a.timeline.OnStepForward = func() {
 		a.Project.StepForward()
-		a.timeline.SetSelectedFrame(a.Project.Playback.CurrentFrame)
 		a.refreshAll()
 	}
 	a.timeline.OnStepBackward = func() {
 		a.Project.StepBackward()
-		a.timeline.SetSelectedFrame(a.Project.Playback.CurrentFrame)
 		a.refreshAll()
 	}
-	a.timeline.OnAddFrame = func() {
-		a.addFrame()
-	}
 
-	// Properties callbacks
-	a.properties.OnDurationChanged = func(d uint32) {
-		a.timeline.RefreshInfo()
+	a.properties.OnPropsChanged = func() { a.refreshAll() }
+	a.properties.OnPartRemoved = func(idx int) {
+		if a.Project.Selection.PartIndex == idx {
+			a.Project.Selection.PartIndex = -1
+			a.Project.Selection.KeyframeIndex = -1
+		}
+		a.refreshAll()
 	}
-	a.properties.OnSpriteSelected = func(sheetName string, index int) {
-		a.selectSprite(sheetName, index)
-	}
-	a.properties.OnBoxChanged = func() {
-		a.canvasWidget.Refresh()
-	}
-	a.properties.OnAddEvent = func(eventType string) {
-		a.addEvent(eventType)
-	}
-	a.properties.OnDeleteEvent = func(idx int) {
-		a.deleteEvent(idx)
-	}
-
-	// Canvas callbacks
-	a.canvasWidget.OnBoxChanged = func() {
-		a.properties.Refresh()
-	}
+	a.properties.OnKeyframeChanged = func() { a.canvasWidget.Refresh() }
+	a.properties.OnPreviewChanged = func() { a.canvasWidget.Refresh() }
 }
 
-// registerShortcuts adds keyboard shortcuts.
 func (a *Application) registerShortcuts() {
 	canvas := a.Window.Canvas()
 
-	// Ctrl+N - New
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName:  fyne.KeyN,
-		Modifier: fyne.KeyModifierControl,
-	}, func(_ fyne.Shortcut) {
-		a.onNewAnimation()
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyN, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		a.onNewTrack()
 	})
-
-	// Ctrl+O - Open
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName:  fyne.KeyO,
-		Modifier: fyne.KeyModifierControl,
-	}, func(_ fyne.Shortcut) {
-		a.onOpenAnimation()
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyO, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		a.onOpenTrack()
 	})
-
-	// Ctrl+S - Save
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName:  fyne.KeyS,
-		Modifier: fyne.KeyModifierControl,
-	}, func(_ fyne.Shortcut) {
-		a.onSaveAnimation()
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		a.onSaveTrack()
 	})
-
-	// Ctrl+Z - Undo
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName:  fyne.KeyZ,
-		Modifier: fyne.KeyModifierControl,
-	}, func(_ fyne.Shortcut) {
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		a.onUndo()
 	})
-
-	// Ctrl+Shift+Z - Redo
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName:  fyne.KeyZ,
-		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
-	}, func(_ fyne.Shortcut) {
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift}, func(_ fyne.Shortcut) {
 		a.onRedo()
-	})
-
-	// D - Duplicate frame
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName: fyne.KeyD,
-	}, func(_ fyne.Shortcut) {
-		a.duplicateFrame()
-	})
-
-	// X/Delete - Delete frame
-	canvas.AddShortcut(&desktop.CustomShortcut{
-		KeyName: fyne.KeyX,
-	}, func(_ fyne.Shortcut) {
-		a.deleteFrame()
 	})
 }
 
 // -- Menu handlers --
 
-func (a *Application) onNewAnimation() {
-	ui.ShowNewAnimationDialog(a.Window, func(name, charSize string, loop bool, anchor string) {
+func (a *Application) onNewTrack() {
+	ui.ShowNewTrackDialog(a.Window, func(name string) {
 		a.Project = editor.NewProject(name)
-		a.Project.CurrentAnimation.Config.CharacterSize = charSize
-		a.Project.CurrentAnimation.Config.Loop = loop
-		a.Project.CurrentAnimation.Config.RootAnchor = anchor
-		a.Project.Playback.LoopEnabled = loop
-
 		a.canvasWidget.SetProject(a.Project)
 		a.timeline.SetProject(a.Project)
 		a.properties.SetProject(a.Project)
+		a.refreshDirectionSelect()
 		a.refreshAll()
 		a.Window.SetTitle("ANIFile Animation Maker — " + name)
 	})
 }
 
-func (a *Application) onOpenAnimation() {
+func (a *Application) onOpenTrack() {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
@@ -217,243 +211,145 @@ func (a *Application) onOpenAnimation() {
 		filePath := reader.URI().Path()
 		reader.Close()
 
-		anim, err := file.LoadAnimation(filePath)
+		track, err := file.LoadTrack(filePath)
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to load animation: %w", err), a.Window)
+			dialog.ShowError(fmt.Errorf("failed to load track: %w", err), a.Window)
 			return
 		}
 
-		a.Project.CurrentAnimation = anim
+		a.Project.CurrentTrack = track
 		a.Project.SavePath = filePath
 		a.Project.Dirty = false
 		a.Project.UndoStack.Clear()
+		a.Project.Playback.ActiveDirection = track.SortedDirectionNames()[0]
+		a.Project.Playback.ElapsedMs = 0
+		a.Project.Selection = &editor.Selection{PartIndex: -1, KeyframeIndex: -1}
 
 		a.canvasWidget.SetProject(a.Project)
 		a.timeline.SetProject(a.Project)
 		a.properties.SetProject(a.Project)
+		a.refreshDirectionSelect()
 		a.refreshAll()
-		a.Window.SetTitle("ANIFile Animation Maker — " + anim.Metadata.Name)
+		a.Window.SetTitle("ANIFile Animation Maker — " + track.Metadata.Name)
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
 	fd.Resize(fyne.NewSize(600, 400))
 	fd.Show()
 }
 
-func (a *Application) onSaveAnimation() {
+func (a *Application) onSaveTrack() {
 	if a.Project.SavePath == "" {
-		a.onSaveAsAnimation()
+		a.onSaveAsTrack()
 		return
 	}
 	a.saveToPath(a.Project.SavePath)
 }
 
-func (a *Application) onSaveAsAnimation() {
+func (a *Application) onSaveAsTrack() {
 	fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 		if err != nil || writer == nil {
 			return
 		}
 		filePath := writer.URI().Path()
 		writer.Close()
-
 		a.saveToPath(filePath)
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
-	fd.SetFileName(a.Project.CurrentAnimation.Metadata.Name + ".anif")
+	fd.SetFileName(a.Project.CurrentTrack.Metadata.Name + ".anif")
 	fd.Resize(fyne.NewSize(600, 400))
 	fd.Show()
 }
 
 func (a *Application) saveToPath(path string) {
-	a.Project.CurrentAnimation.Metadata.UpdatedAt = time.Now()
-	if err := file.SaveAnimation(a.Project.CurrentAnimation, path); err != nil {
+	a.Project.CurrentTrack.Metadata.UpdatedAt = time.Now()
+	if err := file.SaveTrack(a.Project.CurrentTrack, path); err != nil {
 		dialog.ShowError(fmt.Errorf("failed to save: %w", err), a.Window)
 		return
 	}
 	a.Project.SavePath = path
 	a.Project.Dirty = false
-	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentAnimation.Metadata.Name)
+	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentTrack.Metadata.Name)
 }
 
 func (a *Application) onImportSpriteSheet() {
-	ui.ShowImportSheetDialog(a.Window, func(filePath string, config editor.GridConfig) {
+	ui.ShowImportSheetDialog(a.Window, func(filePath, name string, cellW, cellH int, pivotX, pivotY float32) {
 		img, err := file.LoadImage(filePath)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("failed to load image: %w", err), a.Window)
 			return
 		}
 
-		// Derive sheet name from filename
-		baseName := filepath.Base(filePath)
-		sheetName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+		tmpl := editor.NewSpriteSheetTemplate(name, filePath, img, cellW, cellH, pivotX, pivotY)
+		a.Project.LoadedSheets[name] = tmpl
 
-		sheet := editor.NewSpriteSheet(sheetName, filePath, img, config)
-		a.Project.LoadedSheets[sheetName] = sheet
-
-		// Save .sprsh metadata alongside the image
-		metaPath := filePath + ".sprsh"
-		if err := file.SaveSpriteSheetMeta(sheet, metaPath); err != nil {
-			dialog.ShowError(fmt.Errorf("failed to save sheet metadata: %w", err), a.Window)
+		sprshPath := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + ".sprsh"
+		if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
+			dialog.ShowError(fmt.Errorf("failed to save sheet template: %w", err), a.Window)
 		}
 
-		a.properties.RefreshSheetList()
+		a.refreshAll()
 		dialog.ShowInformation("Import Complete",
-			fmt.Sprintf("Imported '%s' with %d sprites (%dx%d grid)",
-				sheetName, sheet.SpriteCount(), config.Cols, config.Rows),
+			fmt.Sprintf("Imported %q as a %dx%d template (%d cols x %d rows)",
+				name, cellW, cellH, tmpl.Cols(), tmpl.Rows()),
 			a.Window)
+	})
+}
+
+func (a *Application) onAddDirection() {
+	ui.ShowAddDirectionDialog(a.Window, func(name string) {
+		a.Project.RecordUndo()
+		editor.AddDirection(a.Project.CurrentTrack, name)
+		a.refreshDirectionSelect()
+		a.refreshAll()
+	})
+}
+
+func (a *Application) onAddProp() {
+	ui.ShowAddPropDialog(a.Window, func(name, def string) {
+		a.Project.RecordUndo()
+		editor.AddProp(a.Project.CurrentTrack, name, def)
+		a.refreshAll()
+	})
+}
+
+func (a *Application) onAddPart() {
+	var propNames []string
+	for _, p := range a.Project.CurrentTrack.Props {
+		propNames = append(propNames, p.Name)
+	}
+	ui.ShowAddPartDialog(a.Window, propNames, func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
+		dir := a.Project.ActiveDirection()
+		if dir == nil {
+			return
+		}
+		a.Project.RecordUndo()
+		var part *editor.Part
+		if kind == editor.PartKindNestedAni {
+			part = editor.NewNestedAniPart(name, nestedPath)
+		} else {
+			part = editor.NewSheetPart(name, governingProp, fixedSheet)
+		}
+		editor.AddPart(dir, part)
+		a.refreshAll()
 	})
 }
 
 func (a *Application) onUndo() {
 	if a.Project.Undo() {
+		a.refreshDirectionSelect()
 		a.refreshAll()
 	}
 }
 
 func (a *Application) onRedo() {
 	if a.Project.Redo() {
+		a.refreshDirectionSelect()
 		a.refreshAll()
 	}
 }
 
 func (a *Application) onZoom(factor float32) {
 	a.canvasWidget.SetZoom(factor)
-}
-
-// -- Frame operations --
-
-func (a *Application) addFrame() {
-	a.Project.RecordUndo()
-	selectedIdx := a.timeline.SelectedFrame()
-	editor.AddKeyFrame(a.Project.CurrentAnimation, selectedIdx)
-	a.Project.Dirty = true
-	a.refreshAll()
-}
-
-func (a *Application) duplicateFrame() {
-	idx := a.timeline.SelectedFrame()
-	if idx < 0 || idx >= len(a.Project.CurrentAnimation.KeyFrames) {
-		return
-	}
-	a.Project.RecordUndo()
-	_, err := editor.DuplicateKeyFrame(a.Project.CurrentAnimation, idx)
-	if err != nil {
-		dialog.ShowError(err, a.Window)
-		return
-	}
-	a.Project.Dirty = true
-	a.timeline.SetSelectedFrame(idx + 1)
-	a.Project.Playback.CurrentFrame = idx + 1
-	a.refreshAll()
-}
-
-func (a *Application) deleteFrame() {
-	idx := a.timeline.SelectedFrame()
-	if idx < 0 || idx >= len(a.Project.CurrentAnimation.KeyFrames) {
-		return
-	}
-	a.Project.RecordUndo()
-	if err := editor.DeleteKeyFrame(a.Project.CurrentAnimation, idx); err != nil {
-		dialog.ShowError(err, a.Window)
-		return
-	}
-	a.Project.Dirty = true
-
-	// Adjust selection
-	if idx >= len(a.Project.CurrentAnimation.KeyFrames) && idx > 0 {
-		idx--
-	}
-	a.timeline.SetSelectedFrame(idx)
-	a.Project.Playback.CurrentFrame = idx
-	a.refreshAll()
-}
-
-// -- Sprite selection --
-
-func (a *Application) selectSprite(sheetName string, index int) {
-	kf := a.Project.GetCurrentKeyFrame()
-	if kf == nil {
-		return
-	}
-
-	a.Project.RecordUndo()
-	kf.Sprite = editor.SpriteReference{SheetName: sheetName, Index: index}
-	a.Project.Dirty = true
-
-	// Update canvas with new sprite image
-	a.updateCanvasSprite()
-	a.refreshAll()
-}
-
-func (a *Application) updateCanvasSprite() {
-	kf := a.Project.GetCurrentKeyFrame()
-	if kf == nil {
-		a.canvasWidget.SetSpriteImage(nil)
-		return
-	}
-
-	if kf.Sprite.SheetName != "" {
-		sheet, ok := a.Project.LoadedSheets[kf.Sprite.SheetName]
-		if ok {
-			img, err := sheet.GetSpriteImage(kf.Sprite.Index)
-			if err == nil {
-				a.canvasWidget.SetSpriteImage(img)
-				return
-			}
-		}
-	}
-	a.canvasWidget.SetSpriteImage(nil)
-}
-
-// -- Events --
-
-func (a *Application) addEvent(eventType string) {
-	kf := a.Project.GetCurrentKeyFrame()
-	if kf == nil {
-		return
-	}
-
-	switch eventType {
-	case "sound":
-		ui.ShowSoundEventDialog(a.Window, nil, func(e *editor.SoundEvent) {
-			a.Project.RecordUndo()
-			kf.Events = append(kf.Events, e)
-			a.Project.Dirty = true
-			a.refreshAll()
-		})
-	case "particle":
-		ui.ShowParticleEventDialog(a.Window, nil, func(e *editor.ParticleEvent) {
-			a.Project.RecordUndo()
-			kf.Events = append(kf.Events, e)
-			a.Project.Dirty = true
-			a.refreshAll()
-		})
-	case "shake":
-		ui.ShowShakeEventDialog(a.Window, nil, func(e *editor.ShakeEvent) {
-			a.Project.RecordUndo()
-			kf.Events = append(kf.Events, e)
-			a.Project.Dirty = true
-			a.refreshAll()
-		})
-	case "flash":
-		ui.ShowFlashEventDialog(a.Window, nil, func(e *editor.FlashEvent) {
-			a.Project.RecordUndo()
-			kf.Events = append(kf.Events, e)
-			a.Project.Dirty = true
-			a.refreshAll()
-		})
-	}
-}
-
-func (a *Application) deleteEvent(idx int) {
-	kf := a.Project.GetCurrentKeyFrame()
-	if kf == nil || idx < 0 || idx >= len(kf.Events) {
-		return
-	}
-
-	a.Project.RecordUndo()
-	kf.Events = append(kf.Events[:idx], kf.Events[idx+1:]...)
-	a.Project.Dirty = true
-	a.refreshAll()
 }
 
 // -- Playback loop --
@@ -472,9 +368,6 @@ func (a *Application) playbackLoop() {
 
 			if a.Project.Playback.IsPlaying {
 				a.Project.AdvancePlayback(deltaMs)
-				// Update UI on the main thread
-				a.timeline.SetSelectedFrame(a.Project.Playback.CurrentFrame)
-				a.updateCanvasSprite()
 				a.canvasWidget.Refresh()
 				a.timeline.RefreshInfo()
 			}
@@ -487,10 +380,12 @@ func (a *Application) playbackLoop() {
 // -- Refresh --
 
 func (a *Application) refreshAll() {
-	a.updateCanvasSprite()
 	a.canvasWidget.Refresh()
 	a.properties.Refresh()
-	a.timeline.RefreshInfo()
+	a.timeline.Refresh()
+	if a.titleLabel != nil {
+		a.titleLabel.SetText(a.Project.CurrentTrack.Metadata.Name)
+	}
 }
 
 func (a *Application) onClose() {

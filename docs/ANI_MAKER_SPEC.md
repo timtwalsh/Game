@@ -1,7 +1,7 @@
 # ANIFile Animation Maker — Technical Specification (v2: Rigged/Parts Model)
 
 **Version**: 2.0 (supersedes v1 in full — this is not an extension of the old design, it's a replacement)
-**Status**: Design agreed, **not yet implemented**. `animaker/pkg/editor` and `animaker/pkg/ui` as they exist today still implement the v1 flipbook model described at the bottom of this doc's [History](#history-what-v1-was) section — every section above that describes the *target*, not current code. Update this line, and `docs/CONTEXT.md`'s status table, once the rewrite lands.
+**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`. Known, deliberate implementation gaps (nested-animation preview rendering, visual rotation in the canvas, a cell thumbnail picker) are tracked in `map/objects/animaker.md`, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
 **Language**: Go
 **GUI Framework**: Fyne
 **File format**: TOML (consistent with the rest of `animaker/pkg/file`)

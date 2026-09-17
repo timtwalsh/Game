@@ -6,94 +6,75 @@ import (
 	"image/draw"
 )
 
-// SpriteSheet represents an imported sprite sheet with grid metadata.
-type SpriteSheet struct {
-	Name       string
-	FilePath   string
-	Image      image.Image
-	GridConfig GridConfig
-	Sprites    []SpriteInfo
+// SpriteSheetTemplate is a sprite sheet imported with a fixed grid: one
+// cell size and one pivot for every cell in the sheet. Different sheets
+// used for the same Part can have entirely different CellW/CellH/pivot —
+// that's how size variety (a giant claw vs. a tiny hand) is achieved. The
+// one contract across sheets meant to be interchangeable for the same
+// Part is that a given (Row, Col) means the same conceptual pose in all
+// of them; that's authorial convention, not something this type enforces.
+type SpriteSheetTemplate struct {
+	Name           string
+	FilePath       string
+	Image          image.Image
+	CellW, CellH   int
+	PivotX, PivotY float32 // in cell-local pixel space
 }
 
-// GridConfig defines how a sprite sheet is divided into tiles.
-type GridConfig struct {
-	Cols  int // sprites horizontally
-	Rows  int // sprites vertically
-	TileW int // width of each sprite in pixels
-	TileH int // height of each sprite in pixels
-}
-
-// SpriteInfo describes a single sprite within a sheet.
-type SpriteInfo struct {
-	Index int
-	X     int    // pixel position in sheet
-	Y     int
-	W     int    // width
-	H     int    // height
-	Label string // optional: "walk_0", "attack_1", etc.
-}
-
-// ComputeGridSprites generates SpriteInfo entries from grid config.
-func ComputeGridSprites(cfg GridConfig) []SpriteInfo {
-	sprites := make([]SpriteInfo, 0, cfg.Cols*cfg.Rows)
-	for row := 0; row < cfg.Rows; row++ {
-		for col := 0; col < cfg.Cols; col++ {
-			idx := row*cfg.Cols + col
-			sprites = append(sprites, SpriteInfo{
-				Index: idx,
-				X:     col * cfg.TileW,
-				Y:     row * cfg.TileH,
-				W:     cfg.TileW,
-				H:     cfg.TileH,
-				Label: fmt.Sprintf("sprite_%d", idx),
-			})
-		}
-	}
-	return sprites
-}
-
-// NewSpriteSheet creates a SpriteSheet from an image and grid config.
-func NewSpriteSheet(name, filePath string, img image.Image, cfg GridConfig) *SpriteSheet {
-	return &SpriteSheet{
-		Name:       name,
-		FilePath:   filePath,
-		Image:      img,
-		GridConfig: cfg,
-		Sprites:    ComputeGridSprites(cfg),
+// NewSpriteSheetTemplate creates a template from an already-loaded image.
+func NewSpriteSheetTemplate(name, filePath string, img image.Image, cellW, cellH int, pivotX, pivotY float32) *SpriteSheetTemplate {
+	return &SpriteSheetTemplate{
+		Name:     name,
+		FilePath: filePath,
+		Image:    img,
+		CellW:    cellW,
+		CellH:    cellH,
+		PivotX:   pivotX,
+		PivotY:   pivotY,
 	}
 }
 
-// GetSpriteRect returns the rectangle for the sprite at the given index.
-func (ss *SpriteSheet) GetSpriteRect(index int) *image.Rectangle {
-	if index < 0 || index >= len(ss.Sprites) {
+// Cols and Rows are derived from the image size, not stored — the grid is
+// implied by CellW/CellH against however large the sheet image is.
+func (s *SpriteSheetTemplate) Cols() int {
+	if s.Image == nil || s.CellW <= 0 {
+		return 0
+	}
+	return s.Image.Bounds().Dx() / s.CellW
+}
+
+func (s *SpriteSheetTemplate) Rows() int {
+	if s.Image == nil || s.CellH <= 0 {
+		return 0
+	}
+	return s.Image.Bounds().Dy() / s.CellH
+}
+
+// CellRect returns the pixel rectangle for a given (row, col), or nil if
+// out of bounds.
+func (s *SpriteSheetTemplate) CellRect(row, col int) *image.Rectangle {
+	if row < 0 || col < 0 || row >= s.Rows() || col >= s.Cols() {
 		return nil
 	}
-	s := ss.Sprites[index]
-	r := image.Rect(s.X, s.Y, s.X+s.W, s.Y+s.H)
+	origin := s.Image.Bounds().Min
+	x0 := origin.X + col*s.CellW
+	y0 := origin.Y + row*s.CellH
+	r := image.Rect(x0, y0, x0+s.CellW, y0+s.CellH)
 	return &r
 }
 
-// GetSpriteImage extracts a single sprite as a sub-image.
-func (ss *SpriteSheet) GetSpriteImage(index int) (image.Image, error) {
-	rect := ss.GetSpriteRect(index)
+// CellImage extracts the sub-image for a given (row, col).
+func (s *SpriteSheetTemplate) CellImage(row, col int) (image.Image, error) {
+	rect := s.CellRect(row, col)
 	if rect == nil {
-		return nil, fmt.Errorf("sprite index %d out of range (sheet has %d sprites)", index, len(ss.Sprites))
+		return nil, fmt.Errorf("cell (%d,%d) out of range (sheet is %dx%d cells)", row, col, s.Cols(), s.Rows())
 	}
-
-	// Try SubImage if supported
-	if sub, ok := ss.Image.(interface {
+	if sub, ok := s.Image.(interface {
 		SubImage(r image.Rectangle) image.Image
 	}); ok {
 		return sub.SubImage(*rect), nil
 	}
-
-	// Fallback: manual crop
 	dst := image.NewRGBA(*rect)
-	draw.Draw(dst, *rect, ss.Image, rect.Min, draw.Src)
+	draw.Draw(dst, *rect, s.Image, rect.Min, draw.Src)
 	return dst, nil
-}
-
-// SpriteCount returns the total number of sprites in the sheet.
-func (ss *SpriteSheet) SpriteCount() int {
-	return len(ss.Sprites)
 }

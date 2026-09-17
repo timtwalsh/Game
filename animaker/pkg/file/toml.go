@@ -5,357 +5,218 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 )
 
-// ---- TOML structures for .anif files ----
+// ---- TOML structures for .anif files (a Track) ----
 
-type tomlAnimation struct {
-	Metadata  tomlMetadata    `toml:"metadata"`
-	Animation tomlAnimConfig  `toml:"animation"`
-	KeyFrames []tomlKeyFrame  `toml:"keyframes"`
-	Nested    []tomlNested    `toml:"nested,omitempty"`
+type tomlTrack struct {
+	Metadata   tomlTrackMeta            `toml:"metadata"`
+	Props      []tomlPropDef            `toml:"props,omitempty"`
+	Directions map[string]tomlDirection `toml:"directions"`
 }
 
-type tomlMetadata struct {
-	Name        string `toml:"name"`
-	Version     string `toml:"version"`
-	Description string `toml:"description,omitempty"`
-	Author      string `toml:"author,omitempty"`
+type tomlTrackMeta struct {
+	Name    string `toml:"name"`
+	Version string `toml:"version"`
 }
 
-type tomlAnimConfig struct {
-	Loop          bool    `toml:"loop"`
-	DefaultSpeed  float32 `toml:"default_speed"`
-	CharacterSize string  `toml:"character_size"`
-	RootAnchor    string  `toml:"root_anchor"`
+type tomlPropDef struct {
+	Name    string `toml:"name"`
+	Default string `toml:"default"`
 }
 
-type tomlKeyFrame struct {
-	ID            int            `toml:"id"`
-	DurationMs    uint32         `toml:"duration_ms"`
-	Sprite        string         `toml:"sprite"`
-	SpeedModifier float32        `toml:"speed_modifier,omitempty"`
-	HitBox        *tomlBox       `toml:"hitbox,omitempty"`
-	AttackHitBox  *tomlBox       `toml:"attack_hitbox,omitempty"`
-	Sound         string         `toml:"sound,omitempty"`
-	SoundPitch    float32        `toml:"sound_pitch,omitempty"`
-	Particles     []tomlParticle `toml:"particles,omitempty"`
-	Shake         *tomlShake     `toml:"shake,omitempty"`
-	Flash         *tomlFlash     `toml:"flash,omitempty"`
+type tomlDirection struct {
+	Parts []tomlPart `toml:"parts"`
 }
 
-type tomlBox struct {
-	X int `toml:"x"`
-	Y int `toml:"y"`
-	W int `toml:"w"`
-	H int `toml:"h"`
+type tomlPart struct {
+	Name           string                     `toml:"name"`
+	Kind           string                     `toml:"kind"`
+	GoverningProp  string                     `toml:"governing_prop,omitempty"`
+	FixedSheet     string                     `toml:"fixed_sheet,omitempty"`
+	NestedAniPath  string                     `toml:"nested_ani_path,omitempty"`
+	NestedBindings map[string]tomlPropBinding `toml:"nested_bindings,omitempty"`
+	Keyframes      []tomlKeyframe             `toml:"keyframes"`
 }
 
-type tomlParticle struct {
-	Type     string   `toml:"type"`
-	X        int      `toml:"x"`
-	Y        int      `toml:"y"`
-	Rotation *float32 `toml:"rotation,omitempty"`
-	Scale    *float32 `toml:"scale,omitempty"`
+type tomlPropBinding struct {
+	PassthroughFrom string `toml:"passthrough_from,omitempty"`
+	StaticValue     string `toml:"static_value,omitempty"`
 }
 
-type tomlShake struct {
-	DurationMs uint32  `toml:"duration_ms"`
-	Intensity  float32 `toml:"intensity"`
+type tomlKeyframe struct {
+	TimeMs      uint32  `toml:"time_ms"`
+	X           float32 `toml:"x"`
+	Y           float32 `toml:"y"`
+	Z           float32 `toml:"z"`
+	RotationDeg float32 `toml:"rotation_deg"`
+	Row         int     `toml:"row,omitempty"`
+	Col         int     `toml:"col,omitempty"`
 }
 
-type tomlFlash struct {
-	Color      string  `toml:"color"`
-	DurationMs uint32  `toml:"duration_ms"`
-	Opacity    float32 `toml:"opacity"`
+// ---- TOML structure for .sprsh files (a SpriteSheetTemplate) ----
+
+type tomlSheetTemplate struct {
+	Name     string  `toml:"name"`
+	FilePath string  `toml:"file_path"`
+	CellW    int     `toml:"cell_w"`
+	CellH    int     `toml:"cell_h"`
+	PivotX   float32 `toml:"pivot_x"`
+	PivotY   float32 `toml:"pivot_y"`
 }
 
-type tomlNested struct {
-	KeyFrame  int      `toml:"keyframe"`
-	Animation string   `toml:"animation"`
-	Offset    tomlXY   `toml:"offset"`
-	Scale     float32  `toml:"scale"`
-	Opacity   float32  `toml:"opacity"`
+// ---- Save/Load Track (.anif) ----
+
+func partKindToString(k editor.PartKind) string {
+	if k == editor.PartKindNestedAni {
+		return "nested_ani"
+	}
+	return "sheet"
 }
 
-type tomlXY struct {
-	X int `toml:"x"`
-	Y int `toml:"y"`
+func partKindFromString(s string) editor.PartKind {
+	if s == "nested_ani" {
+		return editor.PartKindNestedAni
+	}
+	return editor.PartKindSheet
 }
 
-// ---- TOML structures for .sprsh files ----
-
-type tomlSpriteSheet struct {
-	Sheet   tomlSheetInfo   `toml:"sheet"`
-	Grid    tomlGridConfig  `toml:"grid"`
-	Sprites []tomlSpriteInfo `toml:"sprites,omitempty"`
-}
-
-type tomlSheetInfo struct {
-	Name   string `toml:"name"`
-	File   string `toml:"file"`
-	Width  int    `toml:"width"`
-	Height int    `toml:"height"`
-}
-
-type tomlGridConfig struct {
-	Cols      int `toml:"cols"`
-	Rows      int `toml:"rows"`
-	TileWidth int `toml:"tile_width"`
-	TileHeight int `toml:"tile_height"`
-}
-
-type tomlSpriteInfo struct {
-	Index int    `toml:"index"`
-	X     int    `toml:"x"`
-	Y     int    `toml:"y"`
-	W     int    `toml:"w"`
-	H     int    `toml:"h"`
-	Label string `toml:"label,omitempty"`
-}
-
-// ---- Save/Load Animation (.anif) ----
-
-// SaveAnimation writes an animation to a .anif TOML file.
-func SaveAnimation(anim *editor.Animation, path string) error {
-	ta := tomlAnimation{
-		Metadata: tomlMetadata{
-			Name:        anim.Metadata.Name,
-			Version:     anim.Metadata.Version,
-			Description: anim.Metadata.Description,
-			Author:      anim.Metadata.Author,
-		},
-		Animation: tomlAnimConfig{
-			Loop:          anim.Config.Loop,
-			DefaultSpeed:  anim.Config.DefaultSpeed,
-			CharacterSize: anim.Config.CharacterSize,
-			RootAnchor:    anim.Config.RootAnchor,
-		},
+// SaveTrack writes a track to a .anif TOML file.
+func SaveTrack(t *editor.Track, path string) error {
+	tt := tomlTrack{
+		Metadata:   tomlTrackMeta{Name: t.Metadata.Name, Version: t.Metadata.Version},
+		Directions: make(map[string]tomlDirection, len(t.Directions)),
 	}
 
-	// Serialize keyframes
-	ta.KeyFrames = make([]tomlKeyFrame, len(anim.KeyFrames))
-	for i, kf := range anim.KeyFrames {
-		tkf := tomlKeyFrame{
-			ID:            kf.ID,
-			DurationMs:    kf.Duration,
-			Sprite:        formatSpriteRef(kf.Sprite),
-			SpeedModifier: kf.Speed,
-		}
+	for _, prop := range t.Props {
+		tt.Props = append(tt.Props, tomlPropDef{Name: prop.Name, Default: prop.Default})
+	}
 
-		if kf.HitBox != nil {
-			tkf.HitBox = &tomlBox{X: kf.HitBox.X, Y: kf.HitBox.Y, W: kf.HitBox.W, H: kf.HitBox.H}
-		}
-		if kf.AttackHitBox != nil {
-			tkf.AttackHitBox = &tomlBox{X: kf.AttackHitBox.X, Y: kf.AttackHitBox.Y, W: kf.AttackHitBox.W, H: kf.AttackHitBox.H}
-		}
-
-		// Serialize events
-		for _, e := range kf.Events {
-			switch v := e.(type) {
-			case *editor.SoundEvent:
-				tkf.Sound = v.FilePath
-				tkf.SoundPitch = v.Pitch
-			case *editor.ParticleEvent:
-				tkf.Particles = append(tkf.Particles, tomlParticle{
-					Type: v.Type, X: v.X, Y: v.Y,
-					Rotation: v.Rotation, Scale: v.Scale,
+	for dirName, dir := range t.Directions {
+		td := tomlDirection{}
+		for _, part := range dir.Parts {
+			tp := tomlPart{
+				Name:          part.Name,
+				Kind:          partKindToString(part.Kind),
+				GoverningProp: part.GoverningProp,
+				FixedSheet:    part.FixedSheet,
+				NestedAniPath: part.NestedAniPath,
+			}
+			if len(part.NestedBindings) > 0 {
+				tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
+				for k, v := range part.NestedBindings {
+					tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+				}
+			}
+			for _, kf := range part.Keyframes {
+				tp.Keyframes = append(tp.Keyframes, tomlKeyframe{
+					TimeMs: kf.TimeMs, X: kf.X, Y: kf.Y, Z: kf.Z,
+					RotationDeg: kf.RotationDeg, Row: kf.Row, Col: kf.Col,
 				})
-			case *editor.ShakeEvent:
-				tkf.Shake = &tomlShake{DurationMs: v.DurationMs, Intensity: v.Intensity}
-			case *editor.FlashEvent:
-				tkf.Flash = &tomlFlash{Color: v.Color, DurationMs: v.DurationMs, Opacity: v.Opacity}
 			}
+			td.Parts = append(td.Parts, tp)
 		}
-
-		ta.KeyFrames[i] = tkf
-	}
-
-	// Serialize nested animations
-	for _, n := range anim.Nested {
-		ta.Nested = append(ta.Nested, tomlNested{
-			KeyFrame:  n.KeyFrameID,
-			Animation: n.AnimationPath,
-			Offset:    tomlXY{X: n.Offset.X, Y: n.Offset.Y},
-			Scale:     n.Scale,
-			Opacity:   n.Opacity,
-		})
+		tt.Directions[dirName] = td
 	}
 
 	buf := &bytes.Buffer{}
-	enc := toml.NewEncoder(buf)
-	if err := enc.Encode(ta); err != nil {
-		return fmt.Errorf("failed to encode animation: %w", err)
+	if err := toml.NewEncoder(buf).Encode(tt); err != nil {
+		return fmt.Errorf("failed to encode track: %w", err)
 	}
-
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
-// LoadAnimation reads an animation from a .anif TOML file.
-func LoadAnimation(path string) (*editor.Animation, error) {
-	var ta tomlAnimation
-	if _, err := toml.DecodeFile(path, &ta); err != nil {
-		return nil, fmt.Errorf("failed to decode animation: %w", err)
+// LoadTrack reads a track from a .anif TOML file.
+func LoadTrack(path string) (*editor.Track, error) {
+	var tt tomlTrack
+	if _, err := toml.DecodeFile(path, &tt); err != nil {
+		return nil, fmt.Errorf("failed to decode track: %w", err)
 	}
 
-	anim := &editor.Animation{
-		Metadata: editor.AnimationMetadata{
-			Name:        ta.Metadata.Name,
-			Version:     ta.Metadata.Version,
-			Description: ta.Metadata.Description,
-			Author:      ta.Metadata.Author,
-		},
-		Config: editor.AnimationConfig{
-			Loop:          ta.Animation.Loop,
-			DefaultSpeed:  ta.Animation.DefaultSpeed,
-			CharacterSize: ta.Animation.CharacterSize,
-			RootAnchor:    ta.Animation.RootAnchor,
-		},
+	t := &editor.Track{
+		Metadata:   editor.TrackMetadata{Name: tt.Metadata.Name, Version: tt.Metadata.Version},
+		Directions: make(map[string]*editor.Direction, len(tt.Directions)),
+	}
+	for _, p := range tt.Props {
+		t.Props = append(t.Props, editor.PropDef{Name: p.Name, Default: p.Default})
 	}
 
-	// Parse keyframes
-	for _, tkf := range ta.KeyFrames {
-		kf := &editor.KeyFrame{
-			ID:       tkf.ID,
-			Duration: tkf.DurationMs,
-			Sprite:   parseSpriteRef(tkf.Sprite),
-			Speed:    tkf.SpeedModifier,
-			Events:   []editor.Event{},
-		}
-
-		if kf.Speed == 0 {
-			kf.Speed = 1.0
-		}
-
-		if tkf.HitBox != nil {
-			kf.HitBox = &editor.Box{X: tkf.HitBox.X, Y: tkf.HitBox.Y, W: tkf.HitBox.W, H: tkf.HitBox.H}
-		}
-		if tkf.AttackHitBox != nil {
-			kf.AttackHitBox = &editor.Box{X: tkf.AttackHitBox.X, Y: tkf.AttackHitBox.Y, W: tkf.AttackHitBox.W, H: tkf.AttackHitBox.H}
-		}
-
-		// Parse events
-		if tkf.Sound != "" {
-			pitch := tkf.SoundPitch
-			if pitch == 0 {
-				pitch = 1.0
+	for dirName, td := range tt.Directions {
+		dir := &editor.Direction{}
+		for _, tp := range td.Parts {
+			part := &editor.Part{
+				Name:          tp.Name,
+				Kind:          partKindFromString(tp.Kind),
+				GoverningProp: tp.GoverningProp,
+				FixedSheet:    tp.FixedSheet,
+				NestedAniPath: tp.NestedAniPath,
 			}
-			kf.Events = append(kf.Events, &editor.SoundEvent{FilePath: tkf.Sound, Pitch: pitch})
+			if len(tp.NestedBindings) > 0 {
+				part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
+				for k, v := range tp.NestedBindings {
+					part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+				}
+			}
+			for i, tkf := range tp.Keyframes {
+				part.Keyframes = append(part.Keyframes, &editor.Keyframe{
+					ID: i, TimeMs: tkf.TimeMs, X: tkf.X, Y: tkf.Y, Z: tkf.Z,
+					RotationDeg: tkf.RotationDeg, Row: tkf.Row, Col: tkf.Col,
+				})
+			}
+			dir.Parts = append(dir.Parts, part)
 		}
-		for _, tp := range tkf.Particles {
-			kf.Events = append(kf.Events, &editor.ParticleEvent{
-				Type: tp.Type, X: tp.X, Y: tp.Y,
-				Rotation: tp.Rotation, Scale: tp.Scale,
-			})
-		}
-		if tkf.Shake != nil {
-			kf.Events = append(kf.Events, &editor.ShakeEvent{
-				DurationMs: tkf.Shake.DurationMs, Intensity: tkf.Shake.Intensity,
-			})
-		}
-		if tkf.Flash != nil {
-			kf.Events = append(kf.Events, &editor.FlashEvent{
-				Color: tkf.Flash.Color, DurationMs: tkf.Flash.DurationMs, Opacity: tkf.Flash.Opacity,
-			})
-		}
-
-		anim.KeyFrames = append(anim.KeyFrames, kf)
+		t.Directions[dirName] = dir
 	}
 
-	// Parse nested
-	for _, tn := range ta.Nested {
-		anim.Nested = append(anim.Nested, &editor.NestedAnimation{
-			KeyFrameID:    tn.KeyFrame,
-			AnimationPath: tn.Animation,
-			Offset:        editor.Point{X: tn.Offset.X, Y: tn.Offset.Y},
-			Scale:         tn.Scale,
-			Opacity:       tn.Opacity,
-		})
+	if len(t.Directions) == 0 {
+		t.Directions["default"] = &editor.Direction{}
 	}
 
-	return anim, nil
+	return t, nil
 }
 
-// ---- Save/Load Sprite Sheet Metadata (.sprsh) ----
+// ---- Save/Load SpriteSheetTemplate (.sprsh) ----
 
-// SaveSpriteSheetMeta writes sprite sheet metadata to a .sprsh TOML file.
-func SaveSpriteSheetMeta(sheet *editor.SpriteSheet, path string) error {
-	bounds := sheet.Image.Bounds()
-	ts := tomlSpriteSheet{
-		Sheet: tomlSheetInfo{
-			Name:   sheet.Name,
-			File:   sheet.FilePath,
-			Width:  bounds.Dx(),
-			Height: bounds.Dy(),
-		},
-		Grid: tomlGridConfig{
-			Cols:       sheet.GridConfig.Cols,
-			Rows:       sheet.GridConfig.Rows,
-			TileWidth:  sheet.GridConfig.TileW,
-			TileHeight: sheet.GridConfig.TileH,
-		},
+// SaveSheetTemplate writes sheet template metadata to a .sprsh TOML file.
+// FilePath is stored relative to the .sprsh's own directory when possible,
+// so a template and its image can be moved together.
+func SaveSheetTemplate(s *editor.SpriteSheetTemplate, sprshPath string) error {
+	imgPath := s.FilePath
+	if rel, err := filepath.Rel(filepath.Dir(sprshPath), s.FilePath); err == nil {
+		imgPath = rel
 	}
 
-	for _, s := range sheet.Sprites {
-		ts.Sprites = append(ts.Sprites, tomlSpriteInfo{
-			Index: s.Index, X: s.X, Y: s.Y, W: s.W, H: s.H, Label: s.Label,
-		})
+	ts := tomlSheetTemplate{
+		Name: s.Name, FilePath: imgPath,
+		CellW: s.CellW, CellH: s.CellH,
+		PivotX: s.PivotX, PivotY: s.PivotY,
 	}
 
 	buf := &bytes.Buffer{}
-	enc := toml.NewEncoder(buf)
-	if err := enc.Encode(ts); err != nil {
-		return fmt.Errorf("failed to encode sprite sheet metadata: %w", err)
+	if err := toml.NewEncoder(buf).Encode(ts); err != nil {
+		return fmt.Errorf("failed to encode sheet template: %w", err)
 	}
-
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	return os.WriteFile(sprshPath, buf.Bytes(), 0644)
 }
 
-// LoadSpriteSheetMeta reads sprite sheet metadata from a .sprsh TOML file.
-func LoadSpriteSheetMeta(path string) (*editor.GridConfig, []editor.SpriteInfo, string, error) {
-	var ts tomlSpriteSheet
-	if _, err := toml.DecodeFile(path, &ts); err != nil {
-		return nil, nil, "", fmt.Errorf("failed to decode sprite sheet metadata: %w", err)
+// LoadSheetTemplate reads a .sprsh file and loads its referenced image.
+func LoadSheetTemplate(sprshPath string) (*editor.SpriteSheetTemplate, error) {
+	var ts tomlSheetTemplate
+	if _, err := toml.DecodeFile(sprshPath, &ts); err != nil {
+		return nil, fmt.Errorf("failed to decode sheet template: %w", err)
 	}
 
-	cfg := &editor.GridConfig{
-		Cols:  ts.Grid.Cols,
-		Rows:  ts.Grid.Rows,
-		TileW: ts.Grid.TileWidth,
-		TileH: ts.Grid.TileHeight,
+	imgPath := ts.FilePath
+	if !filepath.IsAbs(imgPath) {
+		imgPath = filepath.Join(filepath.Dir(sprshPath), imgPath)
+	}
+	img, err := LoadImage(imgPath)
+	if err != nil {
+		return nil, err
 	}
 
-	sprites := make([]editor.SpriteInfo, len(ts.Sprites))
-	for i, s := range ts.Sprites {
-		sprites[i] = editor.SpriteInfo{
-			Index: s.Index, X: s.X, Y: s.Y, W: s.W, H: s.H, Label: s.Label,
-		}
-	}
-
-	return cfg, sprites, ts.Sheet.File, nil
-}
-
-// ---- Helpers ----
-
-func formatSpriteRef(ref editor.SpriteReference) string {
-	if ref.SheetName != "" {
-		return ref.SheetName + ":" + strconv.Itoa(ref.Index)
-	}
-	if ref.Absolute != nil {
-		return ref.Absolute.FilePath
-	}
-	return ""
-}
-
-func parseSpriteRef(s string) editor.SpriteReference {
-	if idx := strings.Index(s, ":"); idx >= 0 {
-		name := s[:idx]
-		index, _ := strconv.Atoi(s[idx+1:])
-		return editor.SpriteReference{SheetName: name, Index: index}
-	}
-	return editor.SpriteReference{}
+	return editor.NewSpriteSheetTemplate(ts.Name, imgPath, img, ts.CellW, ts.CellH, ts.PivotX, ts.PivotY), nil
 }
