@@ -33,19 +33,38 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Building tools..." -ForegroundColor Cyan
 
+# Animaker (Fyne) needs cgo, which needs a real C compiler. Find one even
+# if it's not on PATH, rather than failing outright - this machine has
+# WinLibs GCC installed via winget but not exposed on PATH by default.
+$cgoEnv = @{}
+if (!(Get-Command "gcc" -ErrorAction SilentlyContinue)) {
+    $winlibsGcc = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\BrechtSanders.WinLibs*\mingw64\bin\gcc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($winlibsGcc) {
+        $cgoEnv["PATH"] = "$($winlibsGcc.DirectoryName);$env:PATH"
+    }
+}
+
 Write-Host "Building Animaker..." -ForegroundColor Cyan
 $animakerOk = $true
+$oldPath = $env:PATH
+$oldCgoEnabled = $env:CGO_ENABLED
 Push-Location (Join-Path $PSScriptRoot "animaker")
 try {
+    if ($cgoEnv.ContainsKey("PATH")) {
+        $env:PATH = $cgoEnv["PATH"]
+    }
+    $env:CGO_ENABLED = "1"
     go build -o "$binDir\animaker.exe" .
     if ($LASTEXITCODE -ne 0) {
         $animakerOk = $false
     }
 } finally {
+    $env:PATH = $oldPath
+    $env:CGO_ENABLED = $oldCgoEnabled
     Pop-Location
 }
 if (-not $animakerOk) {
-    Write-Host "Animaker build failed - skipping it. This is a known, separately-tracked issue (see map/effects/CONTEXT.md), not something this script's changes caused." -ForegroundColor Yellow
+    Write-Host "Animaker build failed - skipping it. Needs a C compiler (cgo) on PATH; see map/effects/CONTEXT.md for the current known-good setup." -ForegroundColor Yellow
 }
 
 Write-Host "Build complete! Binaries are located in .\bin\" -ForegroundColor Green

@@ -39,13 +39,14 @@ integration is not wired up in code — see [map/effects/CONTEXT.md](map/effects
 ```
 
 Animaker is built as one of the "tools" in the same script (from within
-`animaker/`, since it's a separate module). It builds cleanly in CI, but
-**fails locally on this Windows machine**: it needs cgo (`CGO_ENABLED=1`)
-and a real C compiler, and no `gcc` is actually on PATH here despite
-`go env CC` naming it as the default — that command reports the assumed
-compiler, not proof one's installed. Until a MinGW-w64 toolchain is
-installed, expect this step to fail locally; the script treats that as
-non-fatal (warns and skips launching it) so it still works for the game.
+`animaker/`, since it's a separate module). It needs cgo (`CGO_ENABLED=1`)
+and a real C compiler — as of 2026-09-17 this machine has WinLibs GCC
+(MinGW-w64) installed via `winget install BrechtSanders.WinLibs.POSIX.UCRT`,
+and `build_local.ps1` finds it automatically (checks PATH first, falls back
+to the winget install location) without needing it permanently on PATH.
+On a fresh machine without that package installed, this step will fail;
+the script treats that as non-fatal (warns and skips launching it) so it
+still works for the game.
 
 ## Workflow
 

@@ -14,12 +14,18 @@ the named card for the full waterfall.
 
 ## Outside this tree
 
-- `build_local.ps1` now builds all three: `./server`, `./client` (from
-  the root `game` module), and `animaker` (from within `animaker/`, since
+- `build_local.ps1` builds all three: `./server`, `./client` (from the
+  root `game` module), and `animaker` (from within `animaker/`, since
   it's a separate module) — and by default launches all of them. Adding a
-  fourth buildable component means editing it too. An animaker build
-  failure is handled as non-fatal (warns and skips launching it) so the
-  script still works for the game while animaker is broken.
+  fourth buildable component means editing it too. Before building
+  animaker it checks for `gcc` on PATH and, if missing, looks for the
+  WinLibs GCC install under
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs*` and
+  temporarily prepends its `bin/` to PATH plus sets `CGO_ENABLED=1` for
+  just that build step (restored afterward). An animaker build failure
+  is still handled as non-fatal (warns and skips launching it) so the
+  script keeps working for the game if animaker's build breaks again for
+  an unrelated reason.
 - `.github/workflows/test.yml` has two jobs, both green as of 2026-09-17:
   `game` runs `go vet`/`go build ./...`/`go test ./... -v` for the root
   module; `animaker` runs `go build ./...` for that module. Both need
@@ -33,17 +39,16 @@ the named card for the full waterfall.
 - No other external configs or scheduled jobs reference paths inside this
   tree as of this writing.
 
-## Known gaps to close before this matters more
+## Resolved gaps (kept for context)
 
-- `animaker/` builds fine in CI (Linux, with the apt packages above) but
-  **not on this Windows dev machine**: it needs `CGO_ENABLED=1` and a
-  real C compiler, and despite `go env CC` reporting `gcc` as the
-  configured default, no `gcc` executable is actually on PATH here (in
-  either PowerShell or Git Bash) — `go env CC` names the assumed
-  compiler, it doesn't confirm one is installed. Until a MinGW-w64
-  toolchain is installed and on PATH, `build_local.ps1`'s animaker step
-  will keep failing locally even though the same code builds cleanly on
-  every push.
+- As of 2026-09-17, `animaker/` builds locally on the Windows dev machine
+  too: WinLibs GCC (MinGW-w64) is installed via
+  `winget install BrechtSanders.WinLibs.POSIX.UCRT` (a ~150-250MB portable
+  zip extract, no registry/system-wide install), and `build_local.ps1`
+  finds it automatically (see above) without needing it permanently on
+  PATH. If animaker's build starts failing locally again, check whether
+  that winget package is still present before assuming a code regression
+  — `winget list --id BrechtSanders.WinLibs.POSIX.UCRT`.
 
 ## If the index and a card disagree
 
