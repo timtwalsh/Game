@@ -6,7 +6,9 @@ import (
 )
 
 // BuildMainLayout assembles the main window layout with all panels.
+// directionBar sits above everything (direction tabs + track name).
 func BuildMainLayout(
+	directionBar fyne.CanvasObject,
 	canvasWidget fyne.CanvasObject,
 	propertiesPanel fyne.CanvasObject,
 	timelinePanel fyne.CanvasObject,
@@ -19,7 +21,7 @@ func BuildMainLayout(
 	mainSplit := container.NewVSplit(topSplit, timelinePanel)
 	mainSplit.SetOffset(0.70)
 
-	return mainSplit
+	return container.NewBorder(directionBar, nil, nil, nil, mainSplit)
 }
 
 // BuildMenuBar creates the application menu bar.
@@ -32,11 +34,13 @@ func BuildMenuBar(
 	onUndo func(),
 	onRedo func(),
 	onToggleGrid func(),
-	onToggleHitboxes func(),
 	onZoom func(float32),
+	onAddDirection func(),
+	onAddProp func(),
+	onAddPart func(),
 ) *fyne.MainMenu {
 	fileMenu := fyne.NewMenu("File",
-		fyne.NewMenuItem("New Animation", onNew),
+		fyne.NewMenuItem("New Track", onNew),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Open...", onOpen),
 		fyne.NewMenuItem("Save", onSave),
@@ -50,9 +54,14 @@ func BuildMenuBar(
 		fyne.NewMenuItem("Redo", onRedo),
 	)
 
+	rigMenu := fyne.NewMenu("Rig",
+		fyne.NewMenuItem("Add Direction...", onAddDirection),
+		fyne.NewMenuItem("Add Prop...", onAddProp),
+		fyne.NewMenuItem("Add Part...", onAddPart),
+	)
+
 	viewMenu := fyne.NewMenu("View",
 		fyne.NewMenuItem("Toggle Grid", onToggleGrid),
-		fyne.NewMenuItem("Toggle Hitboxes", onToggleHitboxes),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Zoom 100%", func() { onZoom(1.0) }),
 		fyne.NewMenuItem("Zoom 200%", func() { onZoom(2.0) }),
@@ -66,5 +75,5 @@ func BuildMenuBar(
 		}),
 	)
 
-	return fyne.NewMainMenu(fileMenu, editMenu, viewMenu, helpMenu)
+	return fyne.NewMainMenu(fileMenu, editMenu, rigMenu, viewMenu, helpMenu)
 }

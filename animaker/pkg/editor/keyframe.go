@@ -1,169 +1,133 @@
 package editor
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
-// KeyFrame represents a single frame in an animation.
-type KeyFrame struct {
-	ID           int
-	Duration     uint32          // milliseconds
-	Sprite       SpriteReference // which sprite to display
-	Speed        float32         // movement speed modifier (1.0 = normal)
-	HitBox       *Box            // collision box (nil if none)
-	AttackHitBox *Box            // attack/damage box (nil if none)
-	Events       []Event         // sound, particles, shake, flash
-	DisplayOffset Point          // for variable sprite sizes
+// NewKeyframe creates a keyframe with default values at the given time.
+func NewKeyframe(timeMs uint32) *Keyframe {
+	return &Keyframe{TimeMs: timeMs}
 }
 
-// Box represents a rectangle used for hitboxes.
-type Box struct {
-	X, Y, W, H int
+// Clone creates a deep copy of a keyframe (it has no pointer fields, so
+// this is just a value copy, but kept as a method for call-site clarity
+// and to insulate callers from that implementation detail).
+func (kf *Keyframe) Clone() *Keyframe {
+	c := *kf
+	return &c
 }
 
-// Point represents a 2D coordinate.
-type Point struct {
-	X, Y int
-}
-
-// SpriteReference identifies which sprite to display from a sheet.
-type SpriteReference struct {
-	SheetName string // e.g. "player_sheet"
-	Index     int    // sprite index in grid
-
-	// Fallback if sheet not available
-	Absolute *AbsoluteSpriteRef
-}
-
-// AbsoluteSpriteRef directly references a region in an image file.
-type AbsoluteSpriteRef struct {
-	FilePath    string
-	X, Y, W, H int
-}
-
-// NewKeyFrame creates a keyframe with default values.
-func NewKeyFrame(id int) *KeyFrame {
-	return &KeyFrame{
-		ID:       id,
-		Duration: 100, // 100ms default
-		Speed:    1.0,
-		Events:   []Event{},
+// AddKeyframe inserts a keyframe into a part at the given time, keeping
+// Keyframes sorted by TimeMs. If one already exists at that exact time,
+// it's replaced rather than duplicated.
+func AddKeyframe(part *Part, timeMs uint32) *Keyframe {
+	for _, kf := range part.Keyframes {
+		if kf.TimeMs == timeMs {
+			return kf
+		}
 	}
-}
-
-// Clone creates a deep copy of the keyframe with a new ID.
-func (kf *KeyFrame) Clone(newID int) *KeyFrame {
-	newKF := &KeyFrame{
-		ID:            newID,
-		Duration:      kf.Duration,
-		Sprite:        kf.Sprite,
-		Speed:         kf.Speed,
-		DisplayOffset: kf.DisplayOffset,
-	}
-
-	// Deep copy hitboxes
-	if kf.HitBox != nil {
-		newKF.HitBox = &Box{kf.HitBox.X, kf.HitBox.Y, kf.HitBox.W, kf.HitBox.H}
-	}
-	if kf.AttackHitBox != nil {
-		newKF.AttackHitBox = &Box{kf.AttackHitBox.X, kf.AttackHitBox.Y, kf.AttackHitBox.W, kf.AttackHitBox.H}
-	}
-
-	// Deep copy events
-	newKF.Events = make([]Event, len(kf.Events))
-	for i, e := range kf.Events {
-		newKF.Events[i] = CopyEvent(e)
-	}
-
-	// Deep copy absolute sprite ref
-	if kf.Sprite.Absolute != nil {
-		abs := *kf.Sprite.Absolute
-		newKF.Sprite.Absolute = &abs
-	}
-
-	return newKF
-}
-
-// AddKeyFrame inserts a new keyframe after the given index. If afterIdx is -1,
-// the frame is appended at the end. Returns the new keyframe.
-func AddKeyFrame(anim *Animation, afterIdx int) *KeyFrame {
-	newID := len(anim.KeyFrames)
-	kf := NewKeyFrame(newID)
-
-	if afterIdx < 0 || afterIdx >= len(anim.KeyFrames)-1 {
-		// Append at end
-		anim.KeyFrames = append(anim.KeyFrames, kf)
-	} else {
-		// Insert after afterIdx
-		pos := afterIdx + 1
-		anim.KeyFrames = append(anim.KeyFrames, nil)
-		copy(anim.KeyFrames[pos+1:], anim.KeyFrames[pos:])
-		anim.KeyFrames[pos] = kf
-		// Re-index
-		reindexKeyFrames(anim)
-	}
-
+	kf := NewKeyframe(timeMs)
+	part.Keyframes = append(part.Keyframes, kf)
+	sortKeyframes(part)
+	reindexKeyframes(part)
 	return kf
 }
 
-// DeleteKeyFrame removes the keyframe at the given index.
-func DeleteKeyFrame(anim *Animation, idx int) error {
-	if idx < 0 || idx >= len(anim.KeyFrames) {
+// DeleteKeyframe removes the keyframe at idx from a part.
+func DeleteKeyframe(part *Part, idx int) error {
+	if idx < 0 || idx >= len(part.Keyframes) {
 		return fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-
-	anim.KeyFrames = append(anim.KeyFrames[:idx], anim.KeyFrames[idx+1:]...)
-	reindexKeyFrames(anim)
+	part.Keyframes = append(part.Keyframes[:idx], part.Keyframes[idx+1:]...)
+	reindexKeyframes(part)
 	return nil
 }
 
-// DuplicateKeyFrame clones the keyframe at idx and inserts it after.
-func DuplicateKeyFrame(anim *Animation, idx int) (*KeyFrame, error) {
-	if idx < 0 || idx >= len(anim.KeyFrames) {
+// DuplicateKeyframe clones the keyframe at idx to a new time and inserts it.
+func DuplicateKeyframe(part *Part, idx int, newTimeMs uint32) (*Keyframe, error) {
+	if idx < 0 || idx >= len(part.Keyframes) {
 		return nil, fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-
-	src := anim.KeyFrames[idx]
-	newKF := src.Clone(len(anim.KeyFrames))
-
-	// Insert after source
-	pos := idx + 1
-	anim.KeyFrames = append(anim.KeyFrames, nil)
-	copy(anim.KeyFrames[pos+1:], anim.KeyFrames[pos:])
-	anim.KeyFrames[pos] = newKF
-
-	reindexKeyFrames(anim)
-	return newKF, nil
+	nkf := part.Keyframes[idx].Clone()
+	nkf.TimeMs = newTimeMs
+	part.Keyframes = append(part.Keyframes, nkf)
+	sortKeyframes(part)
+	reindexKeyframes(part)
+	return nkf, nil
 }
 
-// MoveKeyFrame moves the keyframe at fromIdx to toIdx.
-func MoveKeyFrame(anim *Animation, fromIdx, toIdx int) error {
-	if fromIdx < 0 || fromIdx >= len(anim.KeyFrames) {
-		return fmt.Errorf("invalid source index: %d", fromIdx)
+// MoveKeyframe changes the time of the keyframe at idx.
+func MoveKeyframe(part *Part, idx int, newTimeMs uint32) error {
+	if idx < 0 || idx >= len(part.Keyframes) {
+		return fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-	if toIdx < 0 || toIdx >= len(anim.KeyFrames) {
-		return fmt.Errorf("invalid target index: %d", toIdx)
-	}
-	if fromIdx == toIdx {
-		return nil
-	}
-
-	kf := anim.KeyFrames[fromIdx]
-	// Remove from old position
-	anim.KeyFrames = append(anim.KeyFrames[:fromIdx], anim.KeyFrames[fromIdx+1:]...)
-	// Insert at new position
-	if toIdx > fromIdx {
-		toIdx-- // Adjust for removal
-	}
-	anim.KeyFrames = append(anim.KeyFrames, nil)
-	copy(anim.KeyFrames[toIdx+1:], anim.KeyFrames[toIdx:])
-	anim.KeyFrames[toIdx] = kf
-
-	reindexKeyFrames(anim)
+	part.Keyframes[idx].TimeMs = newTimeMs
+	sortKeyframes(part)
+	reindexKeyframes(part)
 	return nil
 }
 
-// reindexKeyFrames updates all keyframe IDs to match their position.
-func reindexKeyFrames(anim *Animation) {
-	for i, kf := range anim.KeyFrames {
+func sortKeyframes(part *Part) {
+	sort.Slice(part.Keyframes, func(i, j int) bool {
+		return part.Keyframes[i].TimeMs < part.Keyframes[j].TimeMs
+	})
+}
+
+func reindexKeyframes(part *Part) {
+	for i, kf := range part.Keyframes {
 		kf.ID = i
 	}
+}
+
+// ResolvedTransform is a part's interpolated placement at a point in time.
+type ResolvedTransform struct {
+	X, Y, Z     float32
+	RotationDeg float32
+	Row, Col    int // Sheet kind only; step function, not interpolated
+}
+
+// ValueAt returns the part's interpolated transform at timeMs, linearly
+// interpolating X/Y/Z/Rotation between the two surrounding keyframes.
+// Row/Col hold at the earlier keyframe's value until the next keyframe is
+// reached (a step function — cells aren't blended).
+func (p *Part) ValueAt(timeMs uint32) ResolvedTransform {
+	if len(p.Keyframes) == 0 {
+		return ResolvedTransform{}
+	}
+	first := p.Keyframes[0]
+	if len(p.Keyframes) == 1 || timeMs <= first.TimeMs {
+		return kfToResolved(first)
+	}
+	last := p.Keyframes[len(p.Keyframes)-1]
+	if timeMs >= last.TimeMs {
+		return kfToResolved(last)
+	}
+	for i := 1; i < len(p.Keyframes); i++ {
+		b := p.Keyframes[i]
+		if timeMs <= b.TimeMs {
+			a := p.Keyframes[i-1]
+			var t float32
+			if span := float32(b.TimeMs - a.TimeMs); span > 0 {
+				t = float32(timeMs-a.TimeMs) / span
+			}
+			return ResolvedTransform{
+				X:           lerp(a.X, b.X, t),
+				Y:           lerp(a.Y, b.Y, t),
+				Z:           lerp(a.Z, b.Z, t),
+				RotationDeg: lerp(a.RotationDeg, b.RotationDeg, t),
+				Row:         a.Row,
+				Col:         a.Col,
+			}
+		}
+	}
+	return kfToResolved(last)
+}
+
+func kfToResolved(kf *Keyframe) ResolvedTransform {
+	return ResolvedTransform{X: kf.X, Y: kf.Y, Z: kf.Z, RotationDeg: kf.RotationDeg, Row: kf.Row, Col: kf.Col}
+}
+
+func lerp(a, b, t float32) float32 {
+	return a + (b-a)*t
 }
