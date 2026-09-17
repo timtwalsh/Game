@@ -166,7 +166,47 @@ func (a *Application) wireCallbacks() {
 		a.refreshAll()
 	}
 	a.properties.OnKeyframeChanged = func() { a.canvasWidget.Refresh() }
-	a.properties.OnPreviewChanged = func() { a.canvasWidget.Refresh() }
+	a.properties.OnPartChanged = func() { a.canvasWidget.Refresh() }
+	a.properties.OnTileDropped = a.onTileDropped
+}
+
+// onTileDropped is the core "level editor" interaction: dragging a cell
+// from the selected part's sheet grid onto the canvas creates or updates
+// a keyframe for that part at the current playhead time, with Row/Col from
+// the dragged cell and X/Y from wherever it landed on the canvas. Drops
+// outside the canvas's bounds are ignored.
+func (a *Application) onTileDropped(partIdx, row, col int, absPos fyne.Position) {
+	dir := a.Project.ActiveDirection()
+	if dir == nil || partIdx < 0 || partIdx >= len(dir.Parts) {
+		return
+	}
+
+	canvasAbsPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(a.canvasWidget)
+	canvasSize := a.canvasWidget.Size()
+	local := fyne.NewPos(absPos.X-canvasAbsPos.X, absPos.Y-canvasAbsPos.Y)
+	if local.X < 0 || local.Y < 0 || local.X > canvasSize.Width || local.Y > canvasSize.Height {
+		return // dropped outside the canvas - not a placement
+	}
+
+	x, y := a.canvasWidget.LocalToAnimXY(local)
+
+	a.Project.RecordUndo()
+	part := dir.Parts[partIdx]
+	kf := editor.AddKeyframe(part, a.Project.Playback.ElapsedMs)
+	kf.Row = row
+	kf.Col = col
+	kf.X = x
+	kf.Y = y
+
+	a.Project.Selection.PartIndex = partIdx
+	for i, k := range part.Keyframes {
+		if k == kf {
+			a.Project.Selection.KeyframeIndex = i
+			break
+		}
+	}
+	a.Project.Dirty = true
+	a.refreshAll()
 }
 
 func (a *Application) registerShortcuts() {

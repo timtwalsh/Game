@@ -47,6 +47,20 @@ func (cw *CanvasWidget) ToggleGrid() {
 	cw.Refresh()
 }
 
+// LocalToAnimXY converts a position local to this widget (e.g. a drag-drop
+// point, already offset by the widget's own absolute position) into the
+// animation's own X/Y coordinate space - the inverse of how drawPart places
+// a resolved transform (see drawPart: screen = center + animXY*zoom).
+func (cw *CanvasWidget) LocalToAnimXY(local fyne.Position) (x, y float32) {
+	size := cw.Size()
+	centerX := size.Width / 2
+	centerY := size.Height / 2
+	if cw.zoom == 0 {
+		return 0, 0
+	}
+	return (local.X - centerX) / cw.zoom, (local.Y - centerY) / cw.zoom
+}
+
 func (cw *CanvasWidget) CreateRenderer() fyne.WidgetRenderer {
 	return &canvasRenderer{widget: cw}
 }

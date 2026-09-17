@@ -15,6 +15,14 @@ full design (why parts are free-form, why sheets use a fixed grid+pivot,
 why props resolve to a sheet name, the two open questions it flags as
 unresolved).
 
+**UI reworked same day** after hands-on use showed the original
+form-heavy layout (modal dialogs, numeric row/col entry) was hard to
+work with. Rebuilt around a level-editor interaction instead: pick a
+part from a dropdown, link it to a prop right there, and drag a cell
+straight off that part's sheet (rendered as a full tile grid) onto the
+canvas to create or move a keyframe. See `pkg/ui/sheetgrid.go` and
+`Application.onTileDropped` in `pkg/app/app.go`.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -39,20 +47,32 @@ unresolved).
   - `deepcopy.go`, `undo.go` — full-track-snapshot undo/redo.
 - `pkg/ui/` — Fyne widgets:
   - `timeline.go` — one row per Part in the active direction; keyframes
-    shown as time-labeled buttons per row, click to select, "+ here"
-    inserts at the current playhead.
+    shown as time-labeled buttons per row (click to select, "x" to
+    delete), "+ here" inserts a default-positioned keyframe at the
+    current playhead as a fallback to dragging.
   - `canvas.go` — resolves every Part's transform at the current
     `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell.
+    `LocalToAnimXY` converts a canvas-local point into the animation's own
+    X/Y space — the exact algebraic inverse of how a resolved transform
+    gets drawn — and is what turns a drop position into keyframe X/Y.
     **Rotation is stored and saved but not visually applied here** — Fyne
     has no simple rotated-image primitive, and the actual consumer of
     rotation is a future game-side (raylib) renderer, not this preview.
     Nested-animation parts draw as a labeled placeholder box, not a
     recursively-rendered sub-animation — see [Known gaps](#known-gaps-not-bugs)
     below.
-  - `properties.go` — props schema editor, preview-override entries, the
-    active direction's part list, and the selected keyframe's transform
-    fields + either a cell `(row, col)` picker (Sheet parts) or a
-    per-prop binding editor (NestedAni parts).
+  - `sheetgrid.go` — `SheetGridWidget`: renders every cell of a
+    `SpriteSheetTemplate` in its real grid layout and implements
+    `fyne.Draggable` to report which cell a drag started on plus the
+    absolute screen position the drag ended at (`OnTileDropped`). Has no
+    knowledge of the canvas — `app.go`'s `onTileDropped` is what checks
+    the drop landed inside the canvas and does the coordinate conversion.
+  - `properties.go` — the level-editor-style right panel: a part
+    dropdown (+ Remove), inline governing-prop/fixed-sheet linking for
+    the selected part, that part's `SheetGridWidget` (or a nested-bindings
+    editor for NestedAni parts), the selected keyframe's numeric
+    transform fields (for fine-tuning after a drop), and the props
+    schema / preview-override sections.
   - `dialogs.go`, `window.go`, `theme.go` — mostly self-explanatory;
     `theme.go` is untouched by the v2 rewrite (pure color/theme, no
     dependency on the domain model).
@@ -62,7 +82,7 @@ unresolved).
 
 ## Known gaps (not bugs)
 
-Deliberate scope cuts from the v2 implementation pass, not oversights:
+Deliberate scope cuts, not oversights:
 
 - **Nested-animation parts don't actually play their nested `.anif`** in
   the canvas preview — they render as a placeholder box. The data model
@@ -72,13 +92,25 @@ Deliberate scope cuts from the v2 implementation pass, not oversights:
 - **Rotation isn't visually applied** in the canvas for the same reason
   (Fyne limitation) — see above. It's captured in every keyframe and
   round-trips through save/load correctly.
-- **No sheet-cell thumbnail picker** — `(Row, Col)` is set via number
-  entry, with a live single-cell preview image next to it, rather than a
-  clickable grid of thumbnails.
+- **No ghost/preview image follows the cursor during a drag** from the
+  sheet grid to the canvas — the cell is picked up at drag-start and
+  placed at drag-end with no visual feedback in between.
 - The two items `docs/ANI_MAKER_SPEC.md`'s own "Open questions" section
   flags (how one prop fans out to multiple physical sheets; the sword
   "bent state" mechanism) are exactly as unresolved in code as in that
   doc — nothing here should be read as having quietly decided them.
+
+**Fixed during the same-day UI rework, not just a scope note:** the
+original numeric-entry properties panel crashed on startup with any
+partless track — `PropertiesPanel.refreshPartSelect` called
+`Select.ClearSelected()` when nothing was selected, which re-fires the
+`Select`'s own `OnChanged` (even with an empty value), which called
+`Refresh()`, which called `ClearSelected()` again: unbounded recursion,
+stack overflow, caught via a captured-output smoke test before merge.
+See `selectPartByName`'s guard against empty names and the
+`refreshDependentSections` split in `properties.go` if a similar
+Fyne `Select` pattern is added elsewhere — `SetSelected`/`ClearSelected`
+re-firing their own change handler is the trap.
 
 ## Connected to
 
