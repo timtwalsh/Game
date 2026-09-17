@@ -50,11 +50,14 @@ still works for the game.
 
 ## Workflow
 
-Prototyping phase: push directly to `main`, no PR/review gate. CI
-(`.github/workflows/test.yml`) still runs on every push to `main` and
-catches build/test regressions after the fact rather than before merge —
-watch it after pushing rather than relying on it to block a bad push.
-Revisit this once the team grows past rapid solo/pair prototyping.
+**As of 2026-09-18: feature branch + PR, not direct-to-main.** New work
+goes on its own branch, opened as a PR against `main` for review before
+merging. This replaces the earlier prototyping-phase practice of pushing
+straight to `main` (2026-09-17 through 2026-09-18) — commits from that
+window are already on `main` directly and were not retroactively moved
+onto branches/PRs. CI (`.github/workflows/test.yml`) still runs on every
+push and on every PR; with this change it can now actually gate a merge
+instead of only catching problems after the fact.
 
 ## Testing
 
