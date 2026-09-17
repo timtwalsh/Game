@@ -112,12 +112,13 @@ func TestPlayerInterpolationEasesThenSnaps(t *testing.T) {
 	pi := NewPlayerInterpolation(shared.Vec2{X: 0, Y: 0})
 	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 100, Y: 0}})
 
-	pi.Update(50) // half of the 100ms InterpolationDuration
+	half := shared.NetworkTickRate / 2
+	pi.Update(half) // half of InterpolationDuration, whatever it's currently tuned to
 	if !almostEqual(pi.CurrentPosition.X, 50) {
 		t.Errorf("halfway through interpolation, CurrentPosition.X = %v, want 50", pi.CurrentPosition.X)
 	}
 
-	pi.Update(50) // remaining half
+	pi.Update(shared.NetworkTickRate - half) // remaining half
 	if !almostEqual(pi.CurrentPosition.X, 100) {
 		t.Errorf("after full interpolation window, CurrentPosition.X = %v, want 100 (snapped to target)", pi.CurrentPosition.X)
 	}

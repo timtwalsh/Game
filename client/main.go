@@ -136,9 +136,10 @@ func main() {
 			rp.Update(deltaMs)
 		}
 
-		// Network Send (10Hz)
-		if now.Sub(client.lastNetworkSend).Milliseconds() >= 100 {
-			client.SendMove(client.controller.PredictedPosition, 100)
+		// Network Send
+		sinceLastSend := now.Sub(client.lastNetworkSend).Milliseconds()
+		if sinceLastSend >= int64(shared.NetworkTickRate) {
+			client.SendMove(client.controller.PredictedPosition, uint32(sinceLastSend))
 			client.lastNetworkSend = now
 		}
 		

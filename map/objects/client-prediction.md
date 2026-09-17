@@ -2,17 +2,27 @@
 
 The client's local movement simulation (so input feels instant) and its
 smoothing of every other player's position (since they only arrive at
-10Hz over the network).
+network-tick rate, currently 20Hz).
 
 ## Why this shape
 
 Client-side prediction: the local player's position is computed
 immediately from input, never waits for a server round-trip. Remote
-players only get a position update 10x/second, so their movement is
+players only get a position update once per tick, so their movement is
 interpolated between the last two known points rather than snapped,
 to avoid visible stutter. This is the standard split for the
 "trust the client, validate server-side" model described in
 `docs/ARCHITECTURE.md`.
+
+Until 2026-09-17, the client's send interval, the server's broadcast
+interval, and this interpolation window were three independently
+hardcoded `100`s that had drifted apart from `shared.NetworkTickRate`
+(which nothing actually read). Stacked together they added ~150-300ms of
+perceived latency to a remote player's rendered position — fully
+reproducible on localhost, nothing to do with real network RTT. All
+three now derive from `shared.NetworkTickRate` (50ms/20Hz), which halved
+that stacked delay. If you retune it, the "Hits" list below is where to
+look.
 
 ## Shape
 
@@ -27,9 +37,9 @@ to avoid visible stutter. This is the standard split for the
   `client/prediction.go:61-124`.
 - `PlayerInterpolation` — one per *remote* player: `CurrentPosition`
   eases from `LastPosition` toward `TargetPosition` over
-  `InterpolationDuration` (100ms, hardcoded). `ServerUpdate` resets the
-  interpolation window whenever a new `PlayerState` arrives.
-  `client/prediction.go:126-171`.
+  `InterpolationDuration` (set to `shared.NetworkTickRate` in
+  `NewPlayerInterpolation`). `ServerUpdate` resets the interpolation
+  window whenever a new `PlayerState` arrives. `client/prediction.go:126-171`.
 - `Client` (in `client/main.go:16-27`) owns one `PlayerController` for
   self and a `map[uint64]*PlayerInterpolation` for everyone else;
   `receiveLoop` demuxes incoming `ServerPlayerStatesMsg` into corrections
@@ -52,10 +62,14 @@ to avoid visible stutter. This is the standard split for the
 
 - **Hits:** nothing outside `client/` — `PlayerController` and
   `PlayerInterpolation` are not imported by `server/` or `animaker/`.
-- **Hits:** perceived movement feel and the 10Hz send cadence in
-  `client/main.go:140` if you change `NetworkTickRate` expectations —
-  keep it matched to `shared.NetworkTickRate`'s intent even though the
-  send loop currently hardcodes `100` rather than importing the constant.
+- **Hits:** perceived movement feel everywhere — `client/main.go:141`
+  (send interval), `server/main.go`'s `tickLoop` (broadcast interval),
+  and this file's `InterpolationDuration` all read `shared.NetworkTickRate`
+  directly now, so changing the one constant retunes all three together.
+  Also note `client/main.go:142` now sends the *actual* elapsed ms since
+  last send (not a hardcoded `100`) as `ClientMoveMsg.TimeMs` — this
+  feeds directly into `MovementValidator.CheckSpeed` on the server, so a
+  bug here would skew anti-cheat speed math, not just visuals.
 - **Does not hit:** server-side validation logic — the server does not
   run this prediction code; it only sees the resulting `ClientMoveMsg`.
 

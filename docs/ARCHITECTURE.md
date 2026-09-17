@@ -92,14 +92,22 @@ Key principle: Client predicts everything locally for responsiveness. Server tru
 ## Network Model
 
 ### Tick Rate
-- **Server → Client**: ~10 position updates per second (100ms interval)
-- **Client → Server**: ~10 movement updates per second (100ms interval)
-- **Bandwidth**: ~5-10 KB/s per player at full load
+- **Server → Client**: 20 position updates per second (50ms interval)
+- **Client → Server**: 20 movement updates per second (50ms interval)
+- **Bandwidth**: ~10-20 KB/s per player at full load (roughly double the
+  original 10Hz estimate — see the note below)
+- Both intervals, plus the client's remote-player interpolation window,
+  all read the single `shared.NetworkTickRate` constant
+  (`shared/types.go`) — as of 2026-09-17 they no longer drift
+  independently (they used to, as three separately hardcoded `100`s,
+  which stacked into ~150-300ms of perceived latency between clients
+  even with zero network delay — see `docs/PROTOCOL_REFERENCE.md`'s
+  Workflow section).
 ### Message Flow
 
 ```
 Client Side:
-  Input → Prediction → Network Send (every 100ms)
+  Input → Prediction → Network Send (every tick, shared.NetworkTickRate)
     ↓
     └─→ Render (every 7ms at 144fps)
 
@@ -344,7 +352,7 @@ type PlayerInterpolation struct {
     CurrentPosition       shared.Vec2
     LastPosition          shared.Vec2
     InterpolationTime     uint32
-    InterpolationDuration uint32 // 100ms, hardcoded in NewPlayerInterpolation
+    InterpolationDuration uint32 // set to shared.NetworkTickRate (50ms) in NewPlayerInterpolation
     Direction             uint8
 }
 
@@ -353,7 +361,7 @@ func (pi *PlayerInterpolation) Update(deltaMs uint32)
 ```
 ```
 Last update ──(interpolate)──→ Next update
-├─ Linear interpolation over 100ms
+├─ Linear interpolation over one network tick (50ms)
 ├─ Smooth movement between server updates
 └─ Handles network latency transparently
 ```
@@ -472,7 +480,7 @@ checked directly at the call site (`server/main.go:106`).
 
 Real shape: `handlePacket` (`server/main.go:57-115`) runs once per received
 UDP packet (not batched), and `tickLoop` (`server/main.go:117-137`) runs
-every 100ms independently:
+every `shared.NetworkTickRate` ms (50ms) independently:
 ```
 On each received packet (handlePacket):
   ├─ Only "Move" is handled; other message types are ignored
@@ -480,7 +488,7 @@ On each received packet (handlePacket):
   ├─ Add suspicion events if any issues found
   └─ Apply new position, unless status == AutoBan
 
-Every 100ms (tickLoop):
+Every tick (tickLoop, shared.NetworkTickRate):
   └─ Broadcast every player's state to every known client address
 ```
 There is no sampled logging step and no explicit escalation-threshold check

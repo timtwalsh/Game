@@ -23,7 +23,10 @@ type ClientMoveMsg struct {
     ColorB    uint8  `json:"color_b"`
 }
 ```
-- **Sent:** Every 100ms (10 updates/sec) — `client/main.go:140-142`
+- **Sent:** Every `shared.NetworkTickRate` ms (50ms / 20Hz as of
+  2026-09-17) — `client/main.go:140-143`. `TimeMs` carries the *actual*
+  elapsed milliseconds since the last send (not a hardcoded assumption),
+  since the server's `CheckSpeed` divides distance by this value directly.
 - **Validation:** Speed check, wall-phase check — `server/validation.go`
 - **Response:** Usually none (broadcast to other clients on the next tick)
 - **On violation:** Server logs suspicion, no feedback to client
@@ -130,9 +133,9 @@ type ServerPlayerStatesMsg struct {
     States []PlayerState `json:"states"`
 }
 ```
-- **Sent:** Every 100ms, unconditionally, to every known client address —
-  `server/main.go:117-137`. This is the *only* server→client message
-  actually sent today.
+- **Sent:** Every `shared.NetworkTickRate` ms (50ms), unconditionally, to
+  every known client address — `server/main.go:117-137`. This is the
+  *only* server→client message actually sent today.
 - **Client does:** demuxes each `PlayerState` in `receiveLoop`
   (`client/main.go:56-93`) — if it's the local player's own ID, calls
   `ServerCorrection`; otherwise creates/updates a `PlayerInterpolation`.
@@ -192,9 +195,9 @@ T+~0ms: Player moves (presses WASD/arrows)
   Client (live):
     ├─ Update PredictedPosition locally every frame (client/prediction.go)
     ├─ Render at new position immediately
-    └─ Every 100ms, send a ClientMoveMsg to the server
+    └─ Every tick (shared.NetworkTickRate, 50ms), send a ClientMoveMsg
 
-T+~100ms: Server receives move (live)
+T+~50ms: Server receives move (live)
   Server:
     ├─ Look up or create the player, trusting the client-sent PlayerID
     ├─ Check speed: MovementValidator.CheckSpeed
@@ -202,16 +205,24 @@ T+~100ms: Server receives move (live)
     ├─ Add a SuspicionEvent to the tracker if either check flags it
     └─ Apply the new position, unless suspicion status is AutoBan
 
-T+~100-200ms: Every player receives the next tick (live)
+T+~50-100ms: Every player receives the next tick (live)
   Every Client:
-    ├─ Receive ServerPlayerStatesMsg (all players, every 100ms)
+    ├─ Receive ServerPlayerStatesMsg (all players, every tick, 50ms)
     ├─ Own ID → ServerCorrection (snap Position to server's value)
-    └─ Other IDs → PlayerInterpolation.ServerUpdate, then ease over 100ms
+    └─ Other IDs → PlayerInterpolation.ServerUpdate, then ease over one tick (50ms)
 ```
+
+As of 2026-09-17, these three ticks (client send, server broadcast,
+client interpolation window) all derive from the single
+`shared.NetworkTickRate` constant. Before that they were three
+independently hardcoded `100`s that had drifted apart, stacking into
+~150-300ms of perceived latency for a remote player's rendered position
+— fully reproducible with zero network delay (e.g. two clients on
+localhost), since none of that delay came from the network.
 
 ### Result
 - **Player 1 experiences:** Movement is instant (local prediction)
-- **Player 2 experiences:** Movement arrives on the next 100ms tick, then eases in over the following 100ms
+- **Player 2 experiences:** Movement arrives on the next tick (50ms), then eases in over the following tick (50ms)
 - **Server validates:** Speed + wall-phase checks run on every move; violations raise suspicion but don't block movement until auto-ban
 - **Anti-cheat:** As above — logging/review/ban-list steps beyond "stop applying position updates" are not implemented (see `docs/ARCHITECTURE.md`)
 
@@ -385,16 +396,19 @@ T+~100ms: Server receives move (live: CheckWallPhase)
 
 ```
 Inbound (to server):
-├─ 100 players × 10 moves/sec = 1000 Move messages/sec
-├─ ~140 bytes/message (see Move Message above) = ~140KB/sec
-└─ Total: ~140KB/sec inbound (Attack/Chat/Report add nothing — unimplemented)
+├─ 100 players × 20 moves/sec (shared.NetworkTickRate = 50ms) = 2000 Move messages/sec
+├─ ~140 bytes/message (see Move Message above) = ~280KB/sec
+└─ Total: ~280KB/sec inbound (Attack/Chat/Report add nothing — unimplemented)
 
 Outbound (from server):
-├─ One ServerPlayerStatesMsg per connected client, every 100ms
+├─ One ServerPlayerStatesMsg per connected client, every tick (50ms)
 ├─ 100 players → each message batches ~100 PlayerState entries (~110 bytes each) ≈ 11KB
-├─ Sent to 100 clients × 10/sec = ~11MB/sec outbound
+├─ Sent to 100 clients × 20/sec = ~22MB/sec outbound
 └─ This is much higher than earlier drafts assumed, because there is no
    area-of-interest filtering — every client gets every player, every tick.
+   It's also double the estimate from when the tick rate was 10Hz, since
+   raising the rate to fix perceived latency (2026-09-17) doubles traffic
+   at the same player count.
 ```
 > The earlier per-message batching estimate in this doc understated
 > outbound bandwidth by assuming interest-managed broadcasts. Until
@@ -408,7 +422,7 @@ Outbound (from server):
 
 ```
 Per-player limits:
-├─ Movement: 10/sec (automatic, enforced by tick)
+├─ Movement: 20/sec (automatic, enforced by tick — shared.NetworkTickRate)
 ├─ Attack: 1/sec (configurable per weapon)
 ├─ Chat: 1/2sec (spam prevention)
 ├─ Interact: 1/sec
@@ -427,21 +441,21 @@ Per-player limits:
 
 ```
 Network latency (typical): 50-200ms
-Movement interpolation window: 100ms
+Movement interpolation window: 50ms (shared.NetworkTickRate)
 ┌─────────────────────────┐
 │ Interpolate over window │
 ├─────────────────────────┤
-0ms          50ms         100ms        150ms
+0ms          25ms         50ms         75ms
 Send         Receive      Display      Next update
              update       here         received
 ```
 
-If latency > 200ms: Interpolation will catch up, might look jerky
+If latency > 100ms (2x the window): Interpolation will catch up, might look jerky
 
-If latency < 50ms: Interpolation finishes early, waits for next update
+If latency < 25ms (half the window): Interpolation finishes early, waits for next update
 
-This matches the live `InterpolationDuration = 100` in
-`client/prediction.go:144`.
+This matches the live `InterpolationDuration = shared.NetworkTickRate`
+(50ms) in `client/prediction.go:144`.
 
 ---
 

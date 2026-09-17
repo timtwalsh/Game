@@ -141,7 +141,7 @@ func NewPlayerInterpolation(pos shared.Vec2) *PlayerInterpolation {
 		CurrentPosition:       pos,
 		LastPosition:          pos,
 		Direction:             4,
-		InterpolationDuration: 100,
+		InterpolationDuration: shared.NetworkTickRate,
 	}
 }
 

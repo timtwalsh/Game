@@ -1,7 +1,8 @@
 # Server authority, movement validation & anti-cheat
 
 The authoritative game loop: accepts client moves, scores them for
-cheating, and broadcasts confirmed positions to everyone at 10Hz.
+cheating, and broadcasts confirmed positions to everyone at network-tick
+rate (`shared.NetworkTickRate`, currently 20Hz).
 
 ## Why this shape
 
@@ -38,8 +39,9 @@ instead of a hard allow/deny per packet.
   disconnect/kick, and no persistence: `Score` resets to 0 on server
   restart.**
 - `tickLoop` broadcasts every player's `PlayerState` to every known
-  client address every 100ms, unconditionally (no interest management /
-  area-of-interest filtering yet). `server/main.go:117-137`.
+  client address every `shared.NetworkTickRate` ms (currently 50ms),
+  unconditionally (no interest management / area-of-interest filtering
+  yet). `server/main.go:117-137`.
 
 ## Connected to
 

@@ -124,7 +124,7 @@ Timeline: Attack at T, validate against position at T (not T+latency)
 2. Local collision test against terrain + objects
 3. Update predicted position
 4. Render immediately (no lag)
-5. Send to server every 100ms
+5. Send to server every tick (shared.NetworkTickRate, 50ms as of 2026-09-17)
 **Server does:**
 1. Receive position
 2. Validate speed + wall-phase
@@ -137,8 +137,11 @@ Timeline: Attack at T, validate against position at T (not T+latency)
  
 ### Message Format
 - **Serialization**: JSON (human-readable, easy debugging) or MessagePack (compact)
-- **Update Frequency**: 10 per second (100ms)
-- **Bandwidth**: 5-10 KB/s per player
+- **Update Frequency**: 20 per second (50ms) — `shared.NetworkTickRate`,
+  raised from the original 10/sec (100ms) on 2026-09-17 to cut perceived
+  cross-client latency; see `docs/PROTOCOL_REFERENCE.md`'s Workflow section
+- **Bandwidth**: ~10-20 KB/s per player (roughly double the original
+  estimate, since it scales with update frequency)
 ### Critical Timing
  
 **Attack Validation Timeline:**
@@ -202,10 +205,10 @@ Every frame (7ms at 144fps):
 ├─ Update predicted_position
 ├─ Render at predicted_position
  
-Every 100ms (network tick):
+Every tick (shared.NetworkTickRate, 50ms):
 ├─ Send position to server
 ├─ Server broadcasts to others
-├─ Other clients interpolate over 100ms
+├─ Other clients interpolate over one tick (50ms)
 └─ Next network update arrives
 ```
  
@@ -214,9 +217,9 @@ Every 100ms (network tick):
 ```
 Receive: PlayerState { position: (100, 50) }
 ├─ Set target_position = (100, 50)
-├─ Over next 100ms: Lerp from old_position → target_position
+├─ Over next tick (50ms): Lerp from old_position → target_position
 ├─ Render smoothly
-└─ At T+100ms: At target, wait for next update
+└─ At T+50ms: At target, wait for next update
 ```
  
 ### Server Correction

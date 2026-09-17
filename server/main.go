@@ -115,7 +115,7 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 }
 
 func (s *Server) tickLoop() {
-	ticker := time.NewTicker(100 * time.Millisecond) // 10Hz
+	ticker := time.NewTicker(time.Duration(shared.NetworkTickRate) * time.Millisecond)
 	for range ticker.C {
 		s.mutex.Lock()
 		var states []shared.PlayerState
