@@ -17,7 +17,7 @@ here: the game itself and a standalone sprite-animation editor. See
 | Edit wire types and world model shared by both | [shared/](shared/) |
 | Edit the sprite/animation editor tool | [animaker/](animaker/) |
 | Understand what a code change will hit before touching it | [map/CLAUDE.md](map/CLAUDE.md) |
-| Build/run everything locally | [build_local.ps1](build_local.ps1) |
+| Build/run everything locally (game + tools) | [build_local.ps1](build_local.ps1) — builds server, client, animaker; runs server + 2 clients + animaker by default (`-NoRun` to skip) |
 | Run tests before pushing | `go test ./...` — see [CONTEXT.md](CONTEXT.md#testing) |
 | Check/change what CI runs | [.github/workflows/test.yml](.github/workflows/test.yml) |
 

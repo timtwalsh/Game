@@ -14,9 +14,12 @@ the named card for the full waterfall.
 
 ## Outside this tree
 
-- `build_local.ps1` hardcodes the two build targets (`./server`,
-  `./client`) and the two output binary names — adding a third
-  buildable component means editing it too.
+- `build_local.ps1` now builds all three: `./server`, `./client` (from
+  the root `game` module), and `animaker` (from within `animaker/`, since
+  it's a separate module) — and by default launches all of them. Adding a
+  fourth buildable component means editing it too. An animaker build
+  failure is handled as non-fatal (warns and skips launching it) so the
+  script still works for the game while animaker is broken.
 - `.github/workflows/test.yml` runs `go vet`, `go build ./...`, and
   `go test ./... -v` for the root `game` module on every push/PR. It does
   **not** build or test `animaker/` (separate module, currently broken —
@@ -27,9 +30,13 @@ the named card for the full waterfall.
 
 ## Known gaps to close before this matters more
 
-- `animaker/` currently fails `go build` (missing `go.sum` entries for its
-  Fyne/toml dependencies) — flagged separately, not yet fixed. Changing
-  anything in `animaker/pkg/` won't get CI feedback until that's resolved.
+- `animaker/` currently fails `go build` for two stacked reasons: (1)
+  `go.sum` was missing entries for its Fyne/toml dependencies — a fix is
+  in progress in a separate session; (2) even with that fixed, `go-gl`
+  (a Fyne dependency) needs `CGO_ENABLED=1` and a C compiler, and this
+  machine currently builds with `CGO_ENABLED=0` despite having `gcc` on
+  PATH. Changing anything in `animaker/pkg/` won't get CI or
+  `build_local.ps1` feedback until both are resolved.
 
 ## If the index and a card disagree
 

@@ -33,13 +33,19 @@ integration is not wired up in code — see [map/effects/CONTEXT.md](map/effects
 ## Build
 
 ```powershell
-.\build_local.ps1        # builds bin\server.exe and bin\client.exe
-.\build_local.ps1 -Run   # also launches server + 2 test clients
+.\build_local.ps1          # builds bin\server.exe, bin\client.exe, bin\animaker.exe,
+                            # then launches server + 2 test clients + animaker
+.\build_local.ps1 -NoRun   # build only, don't launch anything
 ```
 
-`animaker` builds independently: `cd animaker; go build` — **currently
-broken** (missing `go.sum` entries for its Fyne/toml deps), tracked
-separately from this restructure.
+Animaker is built as one of the "tools" in the same script (from within
+`animaker/`, since it's a separate module) — but as of this writing it
+**fails to build**: `go.sum` was missing entries for its Fyne/toml deps
+(fix in progress, tracked separately), and even once that lands, `go-gl`
+needs `CGO_ENABLED=1` plus a C compiler on PATH, which this machine has
+(`gcc`) but `CGO_ENABLED` is currently `0`. The script treats an animaker
+build failure as non-fatal — it warns and skips launching it, so
+`build_local.ps1` still works for the game while animaker is unblocked.
 
 ## Workflow
 
