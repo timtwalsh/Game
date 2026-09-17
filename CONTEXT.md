@@ -39,13 +39,13 @@ integration is not wired up in code — see [map/effects/CONTEXT.md](map/effects
 ```
 
 Animaker is built as one of the "tools" in the same script (from within
-`animaker/`, since it's a separate module) — but as of this writing it
-**fails to build**: `go.sum` was missing entries for its Fyne/toml deps
-(fix in progress, tracked separately), and even once that lands, `go-gl`
-needs `CGO_ENABLED=1` plus a C compiler on PATH, which this machine has
-(`gcc`) but `CGO_ENABLED` is currently `0`. The script treats an animaker
-build failure as non-fatal — it warns and skips launching it, so
-`build_local.ps1` still works for the game while animaker is unblocked.
+`animaker/`, since it's a separate module). It builds cleanly in CI, but
+**fails locally on this Windows machine**: it needs cgo (`CGO_ENABLED=1`)
+and a real C compiler, and no `gcc` is actually on PATH here despite
+`go env CC` naming it as the default — that command reports the assumed
+compiler, not proof one's installed. Until a MinGW-w64 toolchain is
+installed, expect this step to fail locally; the script treats that as
+non-fatal (warns and skips launching it) so it still works for the game.
 
 ## Workflow
 
@@ -72,9 +72,17 @@ the file it tests, in the same package) as new logic is added; update the
 relevant `map/objects/*.md` card's "Tests:" line when you do, so the map
 stays accurate.
 
-`.github/workflows/test.yml` runs `go vet`, `go build ./...`, and
-`go test ./... -v` for this module on every push and PR. It does not cover
-`animaker/` (separate module, currently doesn't build — see above).
+`.github/workflows/test.yml` has two jobs, both green as of 2026-09-17:
+`game` (`go vet`, `go build ./...`, `go test ./... -v`) and `animaker`
+(`go build ./...`). Both install native Linux packages first — `raylib-go`
+and Fyne are cgo-based, not pure Go, so the runner needs X11/Wayland/GL
+dev headers (`gcc libgl1-mesa-dev xorg-dev libwayland-dev
+libxkbcommon-dev`) or `go vet`/`go build` fail before ever reaching your
+code. This job silently failed on every push for the first several
+commits of this repo's history until that was diagnosed and fixed — if
+CI goes red on a change that looks unrelated to your diff, check whether
+it's actually a missing native dependency before assuming your code broke
+it.
 
 ## Human checks
 

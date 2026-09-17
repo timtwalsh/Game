@@ -20,23 +20,30 @@ the named card for the full waterfall.
   fourth buildable component means editing it too. An animaker build
   failure is handled as non-fatal (warns and skips launching it) so the
   script still works for the game while animaker is broken.
-- `.github/workflows/test.yml` runs `go vet`, `go build ./...`, and
-  `go test ./... -v` for the root `game` module on every push/PR. It does
-  **not** build or test `animaker/` (separate module, currently broken —
-  see below) — if you fix that, add a second job for it here and in the
-  workflow.
+- `.github/workflows/test.yml` has two jobs, both green as of 2026-09-17:
+  `game` runs `go vet`/`go build ./...`/`go test ./... -v` for the root
+  module; `animaker` runs `go build ./...` for that module. Both need
+  native Linux packages installed first because `raylib-go` (game) and
+  Fyne (animaker) use cgo — `gcc libgl1-mesa-dev xorg-dev`, plus
+  `libwayland-dev libxkbcommon-dev` for `raylib-go` specifically (it
+  fails at `go vet` without them: `fatal error:
+  wayland-client-core.h: No such file or directory`). If you add a new
+  cgo dependency, expect to extend this apt-get list, not just the
+  Go module graph.
 - No other external configs or scheduled jobs reference paths inside this
   tree as of this writing.
 
 ## Known gaps to close before this matters more
 
-- `animaker/` currently fails `go build` for two stacked reasons: (1)
-  `go.sum` was missing entries for its Fyne/toml dependencies — a fix is
-  in progress in a separate session; (2) even with that fixed, `go-gl`
-  (a Fyne dependency) needs `CGO_ENABLED=1` and a C compiler, and this
-  machine currently builds with `CGO_ENABLED=0` despite having `gcc` on
-  PATH. Changing anything in `animaker/pkg/` won't get CI or
-  `build_local.ps1` feedback until both are resolved.
+- `animaker/` builds fine in CI (Linux, with the apt packages above) but
+  **not on this Windows dev machine**: it needs `CGO_ENABLED=1` and a
+  real C compiler, and despite `go env CC` reporting `gcc` as the
+  configured default, no `gcc` executable is actually on PATH here (in
+  either PowerShell or Git Bash) — `go env CC` names the assumed
+  compiler, it doesn't confirm one is installed. Until a MinGW-w64
+  toolchain is installed and on PATH, `build_local.ps1`'s animaker step
+  will keep failing locally even though the same code builds cleanly on
+  every push.
 
 ## If the index and a card disagree
 
