@@ -123,3 +123,55 @@ func TestPlayerInterpolationEasesThenSnaps(t *testing.T) {
 		t.Errorf("after full interpolation window, CurrentPosition.X = %v, want 100 (snapped to target)", pi.CurrentPosition.X)
 	}
 }
+
+func TestPlayerInterpolationAdaptsToALateUpdate(t *testing.T) {
+	// Regression test for the "freeze then snap" jitter bug: if the real
+	// gap between updates runs longer than InterpolationDuration, the old
+	// code froze at the target (Update's outer guard stopped the clock),
+	// then had to cover the resulting larger distance in a fixed short
+	// window next time - a visible stall-then-rush pattern. The fix
+	// measures the real elapsed gap and uses it for the next segment.
+	pi := NewPlayerInterpolation(shared.Vec2{X: 0, Y: 0})
+	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 100, Y: 0}})
+
+	// Let the first segment finish, then simulate updates arriving late:
+	// several ticks pass with no new ServerUpdate - enough to exceed
+	// interpolationDurationMax, so this also exercises the upper clamp.
+	lateGap := shared.NetworkTickRate * 5
+	pi.Update(lateGap)
+	if !almostEqual(pi.CurrentPosition.X, 100) {
+		t.Fatalf("should have reached the first target during the gap, got CurrentPosition.X = %v", pi.CurrentPosition.X)
+	}
+
+	// The delayed update finally arrives. Its interpolation duration
+	// should reflect the real ~3-tick gap since the last ServerUpdate,
+	// not silently reset to a single tick.
+	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 200, Y: 0}})
+	if pi.InterpolationDuration <= shared.NetworkTickRate {
+		t.Errorf("InterpolationDuration after a %vms gap = %v, want it adapted upward (was pinned at %v pre-fix)", lateGap, pi.InterpolationDuration, shared.NetworkTickRate)
+	}
+	if pi.InterpolationDuration != interpolationDurationMax {
+		t.Errorf("InterpolationDuration = %v, want it clamped to interpolationDurationMax (%v) for a gap this large", pi.InterpolationDuration, interpolationDurationMax)
+	}
+
+	// A single network tick's worth of progress should now cover
+	// proportionally less distance than before (since it must be spread
+	// over the longer, adapted window) - i.e. no more instant-looking snap.
+	pi.Update(shared.NetworkTickRate)
+	if pi.CurrentPosition.X >= 150 {
+		t.Errorf("after one normal tick into an adapted (longer) window, CurrentPosition.X = %v, want well short of the target (100) - a snap indicates the duration didn't adapt", pi.CurrentPosition.X)
+	}
+}
+
+func TestPlayerInterpolationClampsAVeryShortGap(t *testing.T) {
+	pi := NewPlayerInterpolation(shared.Vec2{X: 0, Y: 0})
+	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 100, Y: 0}})
+
+	// Two updates arrive back-to-back with essentially no time between them.
+	pi.Update(1)
+	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 200, Y: 0}})
+
+	if pi.InterpolationDuration != interpolationDurationMin {
+		t.Errorf("InterpolationDuration after a ~1ms gap = %v, want it clamped to interpolationDurationMin (%v)", pi.InterpolationDuration, interpolationDurationMin)
+	}
+}

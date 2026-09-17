@@ -137,18 +137,45 @@ type PlayerInterpolation struct {
 
 func NewPlayerInterpolation(pos shared.Vec2) *PlayerInterpolation {
 	return &PlayerInterpolation{
-		TargetPosition:        pos,
-		CurrentPosition:       pos,
-		LastPosition:          pos,
-		Direction:             4,
+		TargetPosition:  pos,
+		CurrentPosition: pos,
+		LastPosition:    pos,
+		Direction:       4,
+		// Seeded so the first ServerUpdate's elapsed-time measurement
+		// (see ServerUpdate) reads as exactly one tick, matching
+		// InterpolationDuration below, instead of reading as 0 and being
+		// clamped down to interpolationDurationMin.
+		InterpolationTime:     shared.NetworkTickRate,
 		InterpolationDuration: shared.NetworkTickRate,
 	}
 }
 
+// interpolationDurationMin/Max bound the adaptive duration ServerUpdate
+// derives from real inter-update spacing, so one very short or very long
+// gap (jitter, a dropped packet) doesn't produce an unplayable snap or an
+// unplayably slow crawl for the next segment.
+const (
+	interpolationDurationMin = shared.NetworkTickRate / 2
+	interpolationDurationMax = shared.NetworkTickRate * 4
+)
+
 func (pi *PlayerInterpolation) ServerUpdate(state shared.PlayerState) {
+	// pi.InterpolationTime, just before we reset it below, holds the real
+	// elapsed time since the previous ServerUpdate call. Using that (rather
+	// than always assuming exactly shared.NetworkTickRate) matches the
+	// interpolation speed to how updates are actually arriving, instead of
+	// freezing when they arrive late and snapping too fast to catch up.
+	elapsed := pi.InterpolationTime
+	if elapsed < interpolationDurationMin {
+		elapsed = interpolationDurationMin
+	} else if elapsed > interpolationDurationMax {
+		elapsed = interpolationDurationMax
+	}
+
 	pi.LastPosition = pi.CurrentPosition
 	pi.TargetPosition = state.Position
 	pi.InterpolationTime = 0
+	pi.InterpolationDuration = elapsed
 	pi.Direction = state.Direction
 	pi.ColorR = state.ColorR
 	pi.ColorG = state.ColorG
@@ -156,15 +183,17 @@ func (pi *PlayerInterpolation) ServerUpdate(state shared.PlayerState) {
 }
 
 func (pi *PlayerInterpolation) Update(deltaMs uint32) {
-	if pi.InterpolationTime < pi.InterpolationDuration {
-		pi.InterpolationTime += deltaMs
-		if pi.InterpolationTime >= pi.InterpolationDuration {
-			pi.InterpolationTime = pi.InterpolationDuration
-			pi.CurrentPosition = pi.TargetPosition
-		} else {
-			t := float32(pi.InterpolationTime) / float32(pi.InterpolationDuration)
-			pi.CurrentPosition.X = pi.LastPosition.X + (pi.TargetPosition.X - pi.LastPosition.X)*t
-			pi.CurrentPosition.Y = pi.LastPosition.Y + (pi.TargetPosition.Y - pi.LastPosition.Y)*t
-		}
+	// InterpolationTime accumulates unconditionally, even past
+	// InterpolationDuration (i.e. even once we've visually "arrived") -
+	// ServerUpdate reads it to measure the real elapsed time since the
+	// previous update. Capping it at InterpolationDuration here would hide
+	// how late a delayed update actually was.
+	pi.InterpolationTime += deltaMs
+	if pi.InterpolationTime >= pi.InterpolationDuration {
+		pi.CurrentPosition = pi.TargetPosition
+	} else {
+		t := float32(pi.InterpolationTime) / float32(pi.InterpolationDuration)
+		pi.CurrentPosition.X = pi.LastPosition.X + (pi.TargetPosition.X - pi.LastPosition.X)*t
+		pi.CurrentPosition.Y = pi.LastPosition.Y + (pi.TargetPosition.Y - pi.LastPosition.Y)*t
 	}
 }
