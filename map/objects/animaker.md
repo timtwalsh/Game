@@ -5,11 +5,16 @@ separate from the game's Go module.
 
 ## Why this shape
 
-`docs/ANI_MAKER_SPEC.md` designs it as a general-purpose sprite-sheet /
-keyframe / timeline animation tool with its own file format, independent
-of the game so it can be built, versioned, and run without the game's
-raylib/networking dependencies. It is its own `module animaker` for
-exactly that reason.
+It is its own `module animaker` so it can be built, versioned, and run
+without the game's raylib/networking dependencies.
+
+**Pending rewrite (2026-09-18):** `docs/ANI_MAKER_SPEC.md` was rewritten
+to a v2 design — a multi-part rig/props model — that is a full
+replacement for what's described below, not an extension of it. The
+shape below is still what's actually in `animaker/pkg/` today (v1, a
+flipbook editor); it just no longer matches what the spec describes.
+Once the rewrite lands, this whole card needs re-verifying against the
+new code, not patching in place.
 
 ## Shape
 
