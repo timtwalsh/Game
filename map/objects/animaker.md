@@ -15,13 +15,25 @@ full design (why parts are free-form, why sheets use a fixed grid+pivot,
 why props resolve to a sheet name, the two open questions it flags as
 unresolved).
 
-**UI reworked same day** after hands-on use showed the original
-form-heavy layout (modal dialogs, numeric row/col entry) was hard to
-work with. Rebuilt around a level-editor interaction instead: pick a
-part from a dropdown, link it to a prop right there, and drag a cell
-straight off that part's sheet (rendered as a full tile grid) onto the
-canvas to create or move a keyframe. See `pkg/ui/sheetgrid.go` and
-`Application.onTileDropped` in `pkg/app/app.go`.
+**UI reworked twice more the same day**, both times from hands-on
+feedback after using the previous version:
+
+1. First rework: replaced the original form-heavy layout (modal dialogs,
+   numeric row/col entry) with a level-editor interaction — pick a part
+   from a dropdown, link it to a prop right there, drag a cell off that
+   part's sheet (a full tile grid) onto the canvas to create/move a
+   keyframe. See `pkg/ui/sheetgrid.go` and `Application.onTileDropped`.
+2. Second rework, on top of the first: the animation got an explicit
+   `0,0`-to-`(CanvasWidth, CanvasHeight)` working area (`Track.CanvasWidth`/
+   `CanvasHeight`); directions became plain ints (`0`=up, `1`=right,
+   `2`=down, `3`=left by convention, but any int works) instead of
+   free-form strings; the canvas itself became directly interactive
+   (click a part to select it, drag an *existing* placed part to move an
+   already-created keyframe — separate from dragging a *new* tile in from
+   the sheet grid); the timeline became an actual scrubbable, per-part
+   ruler (`pkg/ui/timeline.go`'s `scrubArea`) instead of a row of buttons,
+   with explicit Play/Stop (not one toggle) and New/Delete Keyframe
+   actions.
 
 ## Shape
 
@@ -31,7 +43,10 @@ canvas to create or move a keyframe. See `pkg/ui/sheetgrid.go` and
   UI callback, runs the ~60fps playback ticker.
 - `pkg/editor/` — domain model:
   - `track.go` — `Track`/`Direction`/`Part`/`Keyframe`/`PropDef`/
-    `PropBinding` types (the rig itself).
+    `PropBinding` types (the rig itself). `Track.Directions` is
+    `map[int]*Direction` — plain ints, not free-form names, matching the
+    game's own direction convention. `Track.CanvasWidth`/`CanvasHeight`
+    define the `0,0`-to-`(W,H)` working area parts are placed within.
   - `part.go` — add/remove Part/Direction/Prop helpers.
   - `keyframe.go` — add/delete/duplicate/move keyframes (kept sorted by
     `TimeMs`), and `Part.ValueAt(timeMs)` — the interpolation entry point
@@ -46,15 +61,28 @@ canvas to create or move a keyframe. See `pkg/ui/sheetgrid.go` and
     customization system hangs off).
   - `deepcopy.go`, `undo.go` — full-track-snapshot undo/redo.
 - `pkg/ui/` — Fyne widgets:
-  - `timeline.go` — one row per Part in the active direction; keyframes
-    shown as time-labeled buttons per row (click to select, "x" to
-    delete), "+ here" inserts a default-positioned keyframe at the
-    current playhead as a fallback to dragging.
+  - `timeline.go` — `scrubArea` (unexported): a custom-drawn ruler plus
+    one row per Part, keyframes as markers positioned by `TimeMs`, click
+    the ruler/a row to scrub, click a marker to select it (also seeks the
+    playhead there). `TimelineWidget` wraps it with Play/Stop, New/Delete
+    Keyframe, speed, and loop controls. "New Keyframe" seeds the new
+    keyframe from the part's current interpolated pose (`Part.ValueAt`)
+    rather than snapping to zero, so it starts as a continuation.
   - `canvas.go` — resolves every Part's transform at the current
-    `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell.
-    `LocalToAnimXY` converts a canvas-local point into the animation's own
-    X/Y space — the exact algebraic inverse of how a resolved transform
-    gets drawn — and is what turns a drop position into keyframe X/Y.
+    `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell
+    within the track's `0,0`-to-`(CanvasWidth,CanvasHeight)` bounds
+    (drawn as an outline; `MinSize` equals the zoomed working area so
+    wrapping it in `container.NewScroll` gives scrollbars exactly when
+    content overflows the viewport). Implements `Tappable` (click a part
+    to select it, `OnPartTapped`) and `Draggable` (drag an *already
+    placed* part to move an *existing* keyframe at the exact current
+    time — `OnPartDragStart/Dragged/DragEnd` — deliberately does **not**
+    create a keyframe implicitly; use "New Keyframe" first). Both share
+    `resolvedDraws()`/`hitTest()` so drawing and hit-testing can never
+    disagree about where a part actually is. `LocalToAnimXY` converts a
+    canvas-local point into the animation's own X/Y space (now a direct
+    `local/zoom` scale — origin moved to the canvas's top-left corner
+    this round, no longer widget-center-relative).
     **Rotation is stored and saved but not visually applied here** — Fyne
     has no simple rotated-image primitive, and the actual consumer of
     rotation is a future game-side (raylib) renderer, not this preview.
@@ -67,15 +95,20 @@ canvas to create or move a keyframe. See `pkg/ui/sheetgrid.go` and
     absolute screen position the drag ended at (`OnTileDropped`). Has no
     knowledge of the canvas — `app.go`'s `onTileDropped` is what checks
     the drop landed inside the canvas and does the coordinate conversion.
-  - `properties.go` — the level-editor-style right panel: a part
-    dropdown (+ Remove), inline governing-prop/fixed-sheet linking for
-    the selected part, that part's `SheetGridWidget` (or a nested-bindings
-    editor for NestedAni parts), the selected keyframe's numeric
-    transform fields (for fine-tuning after a drop), and the props
-    schema / preview-override sections.
+    This is the *only* way a new part gets its first keyframe/art; the
+    canvas's own drag only repositions what's already there.
+  - `properties.go` — the level-editor-style right panel: an Import
+    button, a part **list** (buttons + per-row Delete — deliberately not
+    a `Select`, see [Known gaps](#known-gaps-not-bugs)) with `SelectPart`
+    exported so canvas taps and list clicks stay in sync, inline
+    governing-prop/fixed-sheet linking for the selected part, that part's
+    `SheetGridWidget` (or a nested-bindings editor), the selected
+    keyframe's numeric transform fields (for fine-tuning after a drop or
+    a canvas drag), and the props schema / preview-override sections.
   - `dialogs.go`, `window.go`, `theme.go` — mostly self-explanatory;
     `theme.go` is untouched by the v2 rewrite (pure color/theme, no
-    dependency on the domain model).
+    dependency on the domain model). `window.go`'s `BuildMainLayout` is
+    two nested splits: 50/50 canvas-vs-properties, 75/25 that-row-vs-timeline.
 - `pkg/file/` — persistence: `toml.go` (`SaveTrack`/`LoadTrack` for
   `.anif`, `SaveSheetTemplate`/`LoadSheetTemplate` for `.sprsh`),
   `image.go` (unchanged — generic image loading/cropping).
@@ -95,6 +128,15 @@ Deliberate scope cuts, not oversights:
 - **No ghost/preview image follows the cursor during a drag** from the
   sheet grid to the canvas — the cell is picked up at drag-start and
   placed at drag-end with no visual feedback in between.
+- **Dragging a part directly on the canvas never creates a keyframe**,
+  only moves one that already exists at the exact current playhead
+  `TimeMs` — this is intentional (matches the requested workflow: select
+  a part, "New Keyframe", *then* drag), not a bug, but it means dragging
+  a part when the playhead isn't sitting exactly on one of its keyframes
+  silently does nothing.
+- **No drag-to-retime a keyframe marker** on the timeline ruler — moving
+  a keyframe in time isn't wired to any UI action yet, only its transform
+  values (via the properties panel or a canvas drag).
 - The two items `docs/ANI_MAKER_SPEC.md`'s own "Open questions" section
   flags (how one prop fans out to multiple physical sheets; the sword
   "bent state" mechanism) are exactly as unresolved in code as in that

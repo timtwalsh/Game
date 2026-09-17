@@ -29,7 +29,7 @@ type Selection struct {
 }
 
 type PlaybackState struct {
-	ActiveDirection string
+	ActiveDirection int
 	IsPlaying       bool
 	ElapsedMs       uint32
 	LoopEnabled     bool
@@ -46,19 +46,19 @@ func NewProject(name string) *Project {
 		UndoStack:    NewUndoStack(100),
 		Selection:    &Selection{PartIndex: -1, KeyframeIndex: -1},
 		Playback: &PlaybackState{
-			ActiveDirection: firstDirectionName(track),
+			ActiveDirection: firstDirectionKey(track),
 			LoopEnabled:     true,
 			SpeedFactor:     1.0,
 		},
 	}
 }
 
-func firstDirectionName(t *Track) string {
-	names := t.SortedDirectionNames()
-	if len(names) == 0 {
-		return "default"
+func firstDirectionKey(t *Track) int {
+	keys := t.SortedDirectionKeys()
+	if len(keys) == 0 {
+		return 0
 	}
-	return names[0]
+	return keys[0]
 }
 
 // ActiveDirection returns the direction currently selected for editing/
@@ -152,7 +152,7 @@ func (p *Project) Redo() bool {
 func (p *Project) clampSelection() {
 	dir := p.ActiveDirection()
 	if dir == nil {
-		p.Playback.ActiveDirection = firstDirectionName(p.CurrentTrack)
+		p.Playback.ActiveDirection = firstDirectionKey(p.CurrentTrack)
 		dir = p.ActiveDirection()
 	}
 	if dir == nil || p.Selection.PartIndex >= len(dir.Parts) {
@@ -186,15 +186,20 @@ func (p *Project) AdvancePlayback(deltaMs uint32) {
 	}
 }
 
-func (p *Project) TogglePlayback() {
+// Play resumes/starts playback from wherever the playhead currently is
+// (does not reset to 0 - that's Stop's job).
+func (p *Project) Play() {
 	dir := p.ActiveDirection()
 	if dir == nil || len(dir.Parts) == 0 {
 		return
 	}
-	p.Playback.IsPlaying = !p.Playback.IsPlaying
-	if p.Playback.IsPlaying {
-		p.Playback.ElapsedMs = 0
-	}
+	p.Playback.IsPlaying = true
+}
+
+// Stop pauses playback and resets the playhead to 0.
+func (p *Project) Stop() {
+	p.Playback.IsPlaying = false
+	p.Playback.ElapsedMs = 0
 }
 
 const scrubStepMs = 50
@@ -228,13 +233,29 @@ func (p *Project) StepBackward() {
 
 // SetActiveDirection switches which direction is being edited/previewed,
 // resetting playback position and selection.
-func (p *Project) SetActiveDirection(name string) {
-	if _, ok := p.CurrentTrack.Directions[name]; !ok {
+func (p *Project) SetActiveDirection(key int) {
+	if _, ok := p.CurrentTrack.Directions[key]; !ok {
 		return
 	}
-	p.Playback.ActiveDirection = name
+	p.Playback.ActiveDirection = key
 	p.Playback.ElapsedMs = 0
 	p.Playback.IsPlaying = false
 	p.Selection.PartIndex = -1
 	p.Selection.KeyframeIndex = -1
+}
+
+// Seek moves the playhead directly to timeMs, clamped to the active
+// direction's duration, without changing IsPlaying. Used by the timeline's
+// scrub bar.
+func (p *Project) Seek(timeMs uint32) {
+	dir := p.ActiveDirection()
+	if dir == nil {
+		p.Playback.ElapsedMs = 0
+		return
+	}
+	total := dir.TotalDurationMs()
+	if timeMs > total {
+		timeMs = total
+	}
+	p.Playback.ElapsedMs = timeMs
 }

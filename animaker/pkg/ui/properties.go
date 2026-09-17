@@ -10,16 +10,17 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// PropertiesPanel is the level-editor-style right panel: pick a part from
-// a dropdown, link it to a prop (or a fixed sheet) right there, and see
-// that part's active sheet as a draggable tile grid (SheetGridWidget) —
-// or a bindings editor for a NestedAni part. Below that: the selected
-// keyframe's numeric fields (for fine-tuning after a drag-drop), and the
-// track-level props schema / preview overrides.
+// PropertiesPanel is the level-editor-style right panel: import a sheet,
+// pick a part from a list (with delete), link it to a prop (or a fixed
+// sheet) right there, and see that part's active sheet as a draggable
+// tile grid (SheetGridWidget) — or a bindings editor for a NestedAni
+// part. Below that: the selected keyframe's numeric fields (for
+// fine-tuning after a drag-drop or a canvas move), and the track-level
+// props schema / preview overrides.
 type PropertiesPanel struct {
 	project *editor.Project
 
-	partSelect  *widget.Select
+	partListBox *fyne.Container
 	partLinkBox *fyne.Container
 	sheetGrid   *SheetGridWidget
 	keyframeBox *fyne.Container
@@ -30,6 +31,7 @@ type PropertiesPanel struct {
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
 	OnTileDropped     func(partIdx, row, col int, absPos fyne.Position)
+	OnImport          func()
 	OnPartChanged     func()
 	OnPartRemoved     func(idx int)
 	OnKeyframeChanged func()
@@ -45,29 +47,13 @@ func (pp *PropertiesPanel) SetProject(project *editor.Project) {
 }
 
 func (pp *PropertiesPanel) Build() fyne.CanvasObject {
-	pp.partSelect = widget.NewSelect(nil, func(name string) {
-		pp.selectPartByName(name)
-	})
-	removePartBtn := widget.NewButton("Remove", func() {
-		dir := pp.project.ActiveDirection()
-		sel := pp.project.Selection
-		if dir == nil || sel == nil || sel.PartIndex < 0 || sel.PartIndex >= len(dir.Parts) {
-			return
-		}
-		idx := sel.PartIndex
-		pp.project.RecordUndo()
-		editor.RemovePart(dir, idx)
-		sel.PartIndex = -1
-		sel.KeyframeIndex = -1
-		pp.Refresh()
-		if pp.OnPartRemoved != nil {
-			pp.OnPartRemoved(idx)
+	importBtn := widget.NewButton("Import Sprite Sheet...", func() {
+		if pp.OnImport != nil {
+			pp.OnImport()
 		}
 	})
-	removePartBtn.Importance = widget.DangerImportance
-	partSelectRow := container.NewBorder(nil, nil, nil, removePartBtn, pp.partSelect)
-	addPartHint := widget.NewLabel("(add parts from the Rig menu)")
 
+	pp.partListBox = container.NewVBox()
 	pp.partLinkBox = container.NewVBox()
 	pp.sheetGrid = NewSheetGridWidget()
 	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
@@ -82,11 +68,12 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 	pp.Refresh()
 
 	partArea := container.NewVBox(
-		newSectionHeader("PART"),
-		partSelectRow,
-		addPartHint,
+		newSectionHeader("PARTS"),
+		importBtn,
+		pp.partListBox,
+		widget.NewLabel("(also addable via the Rig menu)"),
 		pp.partLinkBox,
-		container.NewVScroll(pp.sheetGrid),
+		container.NewScroll(pp.sheetGrid),
 	)
 
 	all := container.NewVBox(
@@ -109,7 +96,7 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 
 // Refresh rebuilds every section from current project state.
 func (pp *PropertiesPanel) Refresh() {
-	pp.refreshPartSelect()
+	pp.refreshPartList()
 	pp.refreshDependentSections()
 }
 
@@ -127,49 +114,74 @@ func (pp *PropertiesPanel) refreshDependentSections() {
 	pp.refreshPreview()
 }
 
-// -- Part selection + prop linking --
+// -- Part list + prop linking --
 
-func (pp *PropertiesPanel) refreshPartSelect() {
-	if pp.partSelect == nil {
+// refreshPartList rebuilds the part list as plain buttons+delete rows
+// rather than a Select widget — a Select's SetSelected/ClearSelected
+// re-fire its own OnChanged even when nothing actually changed, which is
+// exactly what caused a real stack-overflow crash here before (see the
+// note in map/objects/animaker.md); a list of buttons has no such
+// self-triggering hazard.
+func (pp *PropertiesPanel) refreshPartList() {
+	if pp.partListBox == nil {
 		return
 	}
-	dir := pp.project.ActiveDirection()
-	var names []string
-	if dir != nil {
-		for _, p := range dir.Parts {
-			names = append(names, p.Name)
-		}
-	}
-	pp.partSelect.Options = names
+	pp.partListBox.RemoveAll()
 
-	sel := pp.project.Selection
-	if dir != nil && sel != nil && sel.PartIndex >= 0 && sel.PartIndex < len(dir.Parts) {
-		pp.partSelect.SetSelected(dir.Parts[sel.PartIndex].Name)
-	} else {
-		pp.partSelect.ClearSelected()
-	}
-	pp.partSelect.Refresh()
-}
-
-func (pp *PropertiesPanel) selectPartByName(name string) {
-	// name == "" happens when the Select's own selection gets cleared
-	// (e.g. by refreshPartSelect's ClearSelected call) - nothing to do,
-	// and critically, must not call back into refreshPartSelect() from
-	// here (see refreshDependentSections' doc comment).
-	if name == "" {
-		return
-	}
 	dir := pp.project.ActiveDirection()
 	if dir == nil {
+		pp.partListBox.Refresh()
 		return
 	}
-	for i, p := range dir.Parts {
-		if p.Name == name {
-			pp.project.Selection.PartIndex = i
-			pp.project.Selection.KeyframeIndex = -1
-			break
+	sel := pp.project.Selection
+	for i, part := range dir.Parts {
+		idx := i
+		kindTag := "sheet"
+		if part.Kind == editor.PartKindNestedAni {
+			kindTag = "nested"
 		}
+		btn := widget.NewButton(fmt.Sprintf("%s [%s]", part.Name, kindTag), func() {
+			pp.selectPart(idx)
+		})
+		if sel != nil && sel.PartIndex == idx {
+			btn.Importance = widget.HighImportance
+		}
+		delBtn := widget.NewButton("Delete", func() {
+			pp.project.RecordUndo()
+			editor.RemovePart(dir, idx)
+			if sel != nil && sel.PartIndex == idx {
+				sel.PartIndex = -1
+				sel.KeyframeIndex = -1
+			}
+			pp.Refresh()
+			if pp.OnPartRemoved != nil {
+				pp.OnPartRemoved(idx)
+			}
+		})
+		delBtn.Importance = widget.DangerImportance
+		pp.partListBox.Add(container.NewBorder(nil, nil, nil, delBtn, btn))
 	}
+	pp.partListBox.Refresh()
+}
+
+// SelectPart is called from app.go when a part is tapped directly on the
+// canvas, so canvas clicks and list clicks stay in sync. idx < 0 clears
+// the selection (a canvas click on empty space).
+func (pp *PropertiesPanel) SelectPart(idx int) {
+	if idx < 0 {
+		pp.project.Selection.PartIndex = -1
+		pp.project.Selection.KeyframeIndex = -1
+		pp.refreshPartList()
+		pp.refreshDependentSections()
+		return
+	}
+	pp.selectPart(idx)
+}
+
+func (pp *PropertiesPanel) selectPart(idx int) {
+	pp.project.Selection.PartIndex = idx
+	pp.project.Selection.KeyframeIndex = -1
+	pp.refreshPartList()
 	pp.refreshDependentSections()
 	if pp.OnPartChanged != nil {
 		pp.OnPartChanged()

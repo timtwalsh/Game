@@ -1,14 +1,25 @@
 package editor
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Track is one named motion (e.g. "human_walk") and corresponds to exactly
 // one .anif file. There is no wrapping "character" asset — see
 // docs/ANI_MAKER_SPEC.md's Props section for why.
 type Track struct {
-	Metadata   TrackMetadata
-	Props      []PropDef
-	Directions map[string]*Direction // "up"/"right"/"down"/"left", or "default"
+	Metadata TrackMetadata
+	Props    []PropDef
+
+	// CanvasWidth/Height define the animation's working area, 0,0 to
+	// (CanvasWidth, CanvasHeight) — the space parts are placed within.
+	CanvasWidth, CanvasHeight int
+
+	// Directions are keyed by a plain int (0, 1, 2, ...) matching the
+	// game's own direction convention (0=up, 1=right, 2=down, 3=left),
+	// not free-form names. 0 is the default/first direction.
+	Directions map[int]*Direction
 }
 
 type TrackMetadata struct {
@@ -98,34 +109,33 @@ type Keyframe struct {
 	Row, Col    int // Sheet kind only
 }
 
-// NewTrack creates a track with a single "default" direction and no parts.
+// DefaultCanvasWidth/Height seed a new track's working area; freely
+// editable afterward, this is just a sane starting size.
+const (
+	DefaultCanvasWidth  = 256
+	DefaultCanvasHeight = 256
+)
+
+// NewTrack creates a track with a single direction (key 0) and no parts.
 func NewTrack(name string) *Track {
 	now := time.Now()
 	return &Track{
-		Metadata: TrackMetadata{Name: name, Version: "1.0", CreatedAt: now, UpdatedAt: now},
-		Props:    []PropDef{},
-		Directions: map[string]*Direction{
-			"default": {Parts: []*Part{}},
+		Metadata:     TrackMetadata{Name: name, Version: "1.0", CreatedAt: now, UpdatedAt: now},
+		Props:        []PropDef{},
+		CanvasWidth:  DefaultCanvasWidth,
+		CanvasHeight: DefaultCanvasHeight,
+		Directions: map[int]*Direction{
+			0: {Parts: []*Part{}},
 		},
 	}
 }
 
-// SortedDirectionNames returns direction keys in a stable, sensible order:
-// the common four first (if present), then anything else alphabetically.
-func (t *Track) SortedDirectionNames() []string {
-	preferred := []string{"up", "right", "down", "left", "default"}
-	seen := map[string]bool{}
-	var out []string
-	for _, name := range preferred {
-		if _, ok := t.Directions[name]; ok {
-			out = append(out, name)
-			seen[name] = true
-		}
+// SortedDirectionKeys returns direction keys in ascending numeric order.
+func (t *Track) SortedDirectionKeys() []int {
+	keys := make([]int, 0, len(t.Directions))
+	for k := range t.Directions {
+		keys = append(keys, k)
 	}
-	for name := range t.Directions {
-		if !seen[name] {
-			out = append(out, name)
-		}
-	}
-	return out
+	sort.Ints(keys)
+	return keys
 }

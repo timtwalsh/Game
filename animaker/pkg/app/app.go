@@ -6,6 +6,7 @@ import (
 	"animaker/pkg/ui"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,9 +55,10 @@ func (a *Application) Run() {
 	a.wireCallbacks()
 
 	directionBar := a.buildDirectionBar()
+	canvasScroll := container.NewScroll(a.canvasWidget)
 	propertiesPanel := a.properties.Build()
 	timelinePanel := a.timeline.Build()
-	mainLayout := ui.BuildMainLayout(directionBar, a.canvasWidget, propertiesPanel, timelinePanel)
+	mainLayout := ui.BuildMainLayout(directionBar, canvasScroll, propertiesPanel, timelinePanel)
 
 	menu := ui.BuildMenuBar(
 		a.onNewTrack,
@@ -88,8 +90,12 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 	a.titleLabel = widget.NewLabel(a.Project.CurrentTrack.Metadata.Name)
 	a.titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	a.directionSel = widget.NewSelect(a.Project.CurrentTrack.SortedDirectionNames(), func(name string) {
-		a.Project.SetActiveDirection(name)
+	a.directionSel = widget.NewSelect(nil, func(s string) {
+		key, err := strconv.Atoi(s)
+		if err != nil {
+			return
+		}
+		a.Project.SetActiveDirection(key)
 		a.refreshAll()
 	})
 	a.refreshDirectionSelect()
@@ -98,40 +104,66 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 }
 
 func (a *Application) refreshDirectionSelect() {
-	names := a.Project.CurrentTrack.SortedDirectionNames()
-	a.directionSel.Options = names
-	if len(names) > 0 {
-		a.directionSel.SetSelected(a.Project.Playback.ActiveDirection)
+	keys := a.Project.CurrentTrack.SortedDirectionKeys()
+	options := make([]string, len(keys))
+	for i, k := range keys {
+		options[i] = strconv.Itoa(k)
+	}
+	a.directionSel.Options = options
+	if len(options) > 0 {
+		a.directionSel.SetSelected(strconv.Itoa(a.Project.Playback.ActiveDirection))
 	}
 	a.directionSel.Refresh()
 }
 
 func (a *Application) wireCallbacks() {
-	a.timeline.OnPartSelected = func(idx int) {
-		a.Project.Selection.PartIndex = idx
-		a.Project.Selection.KeyframeIndex = -1
+	// -- Canvas: click to select, drag to reposition an existing keyframe --
+	a.canvasWidget.OnPartTapped = func(idx int) {
+		a.properties.SelectPart(idx)
+		a.refreshAll()
+	}
+	a.canvasWidget.OnPartDragStart = func(idx int) {
+		a.Project.RecordUndo()
+		a.properties.SelectPart(idx)
+	}
+	a.canvasWidget.OnPartDragged = func(idx int, x, y float32) {
+		dir := a.Project.ActiveDirection()
+		if dir == nil || idx < 0 || idx >= len(dir.Parts) {
+			return
+		}
+		part := dir.Parts[idx]
+		// Only an existing keyframe at exactly the current playhead time
+		// moves - dragging doesn't implicitly create one. Use "New
+		// Keyframe" first, per the intended workflow.
+		for _, kf := range part.Keyframes {
+			if kf.TimeMs == a.Project.Playback.ElapsedMs {
+				kf.X, kf.Y = x, y
+				a.Project.Dirty = true
+				a.canvasWidget.Refresh()
+				a.properties.Refresh()
+				return
+			}
+		}
+	}
+	a.canvasWidget.OnPartDragEnd = func() {
+		a.timeline.Refresh()
+	}
+
+	// -- Timeline --
+	a.timeline.OnScrub = func(ms uint32) {
+		a.Project.Seek(ms)
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeSelected = func(partIdx, kfIdx int) {
 		a.Project.Selection.PartIndex = partIdx
 		a.Project.Selection.KeyframeIndex = kfIdx
-		a.refreshAll()
-	}
-	a.timeline.OnKeyframeAdded = func(partIdx int) {
 		dir := a.Project.ActiveDirection()
-		if dir == nil || partIdx < 0 || partIdx >= len(dir.Parts) {
-			return
-		}
-		a.Project.RecordUndo()
-		kf := editor.AddKeyframe(dir.Parts[partIdx], a.Project.Playback.ElapsedMs)
-		a.Project.Selection.PartIndex = partIdx
-		for i, k := range dir.Parts[partIdx].Keyframes {
-			if k == kf {
-				a.Project.Selection.KeyframeIndex = i
-				break
+		if dir != nil && partIdx >= 0 && partIdx < len(dir.Parts) {
+			part := dir.Parts[partIdx]
+			if kfIdx >= 0 && kfIdx < len(part.Keyframes) {
+				a.Project.Seek(part.Keyframes[kfIdx].TimeMs)
 			}
 		}
-		a.Project.Dirty = true
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeDeleted = func(partIdx, kfIdx int) {
@@ -145,18 +177,39 @@ func (a *Application) wireCallbacks() {
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
-	a.timeline.OnPlayToggle = func() {
-		a.Project.TogglePlayback()
-	}
-	a.timeline.OnStepForward = func() {
-		a.Project.StepForward()
+	a.timeline.OnNewKeyframe = func() {
+		dir := a.Project.ActiveDirection()
+		sel := a.Project.Selection
+		if dir == nil || sel == nil || sel.PartIndex < 0 || sel.PartIndex >= len(dir.Parts) {
+			return
+		}
+		part := dir.Parts[sel.PartIndex]
+		elapsed := a.Project.Playback.ElapsedMs
+		// Seed the new keyframe from wherever the part's interpolated pose
+		// currently is, so it starts as a continuation rather than
+		// snapping to zero - the artist then drags it into place.
+		seed := part.ValueAt(elapsed)
+		a.Project.RecordUndo()
+		kf := editor.AddKeyframe(part, elapsed)
+		kf.X, kf.Y, kf.Z, kf.RotationDeg = seed.X, seed.Y, seed.Z, seed.RotationDeg
+		kf.Row, kf.Col = seed.Row, seed.Col
+		for i, k := range part.Keyframes {
+			if k == kf {
+				sel.KeyframeIndex = i
+				break
+			}
+		}
+		a.Project.Dirty = true
 		a.refreshAll()
 	}
-	a.timeline.OnStepBackward = func() {
-		a.Project.StepBackward()
+	a.timeline.OnPlay = func() { a.Project.Play() }
+	a.timeline.OnStop = func() {
+		a.Project.Stop()
 		a.refreshAll()
 	}
 
+	// -- Properties --
+	a.properties.OnImport = a.onImportSpriteSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
 	a.properties.OnPartRemoved = func(idx int) {
 		if a.Project.Selection.PartIndex == idx {
@@ -165,8 +218,14 @@ func (a *Application) wireCallbacks() {
 		}
 		a.refreshAll()
 	}
-	a.properties.OnKeyframeChanged = func() { a.canvasWidget.Refresh() }
-	a.properties.OnPartChanged = func() { a.canvasWidget.Refresh() }
+	a.properties.OnKeyframeChanged = func() {
+		a.canvasWidget.Refresh()
+		a.timeline.Refresh()
+	}
+	a.properties.OnPartChanged = func() {
+		a.canvasWidget.Refresh()
+		a.timeline.Refresh()
+	}
 	a.properties.OnTileDropped = a.onTileDropped
 }
 
@@ -261,7 +320,10 @@ func (a *Application) onOpenTrack() {
 		a.Project.SavePath = filePath
 		a.Project.Dirty = false
 		a.Project.UndoStack.Clear()
-		a.Project.Playback.ActiveDirection = track.SortedDirectionNames()[0]
+		keys := track.SortedDirectionKeys()
+		if len(keys) > 0 {
+			a.Project.Playback.ActiveDirection = keys[0]
+		}
 		a.Project.Playback.ElapsedMs = 0
 		a.Project.Selection = &editor.Selection{PartIndex: -1, KeyframeIndex: -1}
 
@@ -336,9 +398,9 @@ func (a *Application) onImportSpriteSheet() {
 }
 
 func (a *Application) onAddDirection() {
-	ui.ShowAddDirectionDialog(a.Window, func(name string) {
+	ui.ShowAddDirectionDialog(a.Window, func(key int) {
 		a.Project.RecordUndo()
-		editor.AddDirection(a.Project.CurrentTrack, name)
+		editor.AddDirection(a.Project.CurrentTrack, key)
 		a.refreshDirectionSelect()
 		a.refreshAll()
 	})
@@ -409,7 +471,7 @@ func (a *Application) playbackLoop() {
 			if a.Project.Playback.IsPlaying {
 				a.Project.AdvancePlayback(deltaMs)
 				a.canvasWidget.Refresh()
-				a.timeline.RefreshInfo()
+				a.timeline.Refresh()
 			}
 		case <-a.playbackDone:
 			return

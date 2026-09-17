@@ -13,13 +13,13 @@ func BuildMainLayout(
 	propertiesPanel fyne.CanvasObject,
 	timelinePanel fyne.CanvasObject,
 ) fyne.CanvasObject {
-	// Horizontal split: Canvas (70%) | Properties (30%)
+	// Horizontal split: Canvas (50%) | Properties (50%)
 	topSplit := container.NewHSplit(canvasWidget, propertiesPanel)
-	topSplit.SetOffset(0.70)
+	topSplit.SetOffset(0.50)
 
-	// Vertical split: Top panels | Timeline
+	// Vertical split: Top panels (75%) | Timeline (25%)
 	mainSplit := container.NewVSplit(topSplit, timelinePanel)
-	mainSplit.SetOffset(0.70)
+	mainSplit.SetOffset(0.75)
 
 	return container.NewBorder(directionBar, nil, nil, nil, mainSplit)
 }

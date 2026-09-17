@@ -102,15 +102,15 @@ func TestResolveActiveSheetNamePrecedence(t *testing.T) {
 
 func TestDeepCopyIsIndependent(t *testing.T) {
 	track := NewTrack("human_walk")
-	dir := AddDirection(track, "down")
+	dir := AddDirection(track, 2) // 2 = "down" by the game's direction convention
 	part := NewSheetPart("Hair", "hair", "")
 	AddKeyframe(part, 0)
 	AddPart(dir, part)
 
 	copy := track.DeepCopy()
-	copy.Directions["down"].Parts[0].Keyframes[0].X = 999
+	copy.Directions[2].Parts[0].Keyframes[0].X = 999
 
-	if track.Directions["down"].Parts[0].Keyframes[0].X == 999 {
+	if track.Directions[2].Parts[0].Keyframes[0].X == 999 {
 		t.Error("mutating the deep copy affected the original - not actually independent")
 	}
 }

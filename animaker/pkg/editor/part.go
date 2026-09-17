@@ -41,18 +41,18 @@ func RemovePart(dir *Direction, idx int) error {
 // AddDirection creates a new, empty direction on the track if it doesn't
 // already exist. Directions are never auto-populated from another
 // direction — each is authored independently, per spec.
-func AddDirection(t *Track, name string) *Direction {
-	if d, ok := t.Directions[name]; ok {
+func AddDirection(t *Track, key int) *Direction {
+	if d, ok := t.Directions[key]; ok {
 		return d
 	}
 	d := &Direction{Parts: []*Part{}}
-	t.Directions[name] = d
+	t.Directions[key] = d
 	return d
 }
 
-// RemoveDirection deletes a direction by name.
-func RemoveDirection(t *Track, name string) {
-	delete(t.Directions, name)
+// RemoveDirection deletes a direction by key.
+func RemoveDirection(t *Track, key int) {
+	delete(t.Directions, key)
 }
 
 // AddProp appends a prop definition to the track.

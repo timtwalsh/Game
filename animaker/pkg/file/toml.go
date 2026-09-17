@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/BurntSushi/toml"
 )
@@ -13,14 +14,18 @@ import (
 // ---- TOML structures for .anif files (a Track) ----
 
 type tomlTrack struct {
-	Metadata   tomlTrackMeta            `toml:"metadata"`
-	Props      []tomlPropDef            `toml:"props,omitempty"`
+	Metadata tomlTrackMeta `toml:"metadata"`
+	Props    []tomlPropDef `toml:"props,omitempty"`
+	// Directions are keyed by the string form of their int key (TOML table
+	// keys must be strings) - converted at the Save/LoadTrack boundary.
 	Directions map[string]tomlDirection `toml:"directions"`
 }
 
 type tomlTrackMeta struct {
-	Name    string `toml:"name"`
-	Version string `toml:"version"`
+	Name         string `toml:"name"`
+	Version      string `toml:"version"`
+	CanvasWidth  int    `toml:"canvas_width"`
+	CanvasHeight int    `toml:"canvas_height"`
 }
 
 type tomlPropDef struct {
@@ -87,7 +92,10 @@ func partKindFromString(s string) editor.PartKind {
 // SaveTrack writes a track to a .anif TOML file.
 func SaveTrack(t *editor.Track, path string) error {
 	tt := tomlTrack{
-		Metadata:   tomlTrackMeta{Name: t.Metadata.Name, Version: t.Metadata.Version},
+		Metadata: tomlTrackMeta{
+			Name: t.Metadata.Name, Version: t.Metadata.Version,
+			CanvasWidth: t.CanvasWidth, CanvasHeight: t.CanvasHeight,
+		},
 		Directions: make(map[string]tomlDirection, len(t.Directions)),
 	}
 
@@ -95,7 +103,8 @@ func SaveTrack(t *editor.Track, path string) error {
 		tt.Props = append(tt.Props, tomlPropDef{Name: prop.Name, Default: prop.Default})
 	}
 
-	for dirName, dir := range t.Directions {
+	for dirKey, dir := range t.Directions {
+		dirName := strconv.Itoa(dirKey)
 		td := tomlDirection{}
 		for _, part := range dir.Parts {
 			tp := tomlPart{
@@ -137,14 +146,26 @@ func LoadTrack(path string) (*editor.Track, error) {
 	}
 
 	t := &editor.Track{
-		Metadata:   editor.TrackMetadata{Name: tt.Metadata.Name, Version: tt.Metadata.Version},
-		Directions: make(map[string]*editor.Direction, len(tt.Directions)),
+		Metadata:     editor.TrackMetadata{Name: tt.Metadata.Name, Version: tt.Metadata.Version},
+		CanvasWidth:  tt.Metadata.CanvasWidth,
+		CanvasHeight: tt.Metadata.CanvasHeight,
+		Directions:   make(map[int]*editor.Direction, len(tt.Directions)),
+	}
+	if t.CanvasWidth == 0 {
+		t.CanvasWidth = editor.DefaultCanvasWidth
+	}
+	if t.CanvasHeight == 0 {
+		t.CanvasHeight = editor.DefaultCanvasHeight
 	}
 	for _, p := range tt.Props {
 		t.Props = append(t.Props, editor.PropDef{Name: p.Name, Default: p.Default})
 	}
 
 	for dirName, td := range tt.Directions {
+		dirKey, err := strconv.Atoi(dirName)
+		if err != nil {
+			return nil, fmt.Errorf("direction key %q is not an integer: %w", dirName, err)
+		}
 		dir := &editor.Direction{}
 		for _, tp := range td.Parts {
 			part := &editor.Part{
@@ -168,11 +189,11 @@ func LoadTrack(path string) (*editor.Track, error) {
 			}
 			dir.Parts = append(dir.Parts, part)
 		}
-		t.Directions[dirName] = dir
+		t.Directions[dirKey] = dir
 	}
 
 	if len(t.Directions) == 0 {
-		t.Directions["default"] = &editor.Direction{}
+		t.Directions[0] = &editor.Direction{}
 	}
 
 	return t, nil

@@ -11,7 +11,7 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	editor.AddProp(track, "hair", "long_blonde")
 	editor.AddProp(track, "arms", "leather")
 
-	dir := editor.AddDirection(track, "down")
+	dir := editor.AddDirection(track, 2) // 2 = "down" by the game's direction convention
 
 	hair := editor.NewSheetPart("Hair", "hair", "")
 	editor.AddKeyframe(hair, 0).Row = 4
@@ -49,9 +49,9 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 		t.Errorf("loaded 'hair' prop = %+v, want default long_blonde", got)
 	}
 
-	ldir, ok := loaded.Directions["down"]
+	ldir, ok := loaded.Directions[2]
 	if !ok {
-		t.Fatalf("loaded track missing 'down' direction")
+		t.Fatalf("loaded track missing direction 2")
 	}
 	if len(ldir.Parts) != 3 {
 		t.Fatalf("loaded %d parts, want 3", len(ldir.Parts))

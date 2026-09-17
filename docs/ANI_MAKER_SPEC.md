@@ -1,7 +1,7 @@
 # ANIFile Animation Maker — Technical Specification (v2: Rigged/Parts Model)
 
 **Version**: 2.0 (supersedes v1 in full — this is not an extension of the old design, it's a replacement)
-**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`. Known, deliberate implementation gaps (nested-animation preview rendering, visual rotation in the canvas, a cell thumbnail picker) are tracked in `map/objects/animaker.md`, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
+**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`, then revised twice more the same day from hands-on use: Directions changed from free-form strings to plain ints, and a `CanvasWidth`/`CanvasHeight` working area was added (both reflected below); the UI was reworked into a level-editor interaction (drag tiles onto a canvas) and then further into a fully interactive canvas (click/drag placed parts) with a real scrubbable timeline — see `map/objects/animaker.md` for the UI history in detail. Known, deliberate implementation gaps (nested-animation preview rendering, visual rotation in the canvas, no drag-to-retime on the timeline) are tracked there, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
 **Language**: Go
 **GUI Framework**: Fyne
 **File format**: TOML (consistent with the rest of `animaker/pkg/file`)
@@ -35,7 +35,7 @@ v1 was a flipbook editor: one whole-character sprite per keyframe, single timeli
 
 ```
 Track (= one .anif file, one named motion — "human_walk.anif")
-└── Directions (map[string]*Direction — "up"/"right"/"down"/"left", or "default")
+└── Directions (map[int]*Direction — 0=up, 1=right, 2=down, 3=left by convention)
     └── Direction
         └── Parts ([]*Part — "Body", "Hair", "Arm_Left", "Arm_Right", ...)
             └── Part
@@ -43,15 +43,18 @@ Track (= one .anif file, one named motion — "human_walk.anif")
 ```
 
 - **Track = one file, one motion.** `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif`, `human_hurt.anif`, `base_wood_torch.anif` are each their own `Track`. There is no wrapping "character" file — see [Props](#props) for why, and what that costs.
-- **Direction is first-class, not a prop.** Each direction a `Track` defines is a fully independent set of Parts and Keyframes — art commonly differs enough by facing (back of the head vs. front of it) that sharing one timeline across directions doesn't hold up. Direction names are free-form strings, not a hardcoded 0-3 enum; a non-directional thing (a treasure chest) just defines one entry, conventionally named `"default"`.
+- **Direction is first-class, not a prop, and is a plain int, not a name.** Each direction a `Track` defines is a fully independent set of Parts and Keyframes — art commonly differs enough by facing (back of the head vs. front of it) that sharing one timeline across directions doesn't hold up. Direction keys are `int` (matching the game's own 0=up/1=right/2=down/3=left convention, decided 2026-09-18 — originally spec'd as free-form strings like `"up"`, changed once actual editor use showed a plain int was simpler to work with); a non-directional thing (a treasure chest) just defines key `0`.
+- **A Track defines its own working area.** `CanvasWidth`/`CanvasHeight` (added 2026-09-18) give the animation a concrete `0,0`-to-`(W,H)` space parts are placed within — not just an unbounded coordinate space.
 - **Parts are free-form per Track.** No fixed schema/template of "every character always has exactly these 10 parts" — each `.anif` declares whatever named parts it needs.
 - **Keyframes share tick times within a Direction.** All Parts in one Direction are evaluated against the same timeline positions — "keyframe 3" means the same instant for every part. This was chosen for simplicity over independent per-part timing, and it pays off at runtime: resolving "current segment + interpolation fraction" happens once per instance per frame, not once per part.
 
 ```go
 type Track struct {
-    Metadata   TrackMetadata
-    Props      []PropDef                // see Props section
-    Directions map[string]*Direction     // "up"/"right"/"down"/"left", or "default"
+    Metadata     TrackMetadata
+    Props        []PropDef            // see Props section
+    CanvasWidth  int                  // the animation's 0,0-to-(W,H) working area
+    CanvasHeight int
+    Directions   map[int]*Direction   // 0=up, 1=right, 2=down, 3=left by convention; any int works
 }
 
 type Direction struct {
@@ -155,6 +158,8 @@ type PropDef struct {
 [metadata]
 name = "human_walk"
 version = "1.0"
+canvas_width = 256
+canvas_height = 256
 
 [[props]]
 name = "hair"
@@ -164,13 +169,16 @@ default = "long_blonde"
 name = "arms"
 default = "leather"
 
-[directions.down]
-  [[directions.down.parts]]
+# Direction table keys are the string form of the int key (TOML table
+# headers must be strings) - "2" here is direction 2 = "down" by
+# convention. Converted to/from int at the Save/LoadTrack boundary.
+[directions.2]
+  [[directions.2.parts]]
   name = "Body"
   kind = "sheet"
   governing_prop = ""  # fixed default sheet, not customizable
 
-    [[directions.down.parts.keyframes]]
+    [[directions.2.parts.keyframes]]
     time_ms = 0
     row = 0
     col = 0
@@ -179,12 +187,12 @@ default = "leather"
     z = 20.0
     rotation_deg = 0.0
 
-  [[directions.down.parts]]
+  [[directions.2.parts]]
   name = "Hair"
   kind = "sheet"
   governing_prop = "hair"
 
-    [[directions.down.parts.keyframes]]
+    [[directions.2.parts.keyframes]]
     time_ms = 0
     row = 0
     col = 0
@@ -193,26 +201,26 @@ default = "leather"
     z = 25.0
     rotation_deg = 0.0
 
-  [[directions.down.parts]]
+  [[directions.2.parts]]
   name = "Torch"
   kind = "nested_ani"
   nested_ani_path = "base_wood_torch.anif"
 
-    [directions.down.parts.nested_bindings.direction]
+    [directions.2.parts.nested_bindings.direction]
     passthrough_from = "direction"   # torch turns with the character
 
-    [[directions.down.parts.keyframes]]
+    [[directions.2.parts.keyframes]]
     time_ms = 0
     x = 10.0
     y = -4.0
     z = 26.0
     rotation_deg = 0.0
 
-[directions.up]
+[directions.0]
   # ... independently authored, own parts/keyframes ...
 ```
 
-(Only one direction shown in full for brevity; `up`/`left`/`right` follow the same shape, fully independently authored per the [Core concepts](#core-concepts) rule.)
+(Only direction `2` shown in full for brevity; `0`/`1`/`3` follow the same shape, fully independently authored per the [Core concepts](#core-concepts) rule.)
 
 ### `.sprsh` (a sprite sheet template) — TOML
 
@@ -237,7 +245,7 @@ This session is editor + data model only — no game-side loader is being built 
 ```go
 type AnimatedInstance struct {
     Track     *Track
-    Direction string             // set by movement/facing logic
+    Direction int                // set by movement/facing logic (0=up/1=right/2=down/3=left)
     ElapsedMs uint32             // playback position within Track's active Direction
     Props     map[string]string  // "hair":"long_blonde", "arms":"chainmail", ...
     // + cached resolved sheet/row/col per part — recomputed only when Props change,
@@ -245,7 +253,7 @@ type AnimatedInstance struct {
 }
 
 func (a *AnimatedInstance) SetTrack(t *Track)        // state machine calls this on transition
-func (a *AnimatedInstance) SetDirection(dir string)
+func (a *AnimatedInstance) SetDirection(dir int)
 func (a *AnimatedInstance) SetProp(name, value string)
 func (a *AnimatedInstance) Advance(deltaMs uint32)   // every frame
 func (a *AnimatedInstance) ResolvedParts() []ResolvedPart // every frame, for the renderer
@@ -301,7 +309,7 @@ These came up during design and were **not** settled. Don't treat any of the fol
 
 Grounding the abstract model in the concrete case that shaped it:
 
-- `human_walk.anif` — a `Track`. Declares props `hair`, `arms`, `legs`, `head`, `body`. Has 4 `Directions` (`up`/`right`/`down`/`left`), each independently authored with `Parts`: `Body`, `Head`, `Hair`, `Arm_Left`, `Arm_Right`, `Leg_Left`, `Leg_Right`.
+- `human_walk.anif` — a `Track`. Declares props `hair`, `arms`, `legs`, `head`, `body`. Has 4 `Directions` (keys `0`/`1`/`2`/`3` = up/right/down/left), each independently authored with `Parts`: `Body`, `Head`, `Hair`, `Arm_Left`, `Arm_Right`, `Leg_Left`, `Leg_Right`.
 - `Hair` is a Sheet part, `governing_prop = "hair"`. Its keyframes reference cells of whichever sheet the `hair` prop currently names.
 - A hairstyle content library ships `human_hair_v2_template.sprsh` — cell size and pivot fixed once. A sheet named `long_blonde` and another named `short_spikey` both conform to it: same cell size, same pivot, same `(row, col)` meaning per pose (`idle-0`, `idle-1`, `flinch`, `running-0`...`running-3`, laid out as columns = direction, rows = animation+frame). `human_walk.anif`'s `Hair` keyframes for a given walk frame reference, say, `(row=4, col=2)` — whatever hairstyle is currently equipped, that cell is used.
 - An artist authoring `human_burning.anif`'s `Hair` keyframes can deliberately reference the same cell used for "flinch" elsewhere (reuse, not automation) if it looks right for a burning reaction — nothing forces a 1:1 mapping between Track names and cell rows.

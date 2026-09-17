@@ -103,20 +103,27 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(string,
 }
 
 // ShowAddDirectionDialog displays a dialog for adding a new direction.
-func ShowAddDirectionDialog(win fyne.Window, onCreate func(name string)) {
-	nameEntry := widget.NewEntry()
-	nameEntry.SetPlaceHolder("up / right / down / left / default")
+// Directions are keyed by int (0=up, 1=right, 2=down, 3=left by the game's
+// own convention, but any int is accepted).
+func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
+	keyEntry := widget.NewEntry()
+	keyEntry.SetPlaceHolder("0=up, 1=right, 2=down, 3=left, ...")
 
 	form := dialog.NewForm(
 		"Add Direction",
 		"Add", "Cancel",
 		[]*widget.FormItem{
-			{Text: "Name", Widget: nameEntry},
+			{Text: "Direction (int)", Widget: keyEntry},
 		},
 		func(confirmed bool) {
-			if confirmed && onCreate != nil && nameEntry.Text != "" {
-				onCreate(nameEntry.Text)
+			if !confirmed || onCreate == nil {
+				return
 			}
+			key, err := strconv.Atoi(keyEntry.Text)
+			if err != nil {
+				return
+			}
+			onCreate(key)
 		},
 		win,
 	)
