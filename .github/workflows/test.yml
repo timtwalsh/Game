@@ -17,6 +17,9 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: go.sum
 
+      - name: Install raylib-go build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+
       - name: Vet
         run: go vet ./...
 
