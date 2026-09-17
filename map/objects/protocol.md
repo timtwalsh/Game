@@ -67,3 +67,7 @@ directly.
 ## See
 
 `shared/protocol.go`, `shared/types.go`
+
+Tests: `shared/types_test.go` (Vec2, TileType, CollisionLayer). No test
+covers the message structs themselves yet (serialization round-trips are
+implicitly exercised by the client/server integration, not unit-tested).

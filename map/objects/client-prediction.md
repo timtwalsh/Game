@@ -67,3 +67,8 @@ other consumer.
 ## See
 
 `client/prediction.go`, `client/main.go`, `client/renderer.go`
+
+Tests: `client/prediction_test.go` — covers `PlayerInput` direction/vector
+math, `PlayerController` movement + wall-stopping + server correction, and
+`PlayerInterpolation` easing. `client/main.go` and `client/renderer.go` are
+untested (network/render glue and depth-sort only, respectively).

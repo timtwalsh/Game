@@ -70,3 +70,8 @@ Runs headless as `server/main.go`'s `main()` → `ListenAndServe`. No UI.
 ## See
 
 `server/main.go`, `server/validation.go`
+
+Tests: `server/validation_test.go` — covers `CheckSpeed`, `CheckWallPhase`
+(clean/blocked/feasible-detour/infeasible-detour/teleport-skip),
+`ValidateMovement`, and `SuspicionTracker` status thresholds. `server/main.go`
+(the UDP loop itself) is untested — it's network glue, not scored logic.

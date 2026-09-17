@@ -37,7 +37,30 @@ integration is not wired up in code — see [map/effects/CONTEXT.md](map/effects
 .\build_local.ps1 -Run   # also launches server + 2 test clients
 ```
 
-`animaker` builds independently: `cd animaker; go build`.
+`animaker` builds independently: `cd animaker; go build` — **currently
+broken** (missing `go.sum` entries for its Fyne/toml deps), tracked
+separately from this restructure.
+
+## Testing
+
+```powershell
+go test ./...          # runs shared/, client/, server/ test suites
+go test ./... -v       # verbose, per-test output
+```
+
+Coverage as of 2026-09-17: `shared/types_test.go` (Vec2, TileType,
+CollisionLayer), `client/prediction_test.go` (input/movement/interpolation
+math), `server/validation_test.go` (speed/wall-phase checks, suspicion
+thresholds). These are regression tests against current behavior, not a
+full TDD suite — `client/main.go` and `server/main.go` (the network/render
+loops) are untested glue code. Extend this pattern (one `_test.go` beside
+the file it tests, in the same package) as new logic is added; update the
+relevant `map/objects/*.md` card's "Tests:" line when you do, so the map
+stays accurate.
+
+`.github/workflows/test.yml` runs `go vet`, `go build ./...`, and
+`go test ./... -v` for this module on every push and PR. It does not cover
+`animaker/` (separate module, currently doesn't build — see above).
 
 ## Human checks
 

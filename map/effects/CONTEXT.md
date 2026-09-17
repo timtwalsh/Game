@@ -17,8 +17,19 @@ the named card for the full waterfall.
 - `build_local.ps1` hardcodes the two build targets (`./server`,
   `./client`) and the two output binary names — adding a third
   buildable component means editing it too.
-- No CI, no external configs, no scheduled jobs reference paths inside
-  this tree as of this writing (no git remote, no `.github/` yet).
+- `.github/workflows/test.yml` runs `go vet`, `go build ./...`, and
+  `go test ./... -v` for the root `game` module on every push/PR. It does
+  **not** build or test `animaker/` (separate module, currently broken —
+  see below) — if you fix that, add a second job for it here and in the
+  workflow.
+- No other external configs or scheduled jobs reference paths inside this
+  tree as of this writing.
+
+## Known gaps to close before this matters more
+
+- `animaker/` currently fails `go build` (missing `go.sum` entries for its
+  Fyne/toml dependencies) — flagged separately, not yet fixed. Changing
+  anything in `animaker/pkg/` won't get CI feedback until that's resolved.
 
 ## If the index and a card disagree
 

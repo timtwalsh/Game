@@ -18,6 +18,8 @@ here: the game itself and a standalone sprite-animation editor. See
 | Edit the sprite/animation editor tool | [animaker/](animaker/) |
 | Understand what a code change will hit before touching it | [map/CLAUDE.md](map/CLAUDE.md) |
 | Build/run everything locally | [build_local.ps1](build_local.ps1) |
+| Run tests before pushing | `go test ./...` — see [CONTEXT.md](CONTEXT.md#testing) |
+| Check/change what CI runs | [.github/workflows/test.yml](.github/workflows/test.yml) |
 
 ## Rule of thumb
 
