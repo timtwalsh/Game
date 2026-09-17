@@ -134,62 +134,61 @@ func (a *Application) wireCallbacks() {
 
 // registerShortcuts adds keyboard shortcuts.
 func (a *Application) registerShortcuts() {
-	// Only works with desktop driver
-	if deskCanvas, ok := a.Window.Canvas().(desktop.Canvas); ok {
-		// Ctrl+N - New
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName:  fyne.KeyN,
-			Modifier: fyne.KeyModifierControl,
-		}, func(_ fyne.Shortcut) {
-			a.onNewAnimation()
-		})
+	canvas := a.Window.Canvas()
 
-		// Ctrl+O - Open
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName:  fyne.KeyO,
-			Modifier: fyne.KeyModifierControl,
-		}, func(_ fyne.Shortcut) {
-			a.onOpenAnimation()
-		})
+	// Ctrl+N - New
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyN,
+		Modifier: fyne.KeyModifierControl,
+	}, func(_ fyne.Shortcut) {
+		a.onNewAnimation()
+	})
 
-		// Ctrl+S - Save
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName:  fyne.KeyS,
-			Modifier: fyne.KeyModifierControl,
-		}, func(_ fyne.Shortcut) {
-			a.onSaveAnimation()
-		})
+	// Ctrl+O - Open
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyO,
+		Modifier: fyne.KeyModifierControl,
+	}, func(_ fyne.Shortcut) {
+		a.onOpenAnimation()
+	})
 
-		// Ctrl+Z - Undo
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName:  fyne.KeyZ,
-			Modifier: fyne.KeyModifierControl,
-		}, func(_ fyne.Shortcut) {
-			a.onUndo()
-		})
+	// Ctrl+S - Save
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyS,
+		Modifier: fyne.KeyModifierControl,
+	}, func(_ fyne.Shortcut) {
+		a.onSaveAnimation()
+	})
 
-		// Ctrl+Shift+Z - Redo
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName:  fyne.KeyZ,
-			Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
-		}, func(_ fyne.Shortcut) {
-			a.onRedo()
-		})
+	// Ctrl+Z - Undo
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyZ,
+		Modifier: fyne.KeyModifierControl,
+	}, func(_ fyne.Shortcut) {
+		a.onUndo()
+	})
 
-		// D - Duplicate frame
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName: fyne.KeyD,
-		}, func(_ fyne.Shortcut) {
-			a.duplicateFrame()
-		})
+	// Ctrl+Shift+Z - Redo
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyZ,
+		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
+	}, func(_ fyne.Shortcut) {
+		a.onRedo()
+	})
 
-		// X/Delete - Delete frame
-		deskCanvas.AddShortcut(&desktop.CustomShortcut{
-			KeyName: fyne.KeyX,
-		}, func(_ fyne.Shortcut) {
-			a.deleteFrame()
-		})
-	}
+	// D - Duplicate frame
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName: fyne.KeyD,
+	}, func(_ fyne.Shortcut) {
+		a.duplicateFrame()
+	})
+
+	// X/Delete - Delete frame
+	canvas.AddShortcut(&desktop.CustomShortcut{
+		KeyName: fyne.KeyX,
+	}, func(_ fyne.Shortcut) {
+		a.deleteFrame()
+	})
 }
 
 // -- Menu handlers --
