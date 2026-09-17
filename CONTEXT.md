@@ -41,6 +41,14 @@ integration is not wired up in code — see [map/effects/CONTEXT.md](map/effects
 broken** (missing `go.sum` entries for its Fyne/toml deps), tracked
 separately from this restructure.
 
+## Workflow
+
+Prototyping phase: push directly to `main`, no PR/review gate. CI
+(`.github/workflows/test.yml`) still runs on every push to `main` and
+catches build/test regressions after the fact rather than before merge —
+watch it after pushing rather than relying on it to block a bad push.
+Revisit this once the team grows past rapid solo/pair prototyping.
+
 ## Testing
 
 ```powershell
