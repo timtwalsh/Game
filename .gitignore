@@ -1,0 +1,11 @@
+# Build output
+/bin/
+*.exe
+*.test
+
+# Go
+*.out
+
+# OS
+Thumbs.db
+.DS_Store
