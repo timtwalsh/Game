@@ -39,6 +39,11 @@ type CanvasWidget struct {
 
 	draggingPartIdx int // -1 = not dragging
 
+	// viewFrozen pins the extent while a drag is in progress — see
+	// SetViewFrozen.
+	viewFrozen                                     bool
+	frozenMinX, frozenMinY, frozenMaxX, frozenMaxY float32
+
 	// OnPartTapped fires with the part index under the click, or -1 if the
 	// click landed on empty space (a deselect).
 	OnPartTapped func(partIdx int)
@@ -99,11 +104,33 @@ func (cw *CanvasWidget) partExtentAnim(part *editor.Part) (w, h, pivotX, pivotY 
 	return float32(sheet.CellW), float32(sheet.CellH), sheet.PivotX, sheet.PivotY
 }
 
+// SetViewFrozen pins the view to its current extent for the duration of a
+// drag, and releases it afterwards. While a sprite is being held — dragged
+// in from the palette, or moved on the canvas — the keyframe under it is
+// changing, which would otherwise re-derive the extent and slide the origin
+// (and with it everything drawn) out from under the cursor. Quantizing the
+// extent makes that rarer but can't prevent it, because crossing a quantum
+// boundary is exactly what an outward drag does. app.go drives this from
+// both drag sources.
+func (cw *CanvasWidget) SetViewFrozen(frozen bool) {
+	if frozen == cw.viewFrozen {
+		return
+	}
+	if frozen {
+		cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY = cw.viewBounds()
+	}
+	cw.viewFrozen = frozen
+	cw.Refresh()
+}
+
 // viewBounds is the visible region in animation coordinates. It always
 // contains the origin and the reference box, plus every keyframe of every
 // part (not just the current frame — so scrubbing can't resize the canvas),
 // padded and rounded outward to canvasQuantizePx.
 func (cw *CanvasWidget) viewBounds() (minX, minY, maxX, maxY float32) {
+	if cw.viewFrozen {
+		return cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY
+	}
 	refW, refH := cw.refBox()
 	minX, minY, maxX, maxY = 0, 0, refW, refH
 
@@ -272,6 +299,7 @@ func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 		if cw.draggingPartIdx < 0 {
 			return
 		}
+		cw.SetViewFrozen(true)
 		if cw.OnPartDragStart != nil {
 			cw.OnPartDragStart(cw.draggingPartIdx)
 		}
@@ -290,6 +318,7 @@ func (cw *CanvasWidget) DragEnd() {
 		cw.OnPartDragEnd()
 	}
 	cw.draggingPartIdx = -1
+	cw.SetViewFrozen(false)
 }
 
 // -- Renderer --

@@ -49,11 +49,17 @@ func TestSpriteSheetSlicesEveryCell(t *testing.T) {
 			if b.Dx() != cellW || b.Dy() != cellH {
 				t.Errorf("cell (%d,%d) is %dx%d, want %dx%d", row, col, b.Dx(), b.Dy(), cellW, cellH)
 			}
+			// Every cell must start at (0,0), not at its offset in the
+			// parent sheet. An image.SubImage keeps the parent's origin,
+			// and Fyne's painter draws from (0,0) outward, so an
+			// un-normalized cell painted as pure transparency: a 4x3 sheet
+			// rendered only its top-left cell. Bounds are the only
+			// observable difference, so this assertion is the regression.
+			if b.Min.X != 0 || b.Min.Y != 0 {
+				t.Errorf("cell (%d,%d) bounds start at %v, want (0,0)", row, col, b.Min)
+			}
 
-			// Sample the cell's own top-left, which for a SubImage is at
-			// Bounds().Min, not (0,0) — getting that wrong would silently
-			// return the same pixel for every cell.
-			got := color.RGBAModel.Convert(cell.At(b.Min.X, b.Min.Y)).(color.RGBA)
+			got := color.RGBAModel.Convert(cell.At(0, 0)).(color.RGBA)
 			want := color.RGBA{R: uint8(10 + row*40), G: uint8(10 + col*40), B: 200, A: 255}
 			if got != want {
 				t.Errorf("cell (%d,%d) top-left = %v, want %v", row, col, got, want)

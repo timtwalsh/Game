@@ -232,6 +232,10 @@ func (a *Application) wireCallbacks() {
 		a.canvasWidget.Refresh()
 		a.timeline.Refresh()
 	}
+	// Freeze the canvas extent for the whole palette drag, so placing the
+	// first keyframe past the current bounds doesn't slide the canvas
+	// while the artist is still choosing where to drop.
+	a.properties.OnTileDragStart = func() { a.canvasWidget.SetViewFrozen(true) }
 	a.properties.OnTileDropped = a.onTileDropped
 }
 
@@ -241,6 +245,10 @@ func (a *Application) wireCallbacks() {
 // the dragged cell and X/Y from wherever it landed on the canvas. Drops
 // outside the canvas's bounds are ignored.
 func (a *Application) onTileDropped(partIdx, row, col int, absPos fyne.Position) {
+	// The drop ends the gesture, so the view unfreezes here however this
+	// returns - including the two rejection paths below.
+	defer a.canvasWidget.SetViewFrozen(false)
+
 	dir, part := a.directionAndPart(partIdx)
 	if dir == nil {
 		return

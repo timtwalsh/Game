@@ -122,6 +122,26 @@ feedback after using the previous version:
    `RemovePart` deletes that ID's keyframes from every direction and
    `Track.nextPartID` never reuses a freed ID, so orphaned keyframes
    can't be silently adopted by a later part, and renaming is free.
+8. Two more from a screenshot (2026-09-19):
+   - **Only the first cell of a sheet ever rendered** — in the palette
+     *and* on the canvas, though all the cell outlines drew correctly.
+     `CellImage` returned `image.SubImage`, whose `Bounds().Min` is the
+     cell's offset in the parent sheet; Fyne's painter draws an image
+     from (0,0) outward, so every cell except (0,0) painted pure
+     transparency. Cells are now copied into fresh images with a (0,0)
+     origin and pre-cropped once in `NewSpriteSheetTemplate`. The
+     earlier slicing test missed this because it sampled each cell at
+     `Bounds().Min` — which is precisely the coordinate the renderer
+     does *not* use. It now reads (0,0) and asserts the origin, and was
+     confirmed to fail against the old implementation.
+   - **The canvas shifted while a sprite was being held.** The extent is
+     derived from the keyframes, so dragging one changed it mid-gesture
+     and slid the origin out from under the cursor; quantizing made it
+     rarer but couldn't prevent it, since crossing a quantum boundary is
+     what an outward drag does. `CanvasWidget.SetViewFrozen` pins the
+     extent for the duration of a drag, driven from both drag sources —
+     the canvas's own `Dragged`/`DragEnd`, and `SheetGridWidget`'s new
+     `OnDragStart` plus the existing drop callback for palette drags.
 
 ## Shape
 
@@ -155,7 +175,9 @@ feedback after using the previous version:
     (linear lerp on X/Y/Z/Rotation, step function on Row/Col).
   - `spritesheet.go` — `SpriteSheetTemplate`: fixed cell size + one pivot
     per sheet, `Cols()`/`Rows()` derived from image size, `CellImage`
-    crops a `(row, col)`.
+    serves a `(row, col)` from cells pre-cropped at construction. Those
+    cells always have a (0,0) origin, which is load-bearing for
+    rendering, not tidiness — see history entry 8.
   - `project.go` — `Project`: current `Track`, loaded sheet templates,
     playback state, `PreviewProps` (editor-only prop overrides, never
     saved), selection state, and `ResolveActiveSheetName`/
@@ -357,9 +379,9 @@ nested-with-bindings, plus a part deliberately left unposed everywhere,
 and keyframes staying in the direction they were authored in) and
 `.sprsh`.
 `pkg/editor/spritesheet_test.go` — sheet slicing: a 4x3 sheet yields 12
-cells with distinct content (sampled at each sub-image's own
-`Bounds().Min`, since a `SubImage` doesn't start at 0,0), out-of-range
-rejection, partial trailing cells dropped.
+cells with distinct content, each with a (0,0) origin and read at (0,0),
+which is the coordinate the renderer actually uses; out-of-range
+rejection; partial trailing cells dropped.
 `pkg/editor/timeline_test.go` — the scrub-deadlock regression (seek and
 add a second keyframe past a lone 0ms one), `EditableDurationMs` always
 leading the last keyframe, playback still looping over the *real*

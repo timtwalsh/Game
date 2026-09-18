@@ -34,6 +34,7 @@ type PropertiesPanel struct {
 	// OnTileDropped is forwarded from the active part's SheetGridWidget —
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
+	OnTileDragStart   func()
 	OnTileDropped     func(partIdx, row, col int, absPos fyne.Position)
 	OnImport          func()
 	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
@@ -132,6 +133,11 @@ func (pp *PropertiesPanel) ensureSheetGrid() {
 		return
 	}
 	pp.sheetGrid = NewSheetGridWidget()
+	pp.sheetGrid.OnDragStart = func() {
+		if pp.OnTileDragStart != nil {
+			pp.OnTileDragStart()
+		}
+	}
 	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
 		if pp.OnTileDropped != nil {
 			pp.OnTileDropped(pp.project.Selection.PartIndex, row, col, absPos)

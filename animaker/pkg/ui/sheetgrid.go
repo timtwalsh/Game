@@ -32,6 +32,11 @@ type SheetGridWidget struct {
 	dragging         bool
 	lastAbsPos       fyne.Position
 
+	// OnDragStart fires once when a tile is picked up, before any
+	// OnTileDropped. app.go uses it to freeze the canvas view for the
+	// duration of the gesture.
+	OnDragStart func()
+
 	// OnTileDropped fires on DragEnd with the cell that was picked up and
 	// the absolute (window-relative) screen position the drag ended at.
 	// The caller (app.go) is responsible for checking whether that
@@ -103,6 +108,9 @@ func (g *SheetGridWidget) Dragged(e *fyne.DragEvent) {
 	if !g.dragging {
 		g.dragging = true
 		g.dragRow, g.dragCol = g.cellAt(e.Position)
+		if g.OnDragStart != nil {
+			g.OnDragStart()
+		}
 	}
 	g.lastAbsPos = e.AbsolutePosition
 }
