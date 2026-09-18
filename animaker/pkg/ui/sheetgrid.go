@@ -125,7 +125,7 @@ func (r *sheetGridRenderer) Destroy() {}
 func (r *sheetGridRenderer) buildObjects() []fyne.CanvasObject {
 	g := r.widget
 	if g.sheet == nil || g.sheet.Image == nil {
-		return []fyne.CanvasObject{canvas.NewText("No sheet selected", ColorOriginCrosshair)}
+		return []fyne.CanvasObject{canvas.NewText("No tiles to show", ColorOriginCrosshair)}
 	}
 
 	var objs []fyne.CanvasObject

@@ -158,8 +158,10 @@ func ShowAddPropDialog(win fyne.Window, onCreate func(name, defaultSheet string)
 
 // ShowAddPartDialog displays a dialog for adding a part to the active
 // direction. propNames lists the track's declared props, for the
-// governing-prop dropdown.
-func ShowAddPartDialog(win fyne.Window, propNames []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
+// governing-prop dropdown; sheetNames lists the currently loaded sheets, so
+// the fixed sheet is picked from what exists rather than typed from memory
+// (a typo there produces a part that silently draws nothing).
+func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
 	nameEntry := widget.NewEntry()
 	nameEntry.SetPlaceHolder("Body, Hair, Arm_Left, ...")
 
@@ -170,22 +172,33 @@ func ShowAddPartDialog(win fyne.Window, propNames []string, onCreate func(name s
 	propSelect := widget.NewSelect(propOptions, nil)
 	propSelect.SetSelected(propOptions[0])
 
-	fixedSheetEntry := widget.NewEntry()
-	fixedSheetEntry.SetPlaceHolder("sheet name (used when no governing prop)")
+	fixedSheetSelect := widget.NewSelect(sheetNames, nil)
+	fixedSheetSelect.PlaceHolder = "(pick a loaded sheet)"
+	if len(sheetNames) == 1 {
+		fixedSheetSelect.SetSelected(sheetNames[0])
+	}
 
 	nestedPathEntry := widget.NewEntry()
 	nestedPathEntry.SetPlaceHolder("base_wood_torch.anif")
 
+	items := []*widget.FormItem{
+		{Text: "Name", Widget: nameEntry},
+		{Text: "Kind", Widget: kindSelect},
+		{Text: "Governing Prop", Widget: propSelect},
+		{Text: "Fixed Sheet", Widget: fixedSheetSelect},
+		{Text: "Nested .anif Path", Widget: nestedPathEntry},
+	}
+	if len(sheetNames) == 0 {
+		items = append(items, &widget.FormItem{
+			Text:   "",
+			Widget: widget.NewLabel("No sheets imported yet — use Import Sprite Sheet first."),
+		})
+	}
+
 	form := dialog.NewForm(
 		"Add Part",
 		"Add", "Cancel",
-		[]*widget.FormItem{
-			{Text: "Name", Widget: nameEntry},
-			{Text: "Kind", Widget: kindSelect},
-			{Text: "Governing Prop", Widget: propSelect},
-			{Text: "Fixed Sheet", Widget: fixedSheetEntry},
-			{Text: "Nested .anif Path", Widget: nestedPathEntry},
-		},
+		items,
 		func(confirmed bool) {
 			if !confirmed || onCreate == nil || nameEntry.Text == "" {
 				return
@@ -198,10 +211,10 @@ func ShowAddPartDialog(win fyne.Window, propNames []string, onCreate func(name s
 			if governingProp == propOptions[0] {
 				governingProp = ""
 			}
-			onCreate(nameEntry.Text, kind, governingProp, fixedSheetEntry.Text, nestedPathEntry.Text)
+			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, nestedPathEntry.Text)
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(450, 420))
+	form.Resize(fyne.NewSize(450, 440))
 	form.Show()
 }

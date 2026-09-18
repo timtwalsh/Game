@@ -375,6 +375,15 @@ func (a *Application) saveToPath(path string) {
 	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentTrack.Metadata.Name)
 }
 
+// onImportSpriteSheet imports a sheet AND immediately creates a Sheet part
+// bound to it, then selects that part. Importing used to only populate
+// Project.LoadedSheets, which left the editor looking completely unchanged:
+// the palette only draws the *selected part's* sheet, and a fresh track has
+// no parts, so the artist was dropped back on an empty screen with no
+// discoverable way forward (the only route was "+ Add Part" and typing the
+// sheet's name into a free-text box from memory). Creating the part here is
+// what makes the tiles actually appear. It's a normal undoable edit, so an
+// artist who wanted the sheet only as a prop target can Ctrl+Z or delete it.
 func (a *Application) onImportSpriteSheet() {
 	ui.ShowImportSheetDialog(a.Window, func(filePath, name string, cellW, cellH int, pivotX, pivotY float32) {
 		img, err := file.LoadImage(filePath)
@@ -391,12 +400,33 @@ func (a *Application) onImportSpriteSheet() {
 			dialog.ShowError(fmt.Errorf("failed to save sheet template: %w", err), a.Window)
 		}
 
+		created := a.addPartForSheet(name)
 		a.refreshAll()
-		dialog.ShowInformation("Import Complete",
-			fmt.Sprintf("Imported %q as a %dx%d template (%d cols x %d rows)",
-				name, cellW, cellH, tmpl.Cols(), tmpl.Rows()),
-			a.Window)
+
+		msg := fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.",
+			name, cellW, cellH, tmpl.Cols(), tmpl.Rows())
+		if created {
+			msg += fmt.Sprintf("\n\nAdded part %q and selected it — its tiles are now in the left panel. Drag one onto the canvas to place a keyframe.", name)
+		} else {
+			msg += "\n\nPick a part on the right and set its sheet to this one to draw with it."
+		}
+		dialog.ShowInformation("Import Complete", msg, a.Window)
 	})
+}
+
+// addPartForSheet creates a Sheet part named after the sheet and selects it,
+// so a freshly imported sheet is immediately visible and draggable. Returns
+// false if there's no active direction to add it to.
+func (a *Application) addPartForSheet(sheetName string) bool {
+	dir := a.Project.ActiveDirection()
+	if dir == nil {
+		return false
+	}
+	a.Project.RecordUndo()
+	editor.AddPart(dir, editor.NewSheetPart(sheetName, "", sheetName))
+	a.properties.SelectPart(len(dir.Parts) - 1)
+	a.Project.Dirty = true
+	return true
 }
 
 func (a *Application) onAddDirection() {
@@ -421,7 +451,7 @@ func (a *Application) onAddPart() {
 	for _, p := range a.Project.CurrentTrack.Props {
 		propNames = append(propNames, p.Name)
 	}
-	ui.ShowAddPartDialog(a.Window, propNames, func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
+	ui.ShowAddPartDialog(a.Window, propNames, a.Project.LoadedSheetNames(), func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
 		dir := a.Project.ActiveDirection()
 		if dir == nil {
 			return
@@ -434,6 +464,9 @@ func (a *Application) onAddPart() {
 			part = editor.NewSheetPart(name, governingProp, fixedSheet)
 		}
 		editor.AddPart(dir, part)
+		// Select it straight away, so the left palette switches to its sheet
+		// and the artist can drag a tile without a second click.
+		a.properties.SelectPart(len(dir.Parts) - 1)
 		a.refreshAll()
 	})
 }

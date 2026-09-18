@@ -145,12 +145,21 @@ func (pp *PropertiesPanel) refreshPaletteLabel() {
 	}
 	part := pp.project.SelectedPart()
 	switch {
+	case part == nil && len(pp.project.LoadedSheets) == 0:
+		pp.paletteLabel.SetText("Import a sprite sheet to begin")
 	case part == nil:
-		pp.paletteLabel.SetText("No part selected")
+		pp.paletteLabel.SetText("Select a part to show its tiles")
 	case part.Kind == editor.PartKindNestedAni:
 		pp.paletteLabel.SetText(part.Name + " (nested - no sheet)")
 	default:
-		pp.paletteLabel.SetText(part.Name + ": " + pp.project.ResolveActiveSheetName(part))
+		name := pp.project.ResolveActiveSheetName(part)
+		if name == "" {
+			pp.paletteLabel.SetText(part.Name + ": no sheet bound")
+		} else if _, ok := pp.project.LoadedSheets[name]; !ok {
+			pp.paletteLabel.SetText(part.Name + ": " + name + " (not loaded)")
+		} else {
+			pp.paletteLabel.SetText(part.Name + ": " + name)
+		}
 	}
 }
 
@@ -277,21 +286,27 @@ func (pp *PropertiesPanel) refreshPartLink() {
 		propSelect.SetSelected(part.GoverningProp)
 	}
 
-	fixedEntry := widget.NewEntry()
-	fixedEntry.SetText(part.FixedSheet)
-	fixedEntry.Disable()
-	if part.GoverningProp == "" {
-		fixedEntry.Enable()
+	// A pick-list of what's actually loaded, not a free-text box: the sheet
+	// name has to match a LoadedSheets key exactly or the part silently
+	// draws nothing, and there was no way to see the valid names.
+	sheetOptions := sheetPickerOptions(pp.project.LoadedSheetNames(), part.FixedSheet)
+	fixedSelect := widget.NewSelect(sheetOptions, nil)
+	if part.FixedSheet != "" {
+		fixedSelect.SetSelected(part.FixedSheet)
+	}
+	fixedSelect.PlaceHolder = "(no sheet)"
+	if part.GoverningProp != "" {
+		fixedSelect.Disable()
 	}
 
 	propSelect.OnChanged = func(v string) {
 		pp.project.RecordUndo()
 		if v == propOptions[0] {
 			part.GoverningProp = ""
-			fixedEntry.Enable()
+			fixedSelect.Enable()
 		} else {
 			part.GoverningProp = v
-			fixedEntry.Disable()
+			fixedSelect.Disable()
 		}
 		pp.project.Dirty = true
 		pp.refreshSheetGrid()
@@ -299,7 +314,9 @@ func (pp *PropertiesPanel) refreshPartLink() {
 			pp.OnPartChanged()
 		}
 	}
-	fixedEntry.OnChanged = func(v string) {
+	// Assigned after SetSelected above so seeding the current value doesn't
+	// fire the handler — Fyne's Select re-fires OnChanged on SetSelected.
+	fixedSelect.OnChanged = func(v string) {
 		part.FixedSheet = v
 		pp.project.Dirty = true
 		pp.refreshSheetGrid()
@@ -309,8 +326,26 @@ func (pp *PropertiesPanel) refreshPartLink() {
 	}
 
 	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Prop:"), nil, propSelect))
-	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Fixed sheet:"), nil, fixedEntry))
+	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Fixed sheet:"), nil, fixedSelect))
+	if len(pp.project.LoadedSheets) == 0 {
+		pp.partLinkBox.Add(widget.NewLabel("No sheets imported yet — use Import Sprite Sheet."))
+	}
 	pp.partLinkBox.Refresh()
+}
+
+// sheetPickerOptions lists the loaded sheets, keeping current if it names a
+// sheet that isn't loaded (e.g. a track opened without its art) so the
+// Select can still display it instead of silently blanking the binding.
+func sheetPickerOptions(loaded []string, current string) []string {
+	if current == "" {
+		return loaded
+	}
+	for _, n := range loaded {
+		if n == current {
+			return loaded
+		}
+	}
+	return append([]string{current}, loaded...)
 }
 
 func (pp *PropertiesPanel) refreshSheetGrid() {

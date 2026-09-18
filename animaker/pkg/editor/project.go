@@ -1,6 +1,9 @@
 package editor
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Project is the top-level state container for the editor: the track being
 // edited, the sheet templates it currently has loaded, and UI/playback
@@ -100,6 +103,18 @@ func (p *Project) ResolveActiveSheetName(part *Part) string {
 		return def.Default
 	}
 	return ""
+}
+
+// LoadedSheetNames returns every currently loaded sheet's name in stable
+// sorted order. The UI uses it to offer sheets as a pick-list rather than
+// making the artist retype a name they have to remember exactly.
+func (p *Project) LoadedSheetNames() []string {
+	names := make([]string, 0, len(p.LoadedSheets))
+	for n := range p.LoadedSheets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ResolveActiveSheet is ResolveActiveSheetName plus the LoadedSheets lookup.

@@ -55,6 +55,22 @@ feedback after using the previous version:
    character controller's state machine's authority over transitions,
    which are usually context-dependent (input/health/combo state) in a
    way a static per-asset field can't express without asset duplication.
+5. Import-flow fix (2026-09-19), from a user bug report: "I click import
+   sprite sheet, enter the details click import then nothing happens and
+   im back on the main screen". The import genuinely worked — it decoded
+   the image, filled `Project.LoadedSheets`, and wrote the `.sprsh`
+   sidecar — but nothing *visible* changed, because the palette only
+   draws the **selected part's** sheet and a fresh track has no parts.
+   The only escape was "+ Add Part" plus typing the sheet's name into a
+   free-text "Fixed Sheet" box from memory. Fixed by closing both halves
+   of the gap: importing now also creates a Sheet part bound to the new
+   sheet and selects it (`Application.addPartForSheet`, a normal undoable
+   edit), so the tiles appear immediately; and every place that names a
+   sheet is now a pick-list of `Project.LoadedSheetNames()` instead of
+   free text, since a typo there produced a part that silently drew
+   nothing. The lesson generalizes: in this editor almost everything is
+   gated on a *selected part*, so any action that doesn't end with a part
+   selected reads to the artist as "nothing happened".
 
 ## Shape
 
@@ -125,7 +141,11 @@ feedback after using the previous version:
       `SheetGridWidget` (its "Sprite Book" equivalent), scoped to
       whichever part is selected rather than showing every loaded sheet
       at once, since a dropped tile needs an unambiguous target part.
-      A header label names the part and its resolved sheet.
+      A header label names the part and its resolved sheet, and carries
+      the empty-state guidance ("Import a sprite sheet to begin" /
+      "Select a part to show its tiles" / "<part>: <sheet> (not
+      loaded)") — the palette being blank is the editor's most common
+      confusing state, so it must always say *why* it's blank.
     - `Build(directionBar)` — the **right column**: takes the direction
       bar (built in `app.go`, embedded here as a fixed header via
       `container.NewBorder` rather than its own separate top strip) +
@@ -133,7 +153,11 @@ feedback after using the previous version:
       Delete — deliberately not a `Select`, see
       [Known gaps](#known-gaps-not-bugs)) with `SelectPart` exported so
       canvas taps and list clicks stay in sync, inline
-      governing-prop/fixed-sheet linking for the selected part, the
+      governing-prop/fixed-sheet linking for the selected part (fixed
+      sheet is a `Select` over `Project.LoadedSheetNames()`, not an
+      entry; `sheetPickerOptions` keeps a bound-but-not-loaded name in
+      the option list so opening a track without its art doesn't look
+      like the part lost its sheet), the
       selected keyframe's numeric transform fields *plus* a nudge D-pad
       (X/Y ±1, Z forward/back, rotation ±5° — `buildNudgeControls`,
       also a GraalShop borrow) for fine-tuning without retyping numbers,
@@ -243,9 +267,13 @@ range), sorted-insert invariants, prop-resolution precedence
 (PreviewProps override > prop default > FixedSheet), deep-copy
 independence. `pkg/file/toml_test.go` — full save/load round-trip for
 both `.anif` (props, all three part-authoring cases: sheet+prop-governed,
-sheet+fixed, nested-with-bindings) and `.sprsh`. `pkg/ui` and
-`pkg/app` have no automated tests — GUI wiring, verified by manual launch
-only.
+sheet+fixed, nested-with-bindings) and `.sprsh`.
+`pkg/ui/properties_test.go` — `sheetPickerOptions` only; the rest of
+`pkg/ui` and all of `pkg/app` have no automated tests, being GUI wiring
+verified by manual launch. Note that launching the binary and confirming
+it stays responsive is a real part of the check here, not a formality: a
+`Select.ClearSelected()` recursion once shipped as a startup
+stack-overflow that `go test` could not have caught.
 
 ## See
 
