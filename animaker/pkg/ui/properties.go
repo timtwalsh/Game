@@ -203,19 +203,26 @@ func (pp *PropertiesPanel) refreshPartList() {
 	}
 	pp.partListBox.RemoveAll()
 
+	track := pp.project.CurrentTrack
 	dir := pp.project.ActiveDirection()
-	if dir == nil {
+	if track == nil {
 		pp.partListBox.Refresh()
 		return
 	}
 	sel := pp.project.Selection
-	for i, part := range dir.Parts {
+	// The part list comes from the Track, so it's identical in every
+	// direction; only the "posed here" marker below varies by facing.
+	for i, part := range track.Parts {
 		idx := i
 		kindTag := "sheet"
 		if part.Kind == editor.PartKindNestedAni {
 			kindTag = "nested"
 		}
-		btn := widget.NewButton(fmt.Sprintf("%s [%s]", part.Name, kindTag), func() {
+		label := fmt.Sprintf("%s [%s]", part.Name, kindTag)
+		if dir != nil && len(dir.KeyframesFor(part.ID)) == 0 {
+			label += "  (no keyframes here)"
+		}
+		btn := widget.NewButton(label, func() {
 			pp.selectPart(idx)
 		})
 		if sel != nil && sel.PartIndex == idx {
@@ -223,7 +230,9 @@ func (pp *PropertiesPanel) refreshPartList() {
 		}
 		delBtn := widget.NewButton("Delete", func() {
 			pp.project.RecordUndo()
-			editor.RemovePart(dir, idx)
+			// Removes the part from the rig and its keyframes from every
+			// direction, not just the one on screen.
+			editor.RemovePart(track, idx)
 			if sel != nil && sel.PartIndex == idx {
 				sel.PartIndex = -1
 				sel.KeyframeIndex = -1
@@ -383,7 +392,8 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 	}
 	kf := pp.project.SelectedKeyframe()
 	if kf == nil {
-		pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s: drag a tile onto the canvas to place a keyframe", part.Name)))
+		pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s: drag a tile onto the canvas to key it in direction %d",
+			part.Name, pp.project.Playback.ActiveDirection)))
 		pp.keyframeBox.Refresh()
 		return
 	}

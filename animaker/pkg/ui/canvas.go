@@ -108,9 +108,9 @@ func (cw *CanvasWidget) viewBounds() (minX, minY, maxX, maxY float32) {
 	minX, minY, maxX, maxY = 0, 0, refW, refH
 
 	if dir := cw.project.ActiveDirection(); dir != nil {
-		for _, part := range dir.Parts {
+		for _, part := range cw.project.CurrentTrack.Parts {
 			w, h, px, py := cw.partExtentAnim(part)
-			for _, kf := range part.Keyframes {
+			for _, kf := range dir.KeyframesFor(part.ID) {
 				x0, y0 := kf.X-px, kf.Y-py
 				minX, minY = minF(minX, x0), minF(minY, y0)
 				maxX, maxY = maxF(maxX, x0+w), maxF(maxY, y0+h)
@@ -210,13 +210,18 @@ func (cw *CanvasWidget) resolvedDraws() []resolvedDraw {
 	}
 	elapsed := cw.project.Playback.ElapsedMs
 	var draws []resolvedDraw
-	for i, part := range dir.Parts {
-		tr := part.ValueAt(elapsed)
+	for i, part := range cw.project.CurrentTrack.Parts {
+		// A part with no keyframes in this facing isn't posed here, so it
+		// isn't drawn — it still exists on the rig and in every other
+		// direction's part list.
+		if len(dir.KeyframesFor(part.ID)) == 0 {
+			continue
+		}
 		var sheet *editor.SpriteSheetTemplate
 		if part.Kind == editor.PartKindSheet {
 			sheet = cw.project.ResolveActiveSheet(part)
 		}
-		d := resolvedDraw{partIdx: i, part: part, tr: tr, sheet: sheet}
+		d := resolvedDraw{partIdx: i, part: part, tr: dir.ValueAt(part.ID, elapsed), sheet: sheet}
 		d.rect, d.size = cw.screenRectFor(d)
 		draws = append(draws, d)
 	}

@@ -71,22 +71,28 @@ func (p *Project) ActiveDirection() *Direction {
 }
 
 // SelectedPart returns the part the Selection currently points at, or nil.
+// Selection.PartIndex indexes the Track's shared part list, so it stays
+// meaningful across a direction change.
 func (p *Project) SelectedPart() *Part {
-	dir := p.ActiveDirection()
-	if dir == nil || p.Selection.PartIndex < 0 || p.Selection.PartIndex >= len(dir.Parts) {
+	if p.CurrentTrack == nil || p.Selection.PartIndex < 0 || p.Selection.PartIndex >= len(p.CurrentTrack.Parts) {
 		return nil
 	}
-	return dir.Parts[p.Selection.PartIndex]
+	return p.CurrentTrack.Parts[p.Selection.PartIndex]
 }
 
-// SelectedKeyframe returns the keyframe the Selection currently points at
-// on the selected part, or nil.
+// SelectedKeyframe returns the keyframe the Selection currently points at,
+// on the selected part in the active direction, or nil.
 func (p *Project) SelectedKeyframe() *Keyframe {
 	part := p.SelectedPart()
-	if part == nil || p.Selection.KeyframeIndex < 0 || p.Selection.KeyframeIndex >= len(part.Keyframes) {
+	dir := p.ActiveDirection()
+	if part == nil || dir == nil {
 		return nil
 	}
-	return part.Keyframes[p.Selection.KeyframeIndex]
+	kfs := dir.KeyframesFor(part.ID)
+	if p.Selection.KeyframeIndex < 0 || p.Selection.KeyframeIndex >= len(kfs) {
+		return nil
+	}
+	return kfs[p.Selection.KeyframeIndex]
 }
 
 // ResolveActiveSheetName returns the sheet name a Sheet-kind part should
@@ -165,13 +171,13 @@ func (p *Project) Redo() bool {
 }
 
 func (p *Project) clampSelection() {
-	dir := p.ActiveDirection()
-	if dir == nil {
+	if p.ActiveDirection() == nil {
 		p.Playback.ActiveDirection = firstDirectionKey(p.CurrentTrack)
-		dir = p.ActiveDirection()
 	}
-	if dir == nil || p.Selection.PartIndex >= len(dir.Parts) {
+	if p.Selection.PartIndex >= len(p.CurrentTrack.Parts) {
 		p.Selection.PartIndex = -1
+	}
+	if p.SelectedKeyframe() == nil {
 		p.Selection.KeyframeIndex = -1
 	}
 }
@@ -204,8 +210,10 @@ func (p *Project) AdvancePlayback(deltaMs uint32) {
 // Play resumes/starts playback from wherever the playhead currently is
 // (does not reset to 0 - that's Stop's job).
 func (p *Project) Play() {
-	dir := p.ActiveDirection()
-	if dir == nil || len(dir.Parts) == 0 {
+	// Nothing to play until this facing has keyframes spanning some time —
+	// AdvancePlayback no-ops on a zero duration, so this just avoids
+	// leaving IsPlaying stuck on with a frozen playhead.
+	if dir := p.ActiveDirection(); dir == nil || dir.TotalDurationMs() == 0 {
 		return
 	}
 	p.Playback.IsPlaying = true
@@ -255,10 +263,10 @@ func (p *Project) SetActiveDirection(key int) {
 	p.Playback.ActiveDirection = key
 	p.Playback.ElapsedMs = 0
 	p.Playback.IsPlaying = false
-	// Selection is cleared rather than carried across by index: each
-	// direction owns its own part list, and the editor doesn't keep those
-	// lists in step, so the same index can mean an unrelated part.
-	p.Selection.PartIndex = -1
+	// The selected part carries across: the part list belongs to the Track,
+	// so index N is the same part in every facing and switching direction
+	// just changes which keyframes you're editing. Only the keyframe
+	// selection is dropped, since keyframes are per-direction.
 	p.Selection.KeyframeIndex = -1
 }
 

@@ -16,6 +16,9 @@ import (
 type tomlTrack struct {
 	Metadata tomlTrackMeta `toml:"metadata"`
 	Props    []tomlPropDef `toml:"props,omitempty"`
+	// Parts are track-level: the rig's slot list, shared by every
+	// direction. Each direction then stores keyframes referencing a part_id.
+	Parts []tomlPart `toml:"parts,omitempty"`
 	// Directions are keyed by the string form of their int key (TOML table
 	// keys must be strings) - converted at the Save/LoadTrack boundary.
 	Directions map[string]tomlDirection `toml:"directions"`
@@ -34,17 +37,17 @@ type tomlPropDef struct {
 }
 
 type tomlDirection struct {
-	Parts []tomlPart `toml:"parts"`
+	Keyframes []tomlKeyframe `toml:"keyframes,omitempty"`
 }
 
 type tomlPart struct {
+	ID             int                        `toml:"id"`
 	Name           string                     `toml:"name"`
 	Kind           string                     `toml:"kind"`
 	GoverningProp  string                     `toml:"governing_prop,omitempty"`
 	FixedSheet     string                     `toml:"fixed_sheet,omitempty"`
 	NestedAniPath  string                     `toml:"nested_ani_path,omitempty"`
 	NestedBindings map[string]tomlPropBinding `toml:"nested_bindings,omitempty"`
-	Keyframes      []tomlKeyframe             `toml:"keyframes"`
 }
 
 type tomlPropBinding struct {
@@ -53,6 +56,7 @@ type tomlPropBinding struct {
 }
 
 type tomlKeyframe struct {
+	PartID      int     `toml:"part_id"`
 	TimeMs      uint32  `toml:"time_ms"`
 	X           float32 `toml:"x"`
 	Y           float32 `toml:"y"`
@@ -103,32 +107,37 @@ func SaveTrack(t *editor.Track, path string) error {
 		tt.Props = append(tt.Props, tomlPropDef{Name: prop.Name, Default: prop.Default})
 	}
 
+	for _, part := range t.Parts {
+		tp := tomlPart{
+			ID:            part.ID,
+			Name:          part.Name,
+			Kind:          partKindToString(part.Kind),
+			GoverningProp: part.GoverningProp,
+			FixedSheet:    part.FixedSheet,
+			NestedAniPath: part.NestedAniPath,
+		}
+		if len(part.NestedBindings) > 0 {
+			tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
+			for k, v := range part.NestedBindings {
+				tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+			}
+		}
+		tt.Parts = append(tt.Parts, tp)
+	}
+
 	for dirKey, dir := range t.Directions {
-		dirName := strconv.Itoa(dirKey)
 		td := tomlDirection{}
-		for _, part := range dir.Parts {
-			tp := tomlPart{
-				Name:          part.Name,
-				Kind:          partKindToString(part.Kind),
-				GoverningProp: part.GoverningProp,
-				FixedSheet:    part.FixedSheet,
-				NestedAniPath: part.NestedAniPath,
-			}
-			if len(part.NestedBindings) > 0 {
-				tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
-				for k, v := range part.NestedBindings {
-					tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
-				}
-			}
-			for _, kf := range part.Keyframes {
-				tp.Keyframes = append(tp.Keyframes, tomlKeyframe{
-					TimeMs: kf.TimeMs, X: kf.X, Y: kf.Y, Z: kf.Z,
+		// Written in the track's part order, then by time, so the file is
+		// stable across saves rather than reordering with Go's map iteration.
+		for _, part := range t.Parts {
+			for _, kf := range dir.KeyframesFor(part.ID) {
+				td.Keyframes = append(td.Keyframes, tomlKeyframe{
+					PartID: part.ID, TimeMs: kf.TimeMs, X: kf.X, Y: kf.Y, Z: kf.Z,
 					RotationDeg: kf.RotationDeg, Row: kf.Row, Col: kf.Col,
 				})
 			}
-			td.Parts = append(td.Parts, tp)
 		}
-		tt.Directions[dirName] = td
+		tt.Directions[strconv.Itoa(dirKey)] = td
 	}
 
 	buf := &bytes.Buffer{}
@@ -163,39 +172,50 @@ func LoadTrack(path string) (*editor.Track, error) {
 		t.Props = append(t.Props, editor.PropDef{Name: p.Name, Default: p.Default})
 	}
 
+	knownPart := make(map[int]bool, len(tt.Parts))
+	for _, tp := range tt.Parts {
+		part := &editor.Part{
+			ID:            tp.ID,
+			Name:          tp.Name,
+			Kind:          partKindFromString(tp.Kind),
+			GoverningProp: tp.GoverningProp,
+			FixedSheet:    tp.FixedSheet,
+			NestedAniPath: tp.NestedAniPath,
+		}
+		if len(tp.NestedBindings) > 0 {
+			part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
+			for k, v := range tp.NestedBindings {
+				part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+			}
+		}
+		if knownPart[part.ID] {
+			return nil, fmt.Errorf("duplicate part id %d (%q)", part.ID, part.Name)
+		}
+		knownPart[part.ID] = true
+		t.Parts = append(t.Parts, part)
+	}
+
 	for dirName, td := range tt.Directions {
 		dirKey, err := strconv.Atoi(dirName)
 		if err != nil {
 			return nil, fmt.Errorf("direction key %q is not an integer: %w", dirName, err)
 		}
-		dir := &editor.Direction{}
-		for _, tp := range td.Parts {
-			part := &editor.Part{
-				Name:          tp.Name,
-				Kind:          partKindFromString(tp.Kind),
-				GoverningProp: tp.GoverningProp,
-				FixedSheet:    tp.FixedSheet,
-				NestedAniPath: tp.NestedAniPath,
+		dir := editor.NewDirection()
+		for _, tkf := range td.Keyframes {
+			if !knownPart[tkf.PartID] {
+				return nil, fmt.Errorf("direction %s has a keyframe for unknown part id %d", dirName, tkf.PartID)
 			}
-			if len(tp.NestedBindings) > 0 {
-				part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
-				for k, v := range tp.NestedBindings {
-					part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
-				}
-			}
-			for i, tkf := range tp.Keyframes {
-				part.Keyframes = append(part.Keyframes, &editor.Keyframe{
-					ID: i, TimeMs: tkf.TimeMs, X: tkf.X, Y: tkf.Y, Z: tkf.Z,
-					RotationDeg: tkf.RotationDeg, Row: tkf.Row, Col: tkf.Col,
-				})
-			}
-			dir.Parts = append(dir.Parts, part)
+			dir.Keyframes[tkf.PartID] = append(dir.Keyframes[tkf.PartID], &editor.Keyframe{
+				ID: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
+				X: tkf.X, Y: tkf.Y, Z: tkf.Z,
+				RotationDeg: tkf.RotationDeg, Row: tkf.Row, Col: tkf.Col,
+			})
 		}
 		t.Directions[dirKey] = dir
 	}
 
 	if len(t.Directions) == 0 {
-		t.Directions[0] = &editor.Direction{}
+		t.Directions[0] = editor.NewDirection()
 	}
 
 	return t, nil

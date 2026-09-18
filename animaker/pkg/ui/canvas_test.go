@@ -34,9 +34,8 @@ func TestViewBoundsGrowsToIncludeNegativeCoordinates(t *testing.T) {
 	cw, p := testCanvas(t)
 	_, _, beforeMaxX, _ := cw.viewBounds()
 
-	part := editor.NewSheetPart("Sword", "", "sword")
-	editor.AddPart(p.ActiveDirection(), part)
-	kf := editor.AddKeyframe(part, 0)
+	part := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("Sword", "", "sword"))
+	kf := editor.AddKeyframe(p.ActiveDirection(), part.ID, 0)
 	kf.X, kf.Y = -120, -90
 
 	minX, minY, maxX, _ := cw.viewBounds()
@@ -55,10 +54,9 @@ func TestViewBoundsGrowsToIncludeNegativeCoordinates(t *testing.T) {
 // keyframe, not the current frame, so the origin can't shift underfoot.
 func TestViewBoundsIsStableAcrossScrubbing(t *testing.T) {
 	cw, p := testCanvas(t)
-	part := editor.NewSheetPart("Body", "", "body")
-	editor.AddPart(p.ActiveDirection(), part)
-	editor.AddKeyframe(part, 0).X = 0
-	editor.AddKeyframe(part, 500).X = 300
+	part := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("Body", "", "body"))
+	editor.AddKeyframe(p.ActiveDirection(), part.ID, 0).X = 0
+	editor.AddKeyframe(p.ActiveDirection(), part.ID, 500).X = 300
 
 	minX, minY, maxX, maxY := cw.viewBounds()
 	for _, ms := range []uint32{0, 125, 250, 375, 500} {
@@ -76,9 +74,8 @@ func TestViewBoundsIsStableAcrossScrubbing(t *testing.T) {
 // origin where the coordinates go negative.
 func TestLocalToAnimXYRoundTrips(t *testing.T) {
 	cw, p := testCanvas(t)
-	part := editor.NewSheetPart("Body", "", "body")
-	editor.AddPart(p.ActiveDirection(), part)
-	kf := editor.AddKeyframe(part, 0)
+	part := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("Body", "", "body"))
+	kf := editor.AddKeyframe(p.ActiveDirection(), part.ID, 0)
 	kf.X, kf.Y = -64, -64 // force negative space into the view
 
 	origin := cw.originScreen()

@@ -11,9 +11,8 @@ import "testing"
 func TestSeekCanMovePastASingleKeyframeAtZero(t *testing.T) {
 	p := NewProject("test")
 	dir := p.ActiveDirection()
-	part := NewSheetPart("Body", "", "sheet")
-	AddPart(dir, part)
-	AddKeyframe(part, 0)
+	part := AddPart(p.CurrentTrack, NewSheetPart("Body", "", "sheet"))
+	AddKeyframe(dir, part.ID, 0)
 
 	if got := dir.TotalDurationMs(); got != 0 {
 		t.Fatalf("precondition: TotalDurationMs = %d, want 0", got)
@@ -25,12 +24,12 @@ func TestSeekCanMovePastASingleKeyframeAtZero(t *testing.T) {
 	}
 
 	// ...and a keyframe can now actually be added there.
-	kf := AddKeyframe(part, p.Playback.ElapsedMs)
+	kf := AddKeyframe(dir, part.ID, p.Playback.ElapsedMs)
 	if kf.TimeMs != 200 {
 		t.Errorf("new keyframe is at %dms, want 200ms", kf.TimeMs)
 	}
-	if len(part.Keyframes) != 2 {
-		t.Errorf("part has %d keyframes, want 2", len(part.Keyframes))
+	if got := len(dir.KeyframesFor(part.ID)); got != 2 {
+		t.Errorf("part has %d keyframes, want 2", got)
 	}
 }
 
@@ -47,11 +46,9 @@ func TestEditableDurationAlwaysLeadsTheLastKeyframe(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := &Direction{}
+			dir := NewDirection()
 			if tt.lastKf > 0 {
-				part := NewSheetPart("Body", "", "sheet")
-				AddPart(dir, part)
-				AddKeyframe(part, tt.lastKf)
+				AddKeyframe(dir, 1, tt.lastKf)
 			}
 			got := dir.EditableDurationMs()
 			if got != tt.wantMin {
@@ -77,10 +74,9 @@ func TestSeekClampsToEditableDuration(t *testing.T) {
 func TestPlaybackLoopsOverRealDurationNotHeadroom(t *testing.T) {
 	p := NewProject("test")
 	dir := p.ActiveDirection()
-	part := NewSheetPart("Body", "", "sheet")
-	AddPart(dir, part)
-	AddKeyframe(part, 0)
-	AddKeyframe(part, 100)
+	part := AddPart(p.CurrentTrack, NewSheetPart("Body", "", "sheet"))
+	AddKeyframe(dir, part.ID, 0)
+	AddKeyframe(dir, part.ID, 100)
 
 	p.Play()
 	p.AdvancePlayback(150)

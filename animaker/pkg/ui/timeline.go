@@ -52,11 +52,19 @@ func (s *scrubArea) widthForDuration() float32 {
 	return timelineLabelWidth + float32(s.totalMs())/timelineMsPerPixel + 40
 }
 
+// parts is the rig's shared part list — every part gets a row in every
+// direction, whether or not it has keyframes in the one being edited.
+func (s *scrubArea) parts() []*editor.Part {
+	if s.project.CurrentTrack == nil {
+		return nil
+	}
+	return s.project.CurrentTrack.Parts
+}
+
 func (s *scrubArea) MinSize() fyne.Size {
-	dir := s.project.ActiveDirection()
-	rows := 1
-	if dir != nil && len(dir.Parts) > 0 {
-		rows = len(dir.Parts)
+	rows := len(s.parts())
+	if rows == 0 {
+		rows = 1
 	}
 	h := timelineRulerHeight + float32(rows)*timelineRowHeight
 	return fyne.NewSize(s.widthForDuration(), h)
@@ -118,12 +126,12 @@ func (s *scrubArea) hitTestMarker(pos fyne.Position) (partIdx, kfIdx int, ok boo
 	if dir == nil {
 		return 0, 0, false
 	}
+	parts := s.parts()
 	rowIdx := int((pos.Y - timelineRulerHeight) / timelineRowHeight)
-	if rowIdx < 0 || rowIdx >= len(dir.Parts) {
+	if rowIdx < 0 || rowIdx >= len(parts) {
 		return 0, 0, false
 	}
-	part := dir.Parts[rowIdx]
-	for ki, kf := range part.Keyframes {
+	for ki, kf := range dir.KeyframesFor(parts[rowIdx].ID) {
 		mx := s.xForTime(kf.TimeMs)
 		if pos.X >= mx-timelineMarkerSize/2 && pos.X <= mx+timelineMarkerSize/2 {
 			return rowIdx, ki, true
@@ -190,7 +198,7 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 	}
 
 	sel := s.project.Selection
-	for rowIdx, part := range dir.Parts {
+	for rowIdx, part := range s.parts() {
 		rowY := timelineRulerHeight + float32(rowIdx)*timelineRowHeight
 
 		rowBg := canvas.NewRectangle(ColorCanvasBackground)
@@ -203,7 +211,7 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 		label.Move(fyne.NewPos(4, rowY+timelineRowHeight/2-8))
 		objs = append(objs, label)
 
-		for ki, kf := range part.Keyframes {
+		for ki, kf := range dir.KeyframesFor(part.ID) {
 			x := s.xForTime(kf.TimeMs)
 			isSelected := sel != nil && sel.PartIndex == rowIdx && sel.KeyframeIndex == ki
 			markerColor := ColorFrameBoxSelected
@@ -339,12 +347,13 @@ func (tw *TimelineWidget) RefreshInfo() {
 }
 
 func (tw *TimelineWidget) buildInfoText() string {
-	dir := tw.project.ActiveDirection()
 	total := uint32(0)
-	partCount := 0
-	if dir != nil {
+	if dir := tw.project.ActiveDirection(); dir != nil {
 		total = dir.TotalDurationMs()
-		partCount = len(dir.Parts)
+	}
+	partCount := 0
+	if tw.project.CurrentTrack != nil {
+		partCount = len(tw.project.CurrentTrack.Parts)
 	}
 	// Playhead and animation length are shown separately on purpose: the
 	// ruler runs past the end of the animation (see scrubArea.totalMs), so

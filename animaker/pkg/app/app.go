@@ -116,6 +116,18 @@ func (a *Application) refreshDirectionSelect() {
 	a.directionSel.Refresh()
 }
 
+// directionAndPart resolves a part index (into the track's shared part
+// list) together with the active direction, returning nil if either is out
+// of range. Nearly every callback below needs exactly this pair.
+func (a *Application) directionAndPart(partIdx int) (*editor.Direction, *editor.Part) {
+	dir := a.Project.ActiveDirection()
+	track := a.Project.CurrentTrack
+	if dir == nil || track == nil || partIdx < 0 || partIdx >= len(track.Parts) {
+		return nil, nil
+	}
+	return dir, track.Parts[partIdx]
+}
+
 func (a *Application) wireCallbacks() {
 	// -- Canvas: click to select, drag to reposition an existing keyframe --
 	a.canvasWidget.OnPartTapped = func(idx int) {
@@ -127,15 +139,14 @@ func (a *Application) wireCallbacks() {
 		a.properties.SelectPart(idx)
 	}
 	a.canvasWidget.OnPartDragged = func(idx int, x, y float32) {
-		dir := a.Project.ActiveDirection()
-		if dir == nil || idx < 0 || idx >= len(dir.Parts) {
+		dir, part := a.directionAndPart(idx)
+		if dir == nil {
 			return
 		}
-		part := dir.Parts[idx]
 		// Only an existing keyframe at exactly the current playhead time
 		// moves - dragging doesn't implicitly create one. Use "New
 		// Keyframe" first, per the intended workflow.
-		for _, kf := range part.Keyframes {
+		for _, kf := range dir.KeyframesFor(part.ID) {
 			if kf.TimeMs == a.Project.Playback.ElapsedMs {
 				kf.X, kf.Y = x, y
 				a.Project.Dirty = true
@@ -157,48 +168,41 @@ func (a *Application) wireCallbacks() {
 	a.timeline.OnKeyframeSelected = func(partIdx, kfIdx int) {
 		a.Project.Selection.PartIndex = partIdx
 		a.Project.Selection.KeyframeIndex = kfIdx
-		dir := a.Project.ActiveDirection()
-		if dir != nil && partIdx >= 0 && partIdx < len(dir.Parts) {
-			part := dir.Parts[partIdx]
-			if kfIdx >= 0 && kfIdx < len(part.Keyframes) {
-				a.Project.Seek(part.Keyframes[kfIdx].TimeMs)
+		dir, part := a.directionAndPart(partIdx)
+		if dir != nil {
+			if kfs := dir.KeyframesFor(part.ID); kfIdx >= 0 && kfIdx < len(kfs) {
+				a.Project.Seek(kfs[kfIdx].TimeMs)
 			}
 		}
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeDeleted = func(partIdx, kfIdx int) {
-		dir := a.Project.ActiveDirection()
-		if dir == nil || partIdx < 0 || partIdx >= len(dir.Parts) {
+		dir, part := a.directionAndPart(partIdx)
+		if dir == nil {
 			return
 		}
 		a.Project.RecordUndo()
-		_ = editor.DeleteKeyframe(dir.Parts[partIdx], kfIdx)
+		_ = editor.DeleteKeyframe(dir, part.ID, kfIdx)
 		a.Project.Selection.KeyframeIndex = -1
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
 	a.timeline.OnNewKeyframe = func() {
-		dir := a.Project.ActiveDirection()
 		sel := a.Project.Selection
-		if dir == nil || sel == nil || sel.PartIndex < 0 || sel.PartIndex >= len(dir.Parts) {
+		dir, part := a.directionAndPart(sel.PartIndex)
+		if dir == nil {
 			return
 		}
-		part := dir.Parts[sel.PartIndex]
 		elapsed := a.Project.Playback.ElapsedMs
 		// Seed the new keyframe from wherever the part's interpolated pose
 		// currently is, so it starts as a continuation rather than
 		// snapping to zero - the artist then drags it into place.
-		seed := part.ValueAt(elapsed)
+		seed := dir.ValueAt(part.ID, elapsed)
 		a.Project.RecordUndo()
-		kf := editor.AddKeyframe(part, elapsed)
+		kf := editor.AddKeyframe(dir, part.ID, elapsed)
 		kf.X, kf.Y, kf.Z, kf.RotationDeg = seed.X, seed.Y, seed.Z, seed.RotationDeg
 		kf.Row, kf.Col = seed.Row, seed.Col
-		for i, k := range part.Keyframes {
-			if k == kf {
-				sel.KeyframeIndex = i
-				break
-			}
-		}
+		sel.KeyframeIndex = kf.ID
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
@@ -237,8 +241,8 @@ func (a *Application) wireCallbacks() {
 // the dragged cell and X/Y from wherever it landed on the canvas. Drops
 // outside the canvas's bounds are ignored.
 func (a *Application) onTileDropped(partIdx, row, col int, absPos fyne.Position) {
-	dir := a.Project.ActiveDirection()
-	if dir == nil || partIdx < 0 || partIdx >= len(dir.Parts) {
+	dir, part := a.directionAndPart(partIdx)
+	if dir == nil {
 		return
 	}
 
@@ -252,20 +256,12 @@ func (a *Application) onTileDropped(partIdx, row, col int, absPos fyne.Position)
 	x, y := a.canvasWidget.LocalToAnimXY(local)
 
 	a.Project.RecordUndo()
-	part := dir.Parts[partIdx]
-	kf := editor.AddKeyframe(part, a.Project.Playback.ElapsedMs)
-	kf.Row = row
-	kf.Col = col
-	kf.X = x
-	kf.Y = y
+	kf := editor.AddKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
+	kf.Row, kf.Col = row, col
+	kf.X, kf.Y = x, y
 
 	a.Project.Selection.PartIndex = partIdx
-	for i, k := range part.Keyframes {
-		if k == kf {
-			a.Project.Selection.KeyframeIndex = i
-			break
-		}
-	}
+	a.Project.Selection.KeyframeIndex = kf.ID
 	a.Project.Dirty = true
 	a.refreshAll()
 }
@@ -422,18 +418,18 @@ func (a *Application) addPartForSheet(sheetName string) bool {
 	return a.addPart(editor.NewSheetPart(sheetName, "", sheetName))
 }
 
-// addPart adds the part to the active direction only and selects it.
-// Deliberately scoped to one direction: managing which directions an
-// animation has parts in is the artist's call, not the editor's, so nothing
-// here fans a part out across facings on their behalf.
+// addPart adds the part to the track's rig — so it exists in every
+// direction at once — and selects it. It starts with no keyframes anywhere;
+// posing it in each facing is the artist's work, and which facings they
+// bother to pose it in is their call.
 func (a *Application) addPart(part *editor.Part) bool {
-	dir := a.Project.ActiveDirection()
-	if dir == nil {
+	track := a.Project.CurrentTrack
+	if track == nil {
 		return false
 	}
 	a.Project.RecordUndo()
-	editor.AddPart(dir, part)
-	a.properties.SelectPart(len(dir.Parts) - 1)
+	editor.AddPart(track, part)
+	a.properties.SelectPart(len(track.Parts) - 1)
 	a.Project.Dirty = true
 	return true
 }

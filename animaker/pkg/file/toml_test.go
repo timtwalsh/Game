@@ -11,23 +11,24 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	editor.AddProp(track, "hair", "long_blonde")
 	editor.AddProp(track, "arms", "leather")
 
-	dir := editor.AddDirection(track, 2) // 2 = "down" by the game's direction convention
-
-	hair := editor.NewSheetPart("Hair", "hair", "")
-	editor.AddKeyframe(hair, 0).Row = 4
-	editor.AddKeyframe(hair, 0).Col = 2 // same call target as above (time 0) - sets Col too
-	kf := editor.AddKeyframe(hair, 100)
-	kf.X, kf.Y, kf.Z, kf.RotationDeg = 1.5, -2.5, 20, 90
-	editor.AddPart(dir, hair)
-
-	body := editor.NewSheetPart("Body", "", "human_body_default")
-	editor.AddPart(dir, body)
+	// Parts live on the track; keyframes are added per direction.
+	hair := editor.AddPart(track, editor.NewSheetPart("Hair", "hair", ""))
+	body := editor.AddPart(track, editor.NewSheetPart("Body", "", "human_body_default"))
 
 	torch := editor.NewNestedAniPart("Torch", "base_wood_torch.anif")
 	torch.NestedBindings["direction"] = editor.PropBinding{PassthroughFrom: "direction"}
 	torch.NestedBindings["torch_sheet"] = editor.PropBinding{StaticValue: "rusty"}
-	editor.AddKeyframe(torch, 0)
-	editor.AddPart(dir, torch)
+	editor.AddPart(track, torch)
+
+	dir := track.Directions[2] // 2 = "down" by the game's direction convention
+	editor.AddKeyframe(dir, hair.ID, 0).Row = 4
+	editor.AddKeyframe(dir, hair.ID, 0).Col = 2 // same keyframe as above (time 0) - sets Col too
+	kf := editor.AddKeyframe(dir, hair.ID, 100)
+	kf.X, kf.Y, kf.Z, kf.RotationDeg = 1.5, -2.5, 20, 90
+	editor.AddKeyframe(dir, torch.ID, 0)
+	// body is deliberately left unposed in every direction, to check a part
+	// with no keyframes still round-trips as part of the rig.
+	_ = body
 
 	path := filepath.Join(t.TempDir(), "human_walk.anif")
 	if err := SaveTrack(track, path); err != nil {
@@ -46,7 +47,6 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 		t.Errorf("loaded ref box = %dx%d, want %dx%d",
 			loaded.RefBoxWidth, loaded.RefBoxHeight, track.RefBoxWidth, track.RefBoxHeight)
 	}
-	// NewTrack seeds 0-3 and the test adds 2, which already exists.
 	if got := loaded.SortedDirectionKeys(); len(got) != 4 {
 		t.Errorf("loaded directions = %v, want the 4 defaults", got)
 	}
@@ -61,12 +61,14 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("loaded track missing direction 2")
 	}
-	if len(ldir.Parts) != 3 {
-		t.Fatalf("loaded %d parts, want 3", len(ldir.Parts))
+	// Parts are the track's, not the direction's, and all three survive
+	// even though Body was never posed anywhere.
+	if len(loaded.Parts) != 3 {
+		t.Fatalf("loaded %d parts, want 3", len(loaded.Parts))
 	}
 
 	var lHair, lBody, lTorch *editor.Part
-	for _, p := range ldir.Parts {
+	for _, p := range loaded.Parts {
 		switch p.Name {
 		case "Hair":
 			lHair = p
@@ -80,8 +82,19 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	if lHair == nil || lHair.Kind != editor.PartKindSheet || lHair.GoverningProp != "hair" {
 		t.Fatalf("Hair part round-tripped wrong: %+v", lHair)
 	}
-	if len(lHair.Keyframes) != 2 || lHair.Keyframes[1].X != 1.5 || lHair.Keyframes[1].RotationDeg != 90 {
-		t.Errorf("Hair keyframes round-tripped wrong: %+v", lHair.Keyframes)
+	hairKfs := ldir.KeyframesFor(lHair.ID)
+	if len(hairKfs) != 2 || hairKfs[1].X != 1.5 || hairKfs[1].RotationDeg != 90 {
+		t.Errorf("Hair keyframes round-tripped wrong: %+v", hairKfs)
+	}
+	if hairKfs[0].Row != 4 || hairKfs[0].Col != 2 {
+		t.Errorf("Hair first keyframe cell = (%d,%d), want (4,2)", hairKfs[0].Row, hairKfs[0].Col)
+	}
+	// Keyframes stay scoped to the direction they were authored in.
+	if got := len(loaded.Directions[0].KeyframesFor(lHair.ID)); got != 0 {
+		t.Errorf("direction 0 has %d Hair keyframes, want 0", got)
+	}
+	if got := len(ldir.KeyframesFor(lBody.ID)); got != 0 {
+		t.Errorf("unposed Body has %d keyframes in direction 2, want 0", got)
 	}
 
 	if lBody == nil || lBody.Kind != editor.PartKindSheet || lBody.FixedSheet != "human_body_default" {

@@ -93,16 +93,35 @@ feedback after using the previous version:
      `RefBoxWidth`/`RefBoxHeight` guide drawn against a full-span origin
      crosshair, after GraalShop's equivalent.
 
-   A fifth change was made and then **reverted on user instruction**:
-   adding a part briefly added it to every direction, so the other
-   facings wouldn't look empty. The correction — "it's the artists
-   responsibility to manage the directions on the ani" — is the standing
-   rule here: seeding empty directions is fine, but the editor must not
-   propagate authored content across directions on the artist's behalf.
-   That is also why `SetActiveDirection` clears the part selection rather
-   than carrying it across by index: the editor doesn't keep the
-   per-direction part lists in step, so the same index can mean an
-   unrelated part.
+7. **Parts moved from Direction up to Track** (2026-09-19) — the only
+   structural change to the v2 data model so far, and worth reading
+   before touching anything here. It took two user corrections to land:
+   - Adding a part briefly added a copy to every direction, so the other
+     facings wouldn't look empty. That was reverted on "it's the artists
+     responsibility to manage the directions on the ani", and part
+     creation was scoped back to the active direction.
+   - That was the wrong inference. The follow-up — "parts should exist
+     across all directions... I think direction should just change which
+     canvas shows" — is the actual model.
+
+   So `Track.Parts` is now the rig, shared by every direction, and
+   `Direction` holds only `Keyframes map[int][]*Keyframe` keyed by
+   `Part.ID`. Switching facing changes which keyframes you see and
+   nothing else; `Selection.PartIndex` indexes the track's list and
+   survives the switch, while `KeyframeIndex` is reset. A part with no
+   keyframes in a facing is listed (tagged "no keyframes here") but not
+   drawn.
+
+   The distinction to hold on to: the editor shares **structure** across
+   directions freely — the part list, sheet bindings, props — but never
+   invents **authored content**, so it will not copy keyframes between
+   facings. When a change seems to be "about directions", work out which
+   of the two it touches before narrowing the behaviour.
+
+   Keying by ID rather than by index or name is deliberate:
+   `RemovePart` deletes that ID's keyframes from every direction and
+   `Track.nextPartID` never reuses a freed ID, so orphaned keyframes
+   can't be silently adopted by a later part, and renaming is free.
 
 ## Shape
 
@@ -115,16 +134,24 @@ feedback after using the previous version:
     `PropBinding` types (the rig itself). `Track.Directions` is
     `map[int]*Direction` — plain ints, not free-form names, matching the
     game's own direction convention, and `NewTrack` seeds all four
-    (0-3) as empty directions. `Track.RefBoxWidth`/`RefBoxHeight`
+    (0-3) as empty directions. **`Track.Parts` is the rig, shared by
+    every direction; `Direction` holds only `Keyframes` keyed by
+    `Part.ID`** — see history entry 7 under
+    [Why this shape](#why-this-shape) before changing this.
+    `Direction.ValueAt(partID, timeMs)` is the interpolation entry
+    point. `Track.RefBoxWidth`/`RefBoxHeight`
     (48x64) size the character-shaped placement *guide* the canvas draws
     from the origin — not a working area or a clip region; the
     coordinate space is unbounded and negative coordinates are valid.
     `Direction.TotalDurationMs` is the animation's real length, while
     `Direction.EditableDurationMs` is the longer scrubbable range — see
     the timeline entry under [Why this shape](#why-this-shape).
-  - `part.go` — add/remove Part/Direction/Prop helpers.
-  - `keyframe.go` — add/delete/duplicate/move keyframes (kept sorted by
-    `TimeMs`), and `Part.ValueAt(timeMs)` — the interpolation entry point
+  - `part.go` — add/remove Part/Direction/Prop helpers. `AddPart` takes
+    a `*Track` (not a direction) and assigns the ID; `RemovePart` also
+    clears that ID's keyframes from every direction.
+  - `keyframe.go` — add/delete/duplicate/move keyframes, all taking
+    `(dir, partID, ...)` and kept sorted by `TimeMs`, plus
+    `Direction.ValueAt(partID, timeMs)` — the interpolation entry point
     (linear lerp on X/Y/Z/Rotation, step function on Row/Col).
   - `spritesheet.go` — `SpriteSheetTemplate`: fixed cell size + one pivot
     per sheet, `Cols()`/`Rows()` derived from image size, `CellImage`
@@ -141,7 +168,7 @@ feedback after using the previous version:
     the ruler/a row to scrub, click a marker to select it (also seeks the
     playhead there). `TimelineWidget` wraps it with Play/Stop, New/Delete
     Keyframe, speed, and loop controls. "New Keyframe" seeds the new
-    keyframe from the part's current interpolated pose (`Part.ValueAt`)
+    keyframe from the part's current interpolated pose (`Direction.ValueAt`)
     rather than snapping to zero, so it starts as a continuation.
   - `canvas.go` — resolves every Part's transform at the current
     `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell
@@ -222,7 +249,13 @@ feedback after using the previous version:
     panels that actually need them instead of a separate menu.
 - `pkg/file/` — persistence: `toml.go` (`SaveTrack`/`LoadTrack` for
   `.anif`, `SaveSheetTemplate`/`LoadSheetTemplate` for `.sprsh`),
-  `image.go` (unchanged — generic image loading/cropping).
+  `image.go` (unchanged — generic image loading/cropping). The `.anif`
+  layout mirrors the model: `[[parts]]` once at track level carrying an
+  `id`, then `[[directions.N.keyframes]]` entries each naming a
+  `part_id`. `LoadTrack` rejects a keyframe whose `part_id` names no
+  part, and rejects duplicate part ids, rather than dropping them
+  silently. Keyframes are written in track-part order so saves are
+  stable rather than reordering with Go's map iteration.
 
 ## Known gaps (not bugs)
 
@@ -293,8 +326,13 @@ re-firing their own change handler is the trap.
 - **Does not hit:** `client/`, `server/`, `shared/` — verified no shared
   imports either direction.
 - Changing `editor.Track`'s shape hits `file/toml.go` (the TOML mirror
-  structs are hand-kept-in-sync, not generated) and both `_test.go`
-  files in `editor/`/`file/`.
+  structs are hand-kept-in-sync, not generated) and the `_test.go` files
+  in `editor/`, `file/` and `ui/`.
+- Moving anything between `Track` and `Direction` is a wide change: the
+  part/keyframe split is load-bearing in `canvas.go` (`resolvedDraws`,
+  `viewBounds`), `timeline.go` (`scrubArea.parts`), `properties.go`
+  (`refreshPartList`) and every callback in `app.go` — most of which go
+  through `Application.directionAndPart`.
 
 ## Surfaces
 
@@ -309,9 +347,15 @@ and a C compiler — see root `CONTEXT.md`'s Build section) or via
 step-function Row/Col behavior and clamping before/after the keyframe
 range), sorted-insert invariants, prop-resolution precedence
 (PreviewProps override > prop default > FixedSheet), deep-copy
-independence. `pkg/file/toml_test.go` — full save/load round-trip for
-both `.anif` (props, all three part-authoring cases: sheet+prop-governed,
-sheet+fixed, nested-with-bindings) and `.sprsh`.
+independence, and the track-level part model: parts shared across
+directions, keyframes independent per direction, `RemovePart` clearing
+every direction without touching its neighbours, IDs never reused, and
+the part selection surviving a direction change.
+`pkg/file/toml_test.go` — full save/load round-trip for both `.anif`
+(props, all three part-authoring cases: sheet+prop-governed, sheet+fixed,
+nested-with-bindings, plus a part deliberately left unposed everywhere,
+and keyframes staying in the direction they were authored in) and
+`.sprsh`.
 `pkg/editor/spritesheet_test.go` — sheet slicing: a 4x3 sheet yields 12
 cells with distinct content (sampled at each sub-image's own
 `Bounds().Min`, since a `SubImage` doesn't start at 0,0), out-of-range
