@@ -79,30 +79,40 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 
 	pp.Refresh()
 
-	partArea := container.NewVBox(
+	// Every major section is its own resizable pane (nested VSplits, since
+	// Fyne's Split only takes two children) instead of one long scrolling
+	// VBox - the sheet grid in particular needs real room, and a fixed
+	// share in a stacked layout was squeezing it down regardless of how
+	// much was actually in the other sections.
+	partListAndLink := container.NewVBox(
 		newSectionHeader("PARTS"),
 		container.NewHBox(importBtn, addPartBtn),
 		pp.partListBox,
 		pp.partLinkBox,
-		container.NewScroll(pp.sheetGrid),
 	)
+	sheetGridScroll := container.NewScroll(pp.sheetGrid)
+	partArea := container.NewVSplit(container.NewVScroll(partListAndLink), sheetGridScroll)
+	partArea.SetOffset(0.3) // list/link gets 30%, the sheet grid gets the rest by default
 
-	all := container.NewVBox(
-		partArea,
-		widget.NewSeparator(),
-		newSectionHeader("SELECTED KEYFRAME"),
-		pp.keyframeBox,
-		widget.NewSeparator(),
-		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn),
-		pp.schemaBox,
-		widget.NewSeparator(),
-		newSectionHeader("PREVIEW OVERRIDES"),
-		pp.previewBox,
-	)
+	keyframeArea := container.NewVScroll(container.NewVBox(
+		newSectionHeader("SELECTED KEYFRAME"), pp.keyframeBox,
+	))
 
-	scroll := container.NewVScroll(all)
-	scroll.SetMinSize(fyne.NewSize(340, 500))
-	return scroll
+	propsArea := container.NewVScroll(container.NewVBox(
+		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn), pp.schemaBox,
+	))
+	previewArea := container.NewVScroll(container.NewVBox(
+		newSectionHeader("PREVIEW OVERRIDES"), pp.previewBox,
+	))
+	propsAndPreview := container.NewVSplit(propsArea, previewArea)
+	propsAndPreview.SetOffset(0.5)
+
+	keyframeAndBelow := container.NewVSplit(keyframeArea, propsAndPreview)
+	keyframeAndBelow.SetOffset(0.35)
+
+	full := container.NewVSplit(partArea, keyframeAndBelow)
+	full.SetOffset(0.55) // PARTS (and its sheet grid) gets just over half by default
+	return full
 }
 
 // Refresh rebuilds every section from current project state.

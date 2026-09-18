@@ -105,7 +105,13 @@ feedback after using the previous version:
     part, that part's `SheetGridWidget` (or a nested-bindings editor),
     the selected keyframe's numeric transform fields (for fine-tuning
     after a drop or a canvas drag), and the props schema (with its own
-    **Add Prop** button) / preview-override sections.
+    **Add Prop** button) / preview-override sections. As of 2026-09-19,
+    these aren't just stacked in one scrolling column — every section is
+    its own pane in a tree of nested `container.NewVSplit`s (Fyne splits
+    only take two children each), so each has a draggable resize handle.
+    The PARTS section is itself split internally (part list/link vs. the
+    sheet grid), defaulted to give the sheet grid the majority of the
+    space, since that's what was getting squeezed down before.
   - `dialogs.go`, `window.go`, `theme.go` — mostly self-explanatory;
     `theme.go` is untouched by the v2 rewrite (pure color/theme, no
     dependency on the domain model). `window.go`'s `BuildMainLayout` is
