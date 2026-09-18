@@ -71,6 +71,38 @@ feedback after using the previous version:
    nothing. The lesson generalizes: in this editor almost everything is
    gated on a *selected part*, so any action that doesn't end with a part
    selected reads to the artist as "nothing happened".
+6. Four fixes from hands-on use (2026-09-19), all reported together:
+   - **A 4x3 sheet appeared to slice into one sprite.** The slicing was
+     correct (now pinned by `pkg/editor/spritesheet_test.go`); the
+     palette drew cells at a hardcoded 2x, so a sheet of large cells
+     overflowed the narrow left column and only the first was visible.
+     `SheetGridWidget` now fits its cells to the width the layout gives
+     it (`displayScale`, clamped to 0.25x-4x) and outlines each cell, and
+     the palette header spells out the resulting grid ("4x3 cells of
+     32x32px") — bad Cell Width/Height at import is the easiest mistake
+     to make here and was otherwise invisible.
+   - **The timeline couldn't scrub past the first keyframe**, so a second
+     one could never be added. `Project.Seek` clamped to
+     `TotalDurationMs`, which is 0 when the only keyframe is at 0ms.
+     There is now a separate `Direction.EditableDurationMs` — always
+     ahead of the last keyframe — that `Seek` and the ruler use, while
+     playback still loops over the real `TotalDurationMs`.
+   - **New tracks seed directions 0-3** rather than only 0.
+   - **The canvas became unbounded** (see `canvas.go` under Shape),
+     replacing the fixed `CanvasWidth`/`CanvasHeight` working area with a
+     `RefBoxWidth`/`RefBoxHeight` guide drawn against a full-span origin
+     crosshair, after GraalShop's equivalent.
+
+   A fifth change was made and then **reverted on user instruction**:
+   adding a part briefly added it to every direction, so the other
+   facings wouldn't look empty. The correction — "it's the artists
+   responsibility to manage the directions on the ani" — is the standing
+   rule here: seeding empty directions is fine, but the editor must not
+   propagate authored content across directions on the artist's behalf.
+   That is also why `SetActiveDirection` clears the part selection rather
+   than carrying it across by index: the editor doesn't keep the
+   per-direction part lists in step, so the same index can mean an
+   unrelated part.
 
 ## Shape
 
@@ -82,8 +114,14 @@ feedback after using the previous version:
   - `track.go` — `Track`/`Direction`/`Part`/`Keyframe`/`PropDef`/
     `PropBinding` types (the rig itself). `Track.Directions` is
     `map[int]*Direction` — plain ints, not free-form names, matching the
-    game's own direction convention. `Track.CanvasWidth`/`CanvasHeight`
-    define the `0,0`-to-`(W,H)` working area parts are placed within.
+    game's own direction convention, and `NewTrack` seeds all four
+    (0-3) as empty directions. `Track.RefBoxWidth`/`RefBoxHeight`
+    (48x64) size the character-shaped placement *guide* the canvas draws
+    from the origin — not a working area or a clip region; the
+    coordinate space is unbounded and negative coordinates are valid.
+    `Direction.TotalDurationMs` is the animation's real length, while
+    `Direction.EditableDurationMs` is the longer scrubbable range — see
+    the timeline entry under [Why this shape](#why-this-shape).
   - `part.go` — add/remove Part/Direction/Prop helpers.
   - `keyframe.go` — add/delete/duplicate/move keyframes (kept sorted by
     `TimeMs`), and `Part.ValueAt(timeMs)` — the interpolation entry point
@@ -107,10 +145,16 @@ feedback after using the previous version:
     rather than snapping to zero, so it starts as a continuation.
   - `canvas.go` — resolves every Part's transform at the current
     `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell
-    within the track's `0,0`-to-`(CanvasWidth,CanvasHeight)` bounds
-    (drawn as an outline; `MinSize` equals the zoomed working area so
-    wrapping it in `container.NewScroll` gives scrollbars exactly when
-    content overflows the viewport). Implements `Tappable` (click a part
+    around a full-span origin crosshair with the character-sized
+    reference box in its bottom-right quadrant. There is **no fixed
+    working area and no centering**: `viewBounds()` derives the extent
+    from the origin, the reference box and every keyframe of every part,
+    padded and quantized to 32px, and `MinSize` follows it — so art at
+    negative coordinates (a raised sword) simply grows the canvas.
+    Computing over *all* keyframes rather than the current frame is what
+    keeps scrubbing from resizing the canvas, and the quantization keeps
+    a drag from doing so continuously; either would shift the origin out
+    from under the cursor. Implements `Tappable` (click a part
     to select it, `OnPartTapped`) and `Draggable` (drag an *already
     placed* part to move an *existing* keyframe at the exact current
     time — `OnPartDragStart/Dragged/DragEnd` — deliberately does **not**
@@ -268,8 +312,20 @@ range), sorted-insert invariants, prop-resolution precedence
 independence. `pkg/file/toml_test.go` — full save/load round-trip for
 both `.anif` (props, all three part-authoring cases: sheet+prop-governed,
 sheet+fixed, nested-with-bindings) and `.sprsh`.
-`pkg/ui/properties_test.go` — `sheetPickerOptions` only; the rest of
-`pkg/ui` and all of `pkg/app` have no automated tests, being GUI wiring
+`pkg/editor/spritesheet_test.go` — sheet slicing: a 4x3 sheet yields 12
+cells with distinct content (sampled at each sub-image's own
+`Bounds().Min`, since a `SubImage` doesn't start at 0,0), out-of-range
+rejection, partial trailing cells dropped.
+`pkg/editor/timeline_test.go` — the scrub-deadlock regression (seek and
+add a second keyframe past a lone 0ms one), `EditableDurationMs` always
+leading the last keyframe, playback still looping over the *real*
+duration, and the four default directions.
+`pkg/ui/canvas_test.go` — canvas geometry, which is easy to break
+silently: the view always contains the origin and reference box, grows
+for negative coordinates, stays identical across a scrub, and
+`LocalToAnimXY` round-trips (so a dropped tile lands where it was
+released). `pkg/ui/properties_test.go` — `sheetPickerOptions`. The rest
+of `pkg/ui` and all of `pkg/app` have no automated tests, being GUI wiring
 verified by manual launch. Note that launching the binary and confirming
 it stays responsive is a real part of the check here, not a formality: a
 `Select.ClearSelected()` recursion once shipped as a startup

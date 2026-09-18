@@ -7,8 +7,8 @@ func (t *Track) DeepCopy() *Track {
 	dst := &Track{
 		Metadata:     t.Metadata,
 		Props:        append([]PropDef(nil), t.Props...),
-		CanvasWidth:  t.CanvasWidth,
-		CanvasHeight: t.CanvasHeight,
+		RefBoxWidth:  t.RefBoxWidth,
+		RefBoxHeight: t.RefBoxHeight,
 		Directions:   make(map[int]*Direction, len(t.Directions)),
 	}
 	for key, dir := range t.Directions {

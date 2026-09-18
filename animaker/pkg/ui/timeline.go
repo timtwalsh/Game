@@ -37,16 +37,15 @@ func newScrubArea(project *editor.Project) *scrubArea {
 	return s
 }
 
+// totalMs is the scrubbable span drawn on the ruler — the editable range,
+// which always extends past the last keyframe so there's empty time to
+// scrub into and place the next one. Project.Seek clamps to the same value.
 func (s *scrubArea) totalMs() uint32 {
 	dir := s.project.ActiveDirection()
 	if dir == nil {
-		return 0
+		return editor.MinTimelineMs
 	}
-	total := dir.TotalDurationMs()
-	if total < 500 {
-		total = 500 // keep a minimum visible span so an empty/short anim isn't a sliver
-	}
-	return total
+	return dir.EditableDurationMs()
 }
 
 func (s *scrubArea) widthForDuration() float32 {
@@ -347,6 +346,10 @@ func (tw *TimelineWidget) buildInfoText() string {
 		total = dir.TotalDurationMs()
 		partCount = len(dir.Parts)
 	}
-	return fmt.Sprintf("Direction: %d   |   Elapsed: %dms / %dms   |   Parts: %d",
+	// Playhead and animation length are shown separately on purpose: the
+	// ruler runs past the end of the animation (see scrubArea.totalMs), so
+	// "120ms / 0ms" would otherwise look like a bug rather than a playhead
+	// parked in the empty space where the next keyframe goes.
+	return fmt.Sprintf("Direction: %d   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d",
 		tw.project.Playback.ActiveDirection, tw.project.Playback.ElapsedMs, total, partCount)
 }

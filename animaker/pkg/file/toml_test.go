@@ -42,6 +42,14 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	if loaded.Metadata.Name != "human_walk" {
 		t.Errorf("loaded name = %q, want %q", loaded.Metadata.Name, "human_walk")
 	}
+	if loaded.RefBoxWidth != track.RefBoxWidth || loaded.RefBoxHeight != track.RefBoxHeight {
+		t.Errorf("loaded ref box = %dx%d, want %dx%d",
+			loaded.RefBoxWidth, loaded.RefBoxHeight, track.RefBoxWidth, track.RefBoxHeight)
+	}
+	// NewTrack seeds 0-3 and the test adds 2, which already exists.
+	if got := loaded.SortedDirectionKeys(); len(got) != 4 {
+		t.Errorf("loaded directions = %v, want the 4 defaults", got)
+	}
 	if len(loaded.Props) != 2 {
 		t.Fatalf("loaded %d props, want 2", len(loaded.Props))
 	}

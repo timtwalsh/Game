@@ -12,11 +12,19 @@ import (
 )
 
 // CanvasWidget renders every Part of the active direction at the current
-// playhead time, Z-sorted, within the track's defined 0,0-to-(W,H) working
-// area (drawn as a bordered rect). Origin is the top-left of that area, not
-// the widget's center — this lets the widget's MinSize equal the working
-// area at the current zoom, so wrapping it in a Scroll container gives
-// scrollbars exactly when the zoomed content overflows the viewport.
+// playhead time, Z-sorted, around the animation's origin — drawn as a
+// full-span crosshair through (0,0) with a character-sized reference box in
+// its bottom-right quadrant, the way GraalShop's GANI editor does it. Parts
+// are positioned relative to that origin.
+//
+// The canvas has no fixed working area and does no centering: its extent is
+// derived from what's actually placed (see viewBounds), so art may sit at
+// negative coordinates above/left of the origin — a raised sword, a
+// trailing cape — and the canvas simply grows to include it. The extent is
+// computed over *every* keyframe rather than just the current frame, and
+// quantized, so scrubbing never resizes the canvas and a drag only does so
+// when it crosses a quantum boundary. A canvas that resized continuously
+// under a drag would shift the origin out from under the cursor.
 //
 // Rotation is stored and saved but not visually applied here — Fyne has no
 // simple rotated-image primitive, and the real consumer of rotation is the
@@ -63,14 +71,76 @@ func (cw *CanvasWidget) ToggleGrid() {
 	cw.Refresh()
 }
 
+const (
+	canvasMarginPx   = 24 // anim px of breathing room around the content
+	canvasQuantizePx = 32 // view extent rounds outward to this, so small moves don't resize
+	nestedBoxPx      = 24 // placeholder box size for a NestedAni part, in anim px
+)
+
+// refBox returns the track's character-sized reference box dimensions.
+func (cw *CanvasWidget) refBox() (w, h float32) {
+	t := cw.project.CurrentTrack
+	if t == nil || t.RefBoxWidth <= 0 || t.RefBoxHeight <= 0 {
+		return editor.DefaultRefBoxWidth, editor.DefaultRefBoxHeight
+	}
+	return float32(t.RefBoxWidth), float32(t.RefBoxHeight)
+}
+
+// partExtentAnim is a part's drawn size and pivot in animation pixels,
+// which is a property of its sheet and so the same for all its keyframes.
+func (cw *CanvasWidget) partExtentAnim(part *editor.Part) (w, h, pivotX, pivotY float32) {
+	if part.Kind == editor.PartKindNestedAni {
+		return nestedBoxPx, nestedBoxPx, nestedBoxPx / 2, nestedBoxPx / 2
+	}
+	sheet := cw.project.ResolveActiveSheet(part)
+	if sheet == nil {
+		return 0, 0, 0, 0
+	}
+	return float32(sheet.CellW), float32(sheet.CellH), sheet.PivotX, sheet.PivotY
+}
+
+// viewBounds is the visible region in animation coordinates. It always
+// contains the origin and the reference box, plus every keyframe of every
+// part (not just the current frame — so scrubbing can't resize the canvas),
+// padded and rounded outward to canvasQuantizePx.
+func (cw *CanvasWidget) viewBounds() (minX, minY, maxX, maxY float32) {
+	refW, refH := cw.refBox()
+	minX, minY, maxX, maxY = 0, 0, refW, refH
+
+	if dir := cw.project.ActiveDirection(); dir != nil {
+		for _, part := range dir.Parts {
+			w, h, px, py := cw.partExtentAnim(part)
+			for _, kf := range part.Keyframes {
+				x0, y0 := kf.X-px, kf.Y-py
+				minX, minY = minF(minX, x0), minF(minY, y0)
+				maxX, maxY = maxF(maxX, x0+w), maxF(maxY, y0+h)
+			}
+		}
+	}
+
+	return floorTo(minX-canvasMarginPx, canvasQuantizePx),
+		floorTo(minY-canvasMarginPx, canvasQuantizePx),
+		ceilTo(maxX+canvasMarginPx, canvasQuantizePx),
+		ceilTo(maxY+canvasMarginPx, canvasQuantizePx)
+}
+
+// originScreen is where animation (0,0) sits in widget-local pixels. It's
+// offset from the widget's top-left by however much negative space the
+// current view includes.
+func (cw *CanvasWidget) originScreen() fyne.Position {
+	minX, minY, _, _ := cw.viewBounds()
+	return fyne.NewPos(-minX*cw.zoom, -minY*cw.zoom)
+}
+
 // LocalToAnimXY converts a position local to this widget into the
-// animation's own X/Y coordinate space - the inverse of how a resolved
-// transform is drawn (screen = origin(0,0) + animXY*zoom).
+// animation's own X/Y coordinate space — the inverse of how a resolved
+// transform is drawn (screen = originScreen + animXY*zoom).
 func (cw *CanvasWidget) LocalToAnimXY(local fyne.Position) (x, y float32) {
 	if cw.zoom == 0 {
 		return 0, 0
 	}
-	return local.X / cw.zoom, local.Y / cw.zoom
+	origin := cw.originScreen()
+	return (local.X - origin.X) / cw.zoom, (local.Y - origin.Y) / cw.zoom
 }
 
 func (cw *CanvasWidget) CreateRenderer() fyne.WidgetRenderer {
@@ -81,15 +151,41 @@ func (cw *CanvasWidget) MinSize() fyne.Size {
 	if cw.project == nil || cw.project.CurrentTrack == nil {
 		return fyne.NewSize(300, 300)
 	}
-	w := float32(cw.project.CurrentTrack.CanvasWidth) * cw.zoom
-	h := float32(cw.project.CurrentTrack.CanvasHeight) * cw.zoom
-	if w < 100 {
-		w = 100
+	minX, minY, maxX, maxY := cw.viewBounds()
+	return fyne.NewSize(maxF((maxX-minX)*cw.zoom, 100), maxF((maxY-minY)*cw.zoom, 100))
+}
+
+func minF(a, b float32) float32 {
+	if a < b {
+		return a
 	}
-	if h < 100 {
-		h = 100
+	return b
+}
+
+func maxF(a, b float32) float32 {
+	if a > b {
+		return a
 	}
-	return fyne.NewSize(w, h)
+	return b
+}
+
+// floorTo/ceilTo round outward to a multiple of q, including for negative
+// values (where Go's integer truncation rounds toward zero, i.e. the wrong
+// way for a lower bound).
+func floorTo(v, q float32) float32 {
+	n := float32(int(v / q))
+	if v < 0 && n*q != v {
+		n--
+	}
+	return n * q
+}
+
+func ceilTo(v, q float32) float32 {
+	n := float32(int(v / q))
+	if v > 0 && n*q != v {
+		n++
+	}
+	return n * q
 }
 
 // resolvedDraw is one part's fully-resolved placement for a single frame,
@@ -130,18 +226,12 @@ func (cw *CanvasWidget) resolvedDraws() []resolvedDraw {
 
 func (cw *CanvasWidget) screenRectFor(d resolvedDraw) (pos fyne.Position, size fyne.Size) {
 	zoom := cw.zoom
-	if d.part.Kind == editor.PartKindNestedAni {
-		w, h := float32(24)*zoom/4, float32(24)*zoom/4
-		return fyne.NewPos(d.tr.X*zoom-w/2, d.tr.Y*zoom-h/2), fyne.NewSize(w, h)
-	}
-	if d.sheet == nil {
-		return fyne.NewPos(d.tr.X*zoom, d.tr.Y*zoom), fyne.NewSize(0, 0)
-	}
-	w := float32(d.sheet.CellW) * zoom
-	h := float32(d.sheet.CellH) * zoom
-	x := d.tr.X*zoom - d.sheet.PivotX*zoom
-	y := d.tr.Y*zoom - d.sheet.PivotY*zoom
-	return fyne.NewPos(x, y), fyne.NewSize(w, h)
+	origin := cw.originScreen()
+	w, h, px, py := cw.partExtentAnim(d.part)
+	return fyne.NewPos(
+			origin.X+(d.tr.X-px)*zoom,
+			origin.Y+(d.tr.Y-py)*zoom,
+		), fyne.NewSize(w*zoom, h*zoom)
 }
 
 func posInRect(p fyne.Position, rectPos fyne.Position, rectSize fyne.Size) bool {
@@ -227,32 +317,42 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 	size := cw.MinSize()
 	objs := []fyne.CanvasObject{}
 
+	origin := cw.originScreen()
+
 	bg := canvas.NewRectangle(ColorCanvasBackground)
 	bg.Resize(size)
 	objs = append(objs, bg)
 
-	// Working-area bounds: 0,0 to (CanvasWidth, CanvasHeight).
-	bounds := canvas.NewRectangle(color.RGBA{0, 0, 0, 0})
-	bounds.StrokeColor = ColorOriginCrosshair
-	bounds.StrokeWidth = 1
-	bounds.Resize(size)
-	bounds.Move(fyne.NewPos(0, 0))
-	objs = append(objs, bounds)
-
 	if cw.showGrid {
-		objs = append(objs, r.buildGrid(size)...)
+		objs = append(objs, r.buildGrid(size, origin)...)
 	}
 
-	// Origin marker at (0,0).
-	crossLen := float32(10)
+	// Character-sized reference box, filling the crosshair's bottom-right
+	// quadrant — parts are placed relative to it.
+	refW, refH := cw.refBox()
+	refRect := canvas.NewRectangle(color.RGBA{0, 0, 0, 0})
+	refRect.StrokeColor = ColorRefBox
+	refRect.StrokeWidth = 1
+	refRect.Resize(fyne.NewSize(refW*cw.zoom, refH*cw.zoom))
+	refRect.Move(origin)
+	objs = append(objs, refRect)
+
+	refLabel := canvas.NewText(fmt.Sprintf("%.0fx%.0f", refW, refH), ColorRefBox)
+	refLabel.TextSize = 9
+	refLabel.Move(fyne.NewPos(origin.X+2, origin.Y+refH*cw.zoom+2))
+	objs = append(objs, refLabel)
+
+	// Origin crosshair, spanning the whole canvas so 0,0 stays findable
+	// however far the view has grown.
 	hLine := canvas.NewLine(ColorOriginCrosshair)
-	hLine.Position1 = fyne.NewPos(0, 0)
-	hLine.Position2 = fyne.NewPos(crossLen, 0)
-	objs = append(objs, hLine)
+	hLine.StrokeWidth = 1
+	hLine.Position1 = fyne.NewPos(0, origin.Y)
+	hLine.Position2 = fyne.NewPos(size.Width, origin.Y)
 	vLine := canvas.NewLine(ColorOriginCrosshair)
-	vLine.Position1 = fyne.NewPos(0, 0)
-	vLine.Position2 = fyne.NewPos(0, crossLen)
-	objs = append(objs, vLine)
+	vLine.StrokeWidth = 1
+	vLine.Position1 = fyne.NewPos(origin.X, 0)
+	vLine.Position2 = fyne.NewPos(origin.X, size.Height)
+	objs = append(objs, hLine, vLine)
 
 	if cw.project.ActiveDirection() == nil {
 		return objs
@@ -314,21 +414,23 @@ func selectionOutline(pos fyne.Position, size fyne.Size) fyne.CanvasObject {
 	return r
 }
 
-func (r *canvasRenderer) buildGrid(size fyne.Size) []fyne.CanvasObject {
-	zoom := r.widget.zoom
-	gridSpacing := float32(16) * zoom
+// buildGrid draws gridlines aligned to the origin rather than the widget's
+// top-left, so a gridline always falls exactly on 0,0 and the squares mean
+// the same thing on both sides of each axis.
+func (r *canvasRenderer) buildGrid(size fyne.Size, origin fyne.Position) []fyne.CanvasObject {
+	gridSpacing := float32(16) * r.widget.zoom
 	if gridSpacing < 2 {
 		return nil
 	}
 
 	var objs []fyne.CanvasObject
-	for x := float32(0); x <= size.Width; x += gridSpacing {
+	for x := origin.X - floorTo(origin.X, gridSpacing); x <= size.Width; x += gridSpacing {
 		line := canvas.NewLine(ColorGrid)
 		line.Position1 = fyne.NewPos(x, 0)
 		line.Position2 = fyne.NewPos(x, size.Height)
 		objs = append(objs, line)
 	}
-	for y := float32(0); y <= size.Height; y += gridSpacing {
+	for y := origin.Y - floorTo(origin.Y, gridSpacing); y <= size.Height; y += gridSpacing {
 		line := canvas.NewLine(ColorGrid)
 		line.Position1 = fyne.NewPos(0, y)
 		line.Position2 = fyne.NewPos(size.Width, y)

@@ -1,7 +1,7 @@
 # ANIFile Animation Maker — Technical Specification (v2: Rigged/Parts Model)
 
 **Version**: 2.0 (supersedes v1 in full — this is not an extension of the old design, it's a replacement)
-**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`, then revised twice more the same day from hands-on use: Directions changed from free-form strings to plain ints, and a `CanvasWidth`/`CanvasHeight` working area was added (both reflected below); the UI was reworked into a level-editor interaction (drag tiles onto a canvas) and then further into a fully interactive canvas (click/drag placed parts) with a real scrubbable timeline — see `map/objects/animaker.md` for the UI history in detail. Known, deliberate implementation gaps (nested-animation preview rendering, visual rotation in the canvas, no drag-to-retime on the timeline) are tracked there, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
+**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`, then revised twice more the same day from hands-on use: Directions changed from free-form strings to plain ints; the UI was reworked into a level-editor interaction (drag tiles onto a canvas) and then further into a fully interactive canvas (click/drag placed parts) with a real scrubbable timeline — see `map/objects/animaker.md` for the UI history in detail. Revised again 2026-09-19 from hands-on use: the `CanvasWidth`/`CanvasHeight` "working area" became a `RefBoxWidth`/`RefBoxHeight` placement guide over an unbounded space, new tracks seed directions 0-3, and the timeline gained a scrubbable range that extends past the last keyframe (all reflected below). Known, deliberate implementation gaps (nested-animation preview rendering, visual rotation in the canvas, no drag-to-retime on the timeline) are tracked there, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
 **Language**: Go
 **GUI Framework**: Fyne
 **File format**: TOML (consistent with the rest of `animaker/pkg/file`)
@@ -44,7 +44,8 @@ Track (= one .anif file, one named motion — "human_walk.anif")
 
 - **Track = one file, one motion.** `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif`, `human_hurt.anif`, `base_wood_torch.anif` are each their own `Track`. There is no wrapping "character" file — see [Props](#props) for why, and what that costs.
 - **Direction is first-class, not a prop, and is a plain int, not a name.** Each direction a `Track` defines is a fully independent set of Parts and Keyframes — art commonly differs enough by facing (back of the head vs. front of it) that sharing one timeline across directions doesn't hold up. Direction keys are `int` (matching the game's own 0=up/1=right/2=down/3=left convention, decided 2026-09-18 — originally spec'd as free-form strings like `"up"`, changed once actual editor use showed a plain int was simpler to work with); a non-directional thing (a treasure chest) just defines key `0`.
-- **A Track defines its own working area.** `CanvasWidth`/`CanvasHeight` (added 2026-09-18) give the animation a concrete `0,0`-to-`(W,H)` space parts are placed within — not just an unbounded coordinate space.
+- **A Track carries a reference box, not a working area.** `RefBoxWidth`/`RefBoxHeight` (48x64 by default) size a character-sized guide the editor draws from the origin down-right, so parts can be placed relative to a real body footprint. It is *only* a guide: the coordinate space is unbounded and parts may sit at negative coordinates above or left of the origin (a raised sword, a trailing cape). These replaced the `CanvasWidth`/`CanvasHeight` "working area" of 2026-09-18, which implied a bound that never actually existed and forced the editor's canvas to clip rather than grow. Files written with the old `canvas_width`/`canvas_height` keys load with the defaults.
+- **Directions are the artist's to manage.** A new Track is seeded with four empty directions (0-3), but nothing in the editor propagates parts or keyframes between directions on the artist's behalf — an animation may legitimately define parts in only some facings.
 - **Parts are free-form per Track.** No fixed schema/template of "every character always has exactly these 10 parts" — each `.anif` declares whatever named parts it needs.
 - **Keyframes share tick times within a Direction.** All Parts in one Direction are evaluated against the same timeline positions — "keyframe 3" means the same instant for every part. This was chosen for simplicity over independent per-part timing, and it pays off at runtime: resolving "current segment + interpolation fraction" happens once per instance per frame, not once per part.
 
@@ -52,8 +53,8 @@ Track (= one .anif file, one named motion — "human_walk.anif")
 type Track struct {
     Metadata     TrackMetadata
     Props        []PropDef            // see Props section
-    CanvasWidth  int                  // the animation's 0,0-to-(W,H) working area
-    CanvasHeight int
+    RefBoxWidth  int                  // character-sized placement guide drawn from the origin
+    RefBoxHeight int                  // (a guide only - the coordinate space is unbounded)
     Directions   map[int]*Direction   // 0=up, 1=right, 2=down, 3=left by convention; any int works
 }
 
@@ -158,8 +159,8 @@ type PropDef struct {
 [metadata]
 name = "human_walk"
 version = "1.0"
-canvas_width = 256
-canvas_height = 256
+ref_box_width = 48
+ref_box_height = 64
 
 [[props]]
 name = "hair"

@@ -153,12 +153,18 @@ func (pp *PropertiesPanel) refreshPaletteLabel() {
 		pp.paletteLabel.SetText(part.Name + " (nested - no sheet)")
 	default:
 		name := pp.project.ResolveActiveSheetName(part)
-		if name == "" {
+		sheet := pp.project.LoadedSheets[name]
+		switch {
+		case name == "":
 			pp.paletteLabel.SetText(part.Name + ": no sheet bound")
-		} else if _, ok := pp.project.LoadedSheets[name]; !ok {
+		case sheet == nil:
 			pp.paletteLabel.SetText(part.Name + ": " + name + " (not loaded)")
-		} else {
-			pp.paletteLabel.SetText(part.Name + ": " + name)
+		default:
+			// The cell grid is spelled out because getting Cell Width/Height
+			// wrong at import is the easiest mistake to make here, and the
+			// resulting slicing is otherwise only visible by eye.
+			pp.paletteLabel.SetText(fmt.Sprintf("%s: %s — %dx%d cells of %dx%dpx",
+				part.Name, name, sheet.Cols(), sheet.Rows(), sheet.CellW, sheet.CellH))
 		}
 	}
 }

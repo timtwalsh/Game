@@ -12,9 +12,13 @@ type Track struct {
 	Metadata TrackMetadata
 	Props    []PropDef
 
-	// CanvasWidth/Height define the animation's working area, 0,0 to
-	// (CanvasWidth, CanvasHeight) — the space parts are placed within.
-	CanvasWidth, CanvasHeight int
+	// RefBoxWidth/Height size the "character-sized" reference box the
+	// editor draws from the origin down-right, as a placement guide only.
+	// It is NOT a working area or a clip region: parts may sit anywhere,
+	// including at negative coordinates above/left of the origin (a raised
+	// sword, a trailing cape). The editor's canvas grows to fit whatever
+	// is actually placed rather than bounding it — see pkg/ui/canvas.go.
+	RefBoxWidth, RefBoxHeight int
 
 	// Directions are keyed by a plain int (0, 1, 2, ...) matching the
 	// game's own direction convention (0=up, 1=right, 2=down, 3=left),
@@ -44,7 +48,8 @@ type Direction struct {
 }
 
 // TotalDurationMs is the span of this direction's timeline: the latest
-// keyframe time across all its parts.
+// keyframe time across all its parts. This is the animation's real length —
+// what playback loops over.
 func (d *Direction) TotalDurationMs() uint32 {
 	var max uint32
 	for _, p := range d.Parts {
@@ -55,6 +60,27 @@ func (d *Direction) TotalDurationMs() uint32 {
 		}
 	}
 	return max
+}
+
+// MinTimelineMs / TimelineHeadroomMs keep the scrubbable range strictly
+// ahead of the last keyframe.
+const (
+	MinTimelineMs      = 1000
+	TimelineHeadroomMs = 500
+)
+
+// EditableDurationMs is how far the playhead may be scrubbed, which is
+// deliberately longer than TotalDurationMs. Clamping the playhead to the
+// real duration is a deadlock: a brand-new part has one keyframe at 0ms, so
+// the duration is 0, so the playhead can't leave 0ms, so "New Keyframe"
+// (which adds at the playhead, and dedupes an exact time collision) can
+// never add a second one. There must always be empty time ahead to scrub
+// into and drop the next keyframe onto.
+func (d *Direction) EditableDurationMs() uint32 {
+	if total := d.TotalDurationMs(); total+TimelineHeadroomMs > MinTimelineMs {
+		return total + TimelineHeadroomMs
+	}
+	return MinTimelineMs
 }
 
 type PartKind int
@@ -109,24 +135,33 @@ type Keyframe struct {
 	Row, Col    int // Sheet kind only
 }
 
-// DefaultCanvasWidth/Height seed a new track's working area; freely
-// editable afterward, this is just a sane starting size.
+// DefaultRefBoxWidth/Height size the reference box to roughly one
+// character, matching the game's own sprite footprint. Freely editable per
+// track; this is just a sane starting guide.
 const (
-	DefaultCanvasWidth  = 256
-	DefaultCanvasHeight = 256
+	DefaultRefBoxWidth  = 48
+	DefaultRefBoxHeight = 64
 )
 
-// NewTrack creates a track with a single direction (key 0) and no parts.
+// DefaultDirectionKeys are the four facings every track starts with, in the
+// game's own convention. A track almost always needs all four, and adding
+// them up front is cheaper than making the artist create each by hand;
+// unused ones simply stay empty and cost nothing on disk beyond a header.
+var DefaultDirectionKeys = []int{0, 1, 2, 3} // 0=up, 1=right, 2=down, 3=left
+
+// NewTrack creates a track with the four default directions and no parts.
 func NewTrack(name string) *Track {
 	now := time.Now()
+	dirs := make(map[int]*Direction, len(DefaultDirectionKeys))
+	for _, k := range DefaultDirectionKeys {
+		dirs[k] = &Direction{Parts: []*Part{}}
+	}
 	return &Track{
 		Metadata:     TrackMetadata{Name: name, Version: "1.0", CreatedAt: now, UpdatedAt: now},
 		Props:        []PropDef{},
-		CanvasWidth:  DefaultCanvasWidth,
-		CanvasHeight: DefaultCanvasHeight,
-		Directions: map[int]*Direction{
-			0: {Parts: []*Part{}},
-		},
+		RefBoxWidth:  DefaultRefBoxWidth,
+		RefBoxHeight: DefaultRefBoxHeight,
+		Directions:   dirs,
 	}
 }
 

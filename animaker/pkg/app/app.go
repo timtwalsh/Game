@@ -406,7 +406,8 @@ func (a *Application) onImportSpriteSheet() {
 		msg := fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.",
 			name, cellW, cellH, tmpl.Cols(), tmpl.Rows())
 		if created {
-			msg += fmt.Sprintf("\n\nAdded part %q and selected it — its tiles are now in the left panel. Drag one onto the canvas to place a keyframe.", name)
+			msg += fmt.Sprintf("\n\nAdded part %q to direction %d and selected it — its tiles are now in the left panel. Drag one onto the canvas to place a keyframe.",
+				name, a.Project.Playback.ActiveDirection)
 		} else {
 			msg += "\n\nPick a part on the right and set its sheet to this one to draw with it."
 		}
@@ -418,12 +419,20 @@ func (a *Application) onImportSpriteSheet() {
 // so a freshly imported sheet is immediately visible and draggable. Returns
 // false if there's no active direction to add it to.
 func (a *Application) addPartForSheet(sheetName string) bool {
+	return a.addPart(editor.NewSheetPart(sheetName, "", sheetName))
+}
+
+// addPart adds the part to the active direction only and selects it.
+// Deliberately scoped to one direction: managing which directions an
+// animation has parts in is the artist's call, not the editor's, so nothing
+// here fans a part out across facings on their behalf.
+func (a *Application) addPart(part *editor.Part) bool {
 	dir := a.Project.ActiveDirection()
 	if dir == nil {
 		return false
 	}
 	a.Project.RecordUndo()
-	editor.AddPart(dir, editor.NewSheetPart(sheetName, "", sheetName))
+	editor.AddPart(dir, part)
 	a.properties.SelectPart(len(dir.Parts) - 1)
 	a.Project.Dirty = true
 	return true
@@ -452,21 +461,13 @@ func (a *Application) onAddPart() {
 		propNames = append(propNames, p.Name)
 	}
 	ui.ShowAddPartDialog(a.Window, propNames, a.Project.LoadedSheetNames(), func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
-		dir := a.Project.ActiveDirection()
-		if dir == nil {
-			return
-		}
-		a.Project.RecordUndo()
-		var part *editor.Part
-		if kind == editor.PartKindNestedAni {
-			part = editor.NewNestedAniPart(name, nestedPath)
-		} else {
-			part = editor.NewSheetPart(name, governingProp, fixedSheet)
-		}
-		editor.AddPart(dir, part)
-		// Select it straight away, so the left palette switches to its sheet
+		// Selected straight away, so the left palette switches to its sheet
 		// and the artist can drag a tile without a second click.
-		a.properties.SelectPart(len(dir.Parts) - 1)
+		if kind == editor.PartKindNestedAni {
+			a.addPart(editor.NewNestedAniPart(name, nestedPath))
+		} else {
+			a.addPart(editor.NewSheetPart(name, governingProp, fixedSheet))
+		}
 		a.refreshAll()
 	})
 }

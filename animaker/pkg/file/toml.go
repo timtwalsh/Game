@@ -24,8 +24,8 @@ type tomlTrack struct {
 type tomlTrackMeta struct {
 	Name         string `toml:"name"`
 	Version      string `toml:"version"`
-	CanvasWidth  int    `toml:"canvas_width"`
-	CanvasHeight int    `toml:"canvas_height"`
+	RefBoxWidth  int    `toml:"ref_box_width"`
+	RefBoxHeight int    `toml:"ref_box_height"`
 }
 
 type tomlPropDef struct {
@@ -94,7 +94,7 @@ func SaveTrack(t *editor.Track, path string) error {
 	tt := tomlTrack{
 		Metadata: tomlTrackMeta{
 			Name: t.Metadata.Name, Version: t.Metadata.Version,
-			CanvasWidth: t.CanvasWidth, CanvasHeight: t.CanvasHeight,
+			RefBoxWidth: t.RefBoxWidth, RefBoxHeight: t.RefBoxHeight,
 		},
 		Directions: make(map[string]tomlDirection, len(t.Directions)),
 	}
@@ -147,15 +147,17 @@ func LoadTrack(path string) (*editor.Track, error) {
 
 	t := &editor.Track{
 		Metadata:     editor.TrackMetadata{Name: tt.Metadata.Name, Version: tt.Metadata.Version},
-		CanvasWidth:  tt.Metadata.CanvasWidth,
-		CanvasHeight: tt.Metadata.CanvasHeight,
+		RefBoxWidth:  tt.Metadata.RefBoxWidth,
+		RefBoxHeight: tt.Metadata.RefBoxHeight,
 		Directions:   make(map[int]*editor.Direction, len(tt.Directions)),
 	}
-	if t.CanvasWidth == 0 {
-		t.CanvasWidth = editor.DefaultCanvasWidth
+	// Also catches tracks written before these keys existed (or under their
+	// old canvas_width/canvas_height names), which decode as zero.
+	if t.RefBoxWidth <= 0 {
+		t.RefBoxWidth = editor.DefaultRefBoxWidth
 	}
-	if t.CanvasHeight == 0 {
-		t.CanvasHeight = editor.DefaultCanvasHeight
+	if t.RefBoxHeight <= 0 {
+		t.RefBoxHeight = editor.DefaultRefBoxHeight
 	}
 	for _, p := range tt.Props {
 		t.Props = append(t.Props, editor.PropDef{Name: p.Name, Default: p.Default})

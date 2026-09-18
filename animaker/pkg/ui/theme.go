@@ -75,6 +75,10 @@ var (
 	ColorCanvasBackground = color.RGBA{R: 24, G: 24, B: 28, A: 255}
 	ColorGrid             = color.RGBA{R: 128, G: 128, B: 128, A: 30}
 	ColorOriginCrosshair  = color.RGBA{R: 80, G: 200, B: 80, A: 180}
+	// ColorRefBox outlines the character-sized placement guide drawn from
+	// the origin down-right. Deliberately distinct from the crosshair so
+	// the box reads as a guide rather than part of the axes.
+	ColorRefBox = color.RGBA{R: 90, G: 140, B: 220, A: 150}
 
 	// Hitbox colors
 	ColorCollisionBox       = color.RGBA{R: 0, G: 120, B: 255, A: 80}

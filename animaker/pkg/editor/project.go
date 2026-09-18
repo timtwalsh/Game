@@ -222,12 +222,12 @@ const scrubStepMs = 50
 func (p *Project) StepForward() {
 	p.Playback.IsPlaying = false
 	dir := p.ActiveDirection()
-	total := uint32(0)
+	limit := uint32(0)
 	if dir != nil {
-		total = dir.TotalDurationMs()
+		limit = dir.EditableDurationMs()
 	}
 	p.Playback.ElapsedMs += scrubStepMs
-	if total > 0 && p.Playback.ElapsedMs > total {
+	if limit > 0 && p.Playback.ElapsedMs > limit {
 		p.Playback.ElapsedMs = 0
 	}
 }
@@ -237,7 +237,7 @@ func (p *Project) StepBackward() {
 	if p.Playback.ElapsedMs < scrubStepMs {
 		dir := p.ActiveDirection()
 		if dir != nil {
-			p.Playback.ElapsedMs = dir.TotalDurationMs()
+			p.Playback.ElapsedMs = dir.EditableDurationMs()
 			return
 		}
 		p.Playback.ElapsedMs = 0
@@ -255,22 +255,26 @@ func (p *Project) SetActiveDirection(key int) {
 	p.Playback.ActiveDirection = key
 	p.Playback.ElapsedMs = 0
 	p.Playback.IsPlaying = false
+	// Selection is cleared rather than carried across by index: each
+	// direction owns its own part list, and the editor doesn't keep those
+	// lists in step, so the same index can mean an unrelated part.
 	p.Selection.PartIndex = -1
 	p.Selection.KeyframeIndex = -1
 }
 
-// Seek moves the playhead directly to timeMs, clamped to the active
-// direction's duration, without changing IsPlaying. Used by the timeline's
-// scrub bar.
+// Seek moves the playhead directly to timeMs without changing IsPlaying.
+// Used by the timeline's scrub bar. It clamps to EditableDurationMs, not
+// TotalDurationMs — clamping to the latter made the playhead unmovable on a
+// track whose only keyframe is at 0ms, which in turn made it impossible to
+// ever add a second keyframe. See Direction.EditableDurationMs.
 func (p *Project) Seek(timeMs uint32) {
 	dir := p.ActiveDirection()
 	if dir == nil {
 		p.Playback.ElapsedMs = 0
 		return
 	}
-	total := dir.TotalDurationMs()
-	if timeMs > total {
-		timeMs = total
+	if limit := dir.EditableDurationMs(); timeMs > limit {
+		timeMs = limit
 	}
 	p.Playback.ElapsedMs = timeMs
 }
