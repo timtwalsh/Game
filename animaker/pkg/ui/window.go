@@ -24,7 +24,9 @@ func BuildMainLayout(
 	return container.NewBorder(directionBar, nil, nil, nil, mainSplit)
 }
 
-// BuildMenuBar creates the application menu bar.
+// BuildMenuBar creates the application menu bar. Rig-building actions (add
+// direction/prop/part) deliberately live in the panels themselves, not
+// here — see the direction bar and PropertiesPanel's PARTS/PROPS sections.
 func BuildMenuBar(
 	onNew func(),
 	onOpen func(),
@@ -35,9 +37,6 @@ func BuildMenuBar(
 	onRedo func(),
 	onToggleGrid func(),
 	onZoom func(float32),
-	onAddDirection func(),
-	onAddProp func(),
-	onAddPart func(),
 ) *fyne.MainMenu {
 	fileMenu := fyne.NewMenu("File",
 		fyne.NewMenuItem("New Track", onNew),
@@ -52,12 +51,6 @@ func BuildMenuBar(
 	editMenu := fyne.NewMenu("Edit",
 		fyne.NewMenuItem("Undo", onUndo),
 		fyne.NewMenuItem("Redo", onRedo),
-	)
-
-	rigMenu := fyne.NewMenu("Rig",
-		fyne.NewMenuItem("Add Direction...", onAddDirection),
-		fyne.NewMenuItem("Add Prop...", onAddProp),
-		fyne.NewMenuItem("Add Part...", onAddPart),
 	)
 
 	viewMenu := fyne.NewMenu("View",
@@ -75,5 +68,5 @@ func BuildMenuBar(
 		}),
 	)
 
-	return fyne.NewMainMenu(fileMenu, editMenu, rigMenu, viewMenu, helpMenu)
+	return fyne.NewMainMenu(fileMenu, editMenu, viewMenu, helpMenu)
 }

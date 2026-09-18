@@ -97,18 +97,23 @@ feedback after using the previous version:
     the drop landed inside the canvas and does the coordinate conversion.
     This is the *only* way a new part gets its first keyframe/art; the
     canvas's own drag only repositions what's already there.
-  - `properties.go` — the level-editor-style right panel: an Import
-    button, a part **list** (buttons + per-row Delete — deliberately not
-    a `Select`, see [Known gaps](#known-gaps-not-bugs)) with `SelectPart`
-    exported so canvas taps and list clicks stay in sync, inline
-    governing-prop/fixed-sheet linking for the selected part, that part's
-    `SheetGridWidget` (or a nested-bindings editor), the selected
-    keyframe's numeric transform fields (for fine-tuning after a drop or
-    a canvas drag), and the props schema / preview-override sections.
+  - `properties.go` — the level-editor-style right panel: Import + **Add
+    Part** buttons, a part **list** (buttons + per-row Delete —
+    deliberately not a `Select`, see [Known gaps](#known-gaps-not-bugs))
+    with `SelectPart` exported so canvas taps and list clicks stay in
+    sync, inline governing-prop/fixed-sheet linking for the selected
+    part, that part's `SheetGridWidget` (or a nested-bindings editor),
+    the selected keyframe's numeric transform fields (for fine-tuning
+    after a drop or a canvas drag), and the props schema (with its own
+    **Add Prop** button) / preview-override sections.
   - `dialogs.go`, `window.go`, `theme.go` — mostly self-explanatory;
     `theme.go` is untouched by the v2 rewrite (pure color/theme, no
     dependency on the domain model). `window.go`'s `BuildMainLayout` is
     two nested splits: 50/50 canvas-vs-properties, 75/25 that-row-vs-timeline.
+    `BuildMenuBar` **no longer has a Rig menu** (removed 2026-09-18) —
+    Add Direction/Prop/Part are buttons in the panels that actually need
+    them (direction bar, PARTS section, PROPS section) instead of a
+    separate menu, so the action lives next to the thing it affects.
 - `pkg/file/` — persistence: `toml.go` (`SaveTrack`/`LoadTrack` for
   `.anif`, `SaveSheetTemplate`/`LoadSheetTemplate` for `.sprsh`),
   `image.go` (unchanged — generic image loading/cropping).

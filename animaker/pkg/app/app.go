@@ -70,9 +70,6 @@ func (a *Application) Run() {
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
 		a.onZoom,
-		a.onAddDirection,
-		a.onAddProp,
-		a.onAddPart,
 	)
 	a.Window.SetMainMenu(menu)
 
@@ -100,7 +97,9 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 	})
 	a.refreshDirectionSelect()
 
-	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel)
+	addDirBtn := widget.NewButton("+ Add Direction", a.onAddDirection)
+
+	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel, addDirBtn)
 }
 
 func (a *Application) refreshDirectionSelect() {
@@ -210,6 +209,8 @@ func (a *Application) wireCallbacks() {
 
 	// -- Properties --
 	a.properties.OnImport = a.onImportSpriteSheet
+	a.properties.OnAddPart = a.onAddPart
+	a.properties.OnAddProp = a.onAddProp
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
 	a.properties.OnPartRemoved = func(idx int) {
 		if a.Project.Selection.PartIndex == idx {

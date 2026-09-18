@@ -32,6 +32,8 @@ type PropertiesPanel struct {
 	// actual drop-to-keyframe logic.
 	OnTileDropped     func(partIdx, row, col int, absPos fyne.Position)
 	OnImport          func()
+	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
+	OnAddProp         func()
 	OnPartChanged     func()
 	OnPartRemoved     func(idx int)
 	OnKeyframeChanged func()
@@ -52,6 +54,16 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 			pp.OnImport()
 		}
 	})
+	addPartBtn := widget.NewButton("+ Add Part", func() {
+		if pp.OnAddPart != nil {
+			pp.OnAddPart()
+		}
+	})
+	addPropBtn := widget.NewButton("+ Add Prop", func() {
+		if pp.OnAddProp != nil {
+			pp.OnAddProp()
+		}
+	})
 
 	pp.partListBox = container.NewVBox()
 	pp.partLinkBox = container.NewVBox()
@@ -69,9 +81,8 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 
 	partArea := container.NewVBox(
 		newSectionHeader("PARTS"),
-		importBtn,
+		container.NewHBox(importBtn, addPartBtn),
 		pp.partListBox,
-		widget.NewLabel("(also addable via the Rig menu)"),
 		pp.partLinkBox,
 		container.NewScroll(pp.sheetGrid),
 	)
@@ -82,7 +93,7 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 		newSectionHeader("SELECTED KEYFRAME"),
 		pp.keyframeBox,
 		widget.NewSeparator(),
-		newSectionHeader("PROPS (schema)"),
+		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn),
 		pp.schemaBox,
 		widget.NewSeparator(),
 		newSectionHeader("PREVIEW OVERRIDES"),
