@@ -34,6 +34,27 @@ feedback after using the previous version:
    ruler (`pkg/ui/timeline.go`'s `scrubArea`) instead of a row of buttons,
    with explicit Play/Stop (not one toggle) and New/Delete Keyframe
    actions.
+3. Third rework (still 2026-09-18): the standalone Rig menu (Add
+   Direction/Prop/Part) was removed in favor of buttons in the panels
+   each action actually affects, and the properties panel's sections were
+   split into resizable `VSplit` panes instead of one long scrolling
+   column, since the sheet grid needed real room.
+4. Fourth rework (2026-09-19), on explicit reference to GraalOnline's
+   GANI/GraalShop animation editor
+   (https://graalonline.net/index.php/Creation/Dev/Gani/Tutorial — the
+   same problem domain: 2D top-down multi-part sprite rigs): the sheet
+   grid moved out of the right panel entirely into its own persistent
+   **left column** (`PropertiesPanel.BuildPalette`), matching GraalShop's
+   "Sprite Book"; the direction bar moved from a separate top strip into
+   a header embedded in the right column; and the selected keyframe
+   gained a nudge D-pad (X/Y ±1, Z forward/back, rotation ±5°) alongside
+   the existing numeric entries, matching GraalShop's arrow-button
+   nudging. `GANI`'s `setbackto` field (auto-chaining one animation into
+   another on completion) was considered and explicitly **not** adopted
+   — see the session's design discussion: it would duplicate the
+   character controller's state machine's authority over transitions,
+   which are usually context-dependent (input/health/combo state) in a
+   way a static per-asset field can't express without asset duplication.
 
 ## Shape
 
@@ -97,29 +118,40 @@ feedback after using the previous version:
     the drop landed inside the canvas and does the coordinate conversion.
     This is the *only* way a new part gets its first keyframe/art; the
     canvas's own drag only repositions what's already there.
-  - `properties.go` — the level-editor-style right panel: Import + **Add
-    Part** buttons, a part **list** (buttons + per-row Delete —
-    deliberately not a `Select`, see [Known gaps](#known-gaps-not-bugs))
-    with `SelectPart` exported so canvas taps and list clicks stay in
-    sync, inline governing-prop/fixed-sheet linking for the selected
-    part, that part's `SheetGridWidget` (or a nested-bindings editor),
-    the selected keyframe's numeric transform fields (for fine-tuning
-    after a drop or a canvas drag), and the props schema (with its own
-    **Add Prop** button) / preview-override sections. As of 2026-09-19,
-    these aren't just stacked in one scrolling column — every section is
-    its own pane in a tree of nested `container.NewVSplit`s (Fyne splits
-    only take two children each), so each has a draggable resize handle.
-    The PARTS section is itself split internally (part list/link vs. the
-    sheet grid), defaulted to give the sheet grid the majority of the
-    space, since that's what was getting squeezed down before.
+  - `properties.go` — **as of 2026-09-19, builds two separate panels**,
+    not one (see [Why this shape](#why-this-shape) for the GraalShop
+    reference this layout is borrowed from):
+    - `BuildPalette()` — the **left column**: just the selected part's
+      `SheetGridWidget` (its "Sprite Book" equivalent), scoped to
+      whichever part is selected rather than showing every loaded sheet
+      at once, since a dropped tile needs an unambiguous target part.
+      A header label names the part and its resolved sheet.
+    - `Build(directionBar)` — the **right column**: takes the direction
+      bar (built in `app.go`, embedded here as a fixed header via
+      `container.NewBorder` rather than its own separate top strip) +
+      Import/Add Part buttons, the part **list** (buttons + per-row
+      Delete — deliberately not a `Select`, see
+      [Known gaps](#known-gaps-not-bugs)) with `SelectPart` exported so
+      canvas taps and list clicks stay in sync, inline
+      governing-prop/fixed-sheet linking for the selected part, the
+      selected keyframe's numeric transform fields *plus* a nudge D-pad
+      (X/Y ±1, Z forward/back, rotation ±5° — `buildNudgeControls`,
+      also a GraalShop borrow) for fine-tuning without retyping numbers,
+      a nested-bindings editor when relevant, and the props schema
+      (with its own **Add Prop** button) / preview-override sections.
+      Every section here is its own pane in a tree of nested
+      `container.NewVSplit`s (Fyne splits only take two children each),
+      so each has a draggable resize handle.
   - `dialogs.go`, `window.go`, `theme.go` — mostly self-explanatory;
     `theme.go` is untouched by the v2 rewrite (pure color/theme, no
     dependency on the domain model). `window.go`'s `BuildMainLayout` is
-    two nested splits: 50/50 canvas-vs-properties, 75/25 that-row-vs-timeline.
-    `BuildMenuBar` **no longer has a Rig menu** (removed 2026-09-18) —
-    Add Direction/Prop/Part are buttons in the panels that actually need
-    them (direction bar, PARTS section, PROPS section) instead of a
-    separate menu, so the action lives next to the thing it affects.
+    now three nested splits — 20% palette / 65% canvas / 35% properties
+    (two nested `HSplit`s) across the top, 75/25 that-row-vs-timeline —
+    instead of the earlier two-column canvas/properties arrangement; it
+    no longer takes a separate `directionBar` param since that moved
+    inside the properties panel. `BuildMenuBar` **has no Rig menu**
+    (removed 2026-09-18) — Add Direction/Prop/Part are buttons in the
+    panels that actually need them instead of a separate menu.
 - `pkg/file/` — persistence: `toml.go` (`SaveTrack`/`LoadTrack` for
   `.anif`, `SaveSheetTemplate`/`LoadSheetTemplate` for `.sprsh`),
   `image.go` (unchanged — generic image loading/cropping).
@@ -148,6 +180,18 @@ Deliberate scope cuts, not oversights:
 - **No drag-to-retime a keyframe marker** on the timeline ruler — moving
   a keyframe in time isn't wired to any UI action yet, only its transform
   values (via the properties panel or a canvas drag).
+- **No keyboard arrow-key nudging** — GraalShop supports both clicking
+  its nudge arrows and pressing the keyboard arrow keys for pixel-by-pixel
+  movement; only the click-buttons (`buildNudgeControls`) were built here.
+  Wiring plain (non-modifier) arrow keys risks conflicting with Fyne
+  `Entry` widgets' own cursor-movement handling, so it needs more care
+  than a quick add.
+- **The left palette shows only the selected part's active sheet**, not
+  every loaded sheet the way GraalShop's Sprite Book does — a deliberate
+  scoping choice, not a faithfulness gap: `SheetGridWidget.OnTileDropped`
+  only carries a `(row, col)`, so the target part (and therefore which
+  sheet a drop means) has to be established by which part is currently
+  selected, not inferred from an unscoped, all-sheets palette.
 - The two items `docs/ANI_MAKER_SPEC.md`'s own "Open questions" section
   flags (how one prop fans out to multiple physical sheets; the sword
   "bent state" mechanism) are exactly as unresolved in code as in that

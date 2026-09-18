@@ -56,9 +56,10 @@ func (a *Application) Run() {
 
 	directionBar := a.buildDirectionBar()
 	canvasScroll := container.NewScroll(a.canvasWidget)
-	propertiesPanel := a.properties.Build()
+	palettePanel := a.properties.BuildPalette()
+	propertiesPanel := a.properties.Build(directionBar)
 	timelinePanel := a.timeline.Build()
-	mainLayout := ui.BuildMainLayout(directionBar, canvasScroll, propertiesPanel, timelinePanel)
+	mainLayout := ui.BuildMainLayout(palettePanel, canvasScroll, propertiesPanel, timelinePanel)
 
 	menu := ui.BuildMenuBar(
 		a.onNewTrack,

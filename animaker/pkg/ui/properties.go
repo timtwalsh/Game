@@ -7,25 +7,29 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
 
-// PropertiesPanel is the level-editor-style right panel: import a sheet,
-// pick a part from a list (with delete), link it to a prop (or a fixed
-// sheet) right there, and see that part's active sheet as a draggable
-// tile grid (SheetGridWidget) — or a bindings editor for a NestedAni
-// part. Below that: the selected keyframe's numeric fields (for
-// fine-tuning after a drag-drop or a canvas move), and the track-level
-// props schema / preview overrides.
+// PropertiesPanel owns two separate panels, built by two separate calls:
+// Build() is the right column — direction bar, part list (with delete),
+// prop/fixed-sheet linking for the selected part, the selected keyframe's
+// transform fields plus nudge buttons (or a bindings editor for a
+// NestedAni part), and the props schema / preview overrides. BuildPalette()
+// is the left column — the selected part's active sheet as a draggable
+// tile grid (SheetGridWidget), GraalShop-style: always visible, not
+// nested inside another section. Both share the same underlying state
+// (pp.sheetGrid etc.) so a part/prop change refreshes both at once.
 type PropertiesPanel struct {
 	project *editor.Project
 
-	partListBox *fyne.Container
-	partLinkBox *fyne.Container
-	sheetGrid   *SheetGridWidget
-	keyframeBox *fyne.Container
-	schemaBox   *fyne.Container
-	previewBox  *fyne.Container
+	partListBox  *fyne.Container
+	partLinkBox  *fyne.Container
+	sheetGrid    *SheetGridWidget
+	paletteLabel *widget.Label
+	keyframeBox  *fyne.Container
+	schemaBox    *fyne.Container
+	previewBox   *fyne.Container
 
 	// OnTileDropped is forwarded from the active part's SheetGridWidget —
 	// app.go is the one that knows about the canvas, so it handles the
@@ -48,7 +52,11 @@ func (pp *PropertiesPanel) SetProject(project *editor.Project) {
 	pp.project = project
 }
 
-func (pp *PropertiesPanel) Build() fyne.CanvasObject {
+// Build assembles the right column. directionBar is embedded as a fixed
+// header above everything else — built and owned by app.go (it needs the
+// window's shortcut/undo plumbing), just placed here so it lives next to
+// the rest of the rig controls instead of its own separate top strip.
+func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObject {
 	importBtn := widget.NewButton("Import Sprite Sheet...", func() {
 		if pp.OnImport != nil {
 			pp.OnImport()
@@ -67,12 +75,7 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 
 	pp.partListBox = container.NewVBox()
 	pp.partLinkBox = container.NewVBox()
-	pp.sheetGrid = NewSheetGridWidget()
-	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
-		if pp.OnTileDropped != nil {
-			pp.OnTileDropped(pp.project.Selection.PartIndex, row, col, absPos)
-		}
-	}
+	pp.ensureSheetGrid()
 	pp.keyframeBox = container.NewVBox()
 	pp.schemaBox = container.NewVBox()
 	pp.previewBox = container.NewVBox()
@@ -81,18 +84,13 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 
 	// Every major section is its own resizable pane (nested VSplits, since
 	// Fyne's Split only takes two children) instead of one long scrolling
-	// VBox - the sheet grid in particular needs real room, and a fixed
-	// share in a stacked layout was squeezing it down regardless of how
-	// much was actually in the other sections.
-	partListAndLink := container.NewVBox(
+	// VBox.
+	partArea := container.NewVScroll(container.NewVBox(
 		newSectionHeader("PARTS"),
 		container.NewHBox(importBtn, addPartBtn),
 		pp.partListBox,
 		pp.partLinkBox,
-	)
-	sheetGridScroll := container.NewScroll(pp.sheetGrid)
-	partArea := container.NewVSplit(container.NewVScroll(partListAndLink), sheetGridScroll)
-	partArea.SetOffset(0.3) // list/link gets 30%, the sheet grid gets the rest by default
+	))
 
 	keyframeArea := container.NewVScroll(container.NewVBox(
 		newSectionHeader("SELECTED KEYFRAME"), pp.keyframeBox,
@@ -108,11 +106,52 @@ func (pp *PropertiesPanel) Build() fyne.CanvasObject {
 	propsAndPreview.SetOffset(0.5)
 
 	keyframeAndBelow := container.NewVSplit(keyframeArea, propsAndPreview)
-	keyframeAndBelow.SetOffset(0.35)
+	keyframeAndBelow.SetOffset(0.4)
 
 	full := container.NewVSplit(partArea, keyframeAndBelow)
-	full.SetOffset(0.55) // PARTS (and its sheet grid) gets just over half by default
-	return full
+	full.SetOffset(0.3)
+
+	return container.NewBorder(directionBar, nil, nil, nil, full)
+}
+
+// BuildPalette assembles the left column: a persistent, always-visible
+// tile grid for the selected part's active sheet — GraalShop's "Sprite
+// Book", scoped to whichever part is currently selected rather than
+// showing every loaded sheet at once (which part a dropped tile applies
+// to is otherwise ambiguous, since OnTileDropped only carries a row/col,
+// not which sheet they came from).
+func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
+	pp.ensureSheetGrid()
+	pp.paletteLabel = widget.NewLabel("No part selected")
+	pp.refreshPaletteLabel()
+	return container.NewBorder(pp.paletteLabel, nil, nil, nil, container.NewScroll(pp.sheetGrid))
+}
+
+func (pp *PropertiesPanel) ensureSheetGrid() {
+	if pp.sheetGrid != nil {
+		return
+	}
+	pp.sheetGrid = NewSheetGridWidget()
+	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
+		if pp.OnTileDropped != nil {
+			pp.OnTileDropped(pp.project.Selection.PartIndex, row, col, absPos)
+		}
+	}
+}
+
+func (pp *PropertiesPanel) refreshPaletteLabel() {
+	if pp.paletteLabel == nil {
+		return
+	}
+	part := pp.project.SelectedPart()
+	switch {
+	case part == nil:
+		pp.paletteLabel.SetText("No part selected")
+	case part.Kind == editor.PartKindNestedAni:
+		pp.paletteLabel.SetText(part.Name + " (nested - no sheet)")
+	default:
+		pp.paletteLabel.SetText(part.Name + ": " + pp.project.ResolveActiveSheetName(part))
+	}
 }
 
 // Refresh rebuilds every section from current project state.
@@ -281,9 +320,10 @@ func (pp *PropertiesPanel) refreshSheetGrid() {
 	part := pp.project.SelectedPart()
 	if part == nil || part.Kind != editor.PartKindSheet {
 		pp.sheetGrid.SetSheet(nil)
-		return
+	} else {
+		pp.sheetGrid.SetSheet(pp.project.ResolveActiveSheet(part))
 	}
-	pp.sheetGrid.SetSheet(pp.project.ResolveActiveSheet(part))
+	pp.refreshPaletteLabel()
 }
 
 // -- Selected keyframe --
@@ -320,12 +360,62 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 	)
 	pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms  (row %d, col %d)", part.Name, kf.TimeMs, kf.Row, kf.Col)))
 	pp.keyframeBox.Add(grid)
+	pp.keyframeBox.Add(pp.buildNudgeControls(kf))
 
 	if part.Kind == editor.PartKindNestedAni {
 		pp.keyframeBox.Add(pp.buildNestedBindingsEditor(part))
 	}
 
 	pp.keyframeBox.Refresh()
+}
+
+// nudgeStep is how far one click of an arrow/+/- button moves a value —
+// GraalShop-style pixel-by-pixel nudging as a companion to typing exact
+// numbers into the entries above, not a replacement for them.
+const (
+	nudgeStepXY  = 1
+	nudgeStepZ   = 1
+	nudgeStepRot = 5
+)
+
+// buildNudgeControls returns a small D-pad for X/Y plus separate
+// forward/back buttons for Z (draw-order) and rotation. Unlike the typed
+// entries (which mutate in place without rebuilding, to avoid disrupting
+// an in-progress keystroke), a nudge click rebuilds the keyframe section
+// afterward so the entries visibly reflect the new value immediately.
+func (pp *PropertiesPanel) buildNudgeControls(kf *editor.Keyframe) fyne.CanvasObject {
+	nudge := func(apply func()) func() {
+		return func() {
+			apply()
+			pp.notifyKeyframeChanged()
+			pp.refreshKeyframe()
+		}
+	}
+
+	xyPad := container.NewGridWithColumns(3,
+		layout.NewSpacer(),
+		widget.NewButton("Y-", nudge(func() { kf.Y -= nudgeStepXY })),
+		layout.NewSpacer(),
+		widget.NewButton("X-", nudge(func() { kf.X -= nudgeStepXY })),
+		widget.NewLabel("pos"),
+		widget.NewButton("X+", nudge(func() { kf.X += nudgeStepXY })),
+		layout.NewSpacer(),
+		widget.NewButton("Y+", nudge(func() { kf.Y += nudgeStepXY })),
+		layout.NewSpacer(),
+	)
+
+	zRow := container.NewHBox(
+		widget.NewLabel("Z:"),
+		widget.NewButton("Back -", nudge(func() { kf.Z -= nudgeStepZ })),
+		widget.NewButton("Fwd +", nudge(func() { kf.Z += nudgeStepZ })),
+	)
+	rotRow := container.NewHBox(
+		widget.NewLabel("Rot:"),
+		widget.NewButton("-", nudge(func() { kf.RotationDeg -= nudgeStepRot })),
+		widget.NewButton("+", nudge(func() { kf.RotationDeg += nudgeStepRot })),
+	)
+
+	return container.NewVBox(xyPad, zRow, rotRow)
 }
 
 func (pp *PropertiesPanel) notifyKeyframeChanged() {
