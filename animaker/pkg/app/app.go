@@ -237,20 +237,30 @@ func (a *Application) wireCallbacks() {
 	// while the artist is still choosing where to drop.
 	a.properties.OnTileDragStart = func() { a.canvasWidget.SetViewFrozen(true) }
 	a.properties.OnTileDropped = a.onTileDropped
+	a.properties.OnTileTapped = a.onTileTapped
 }
 
 // onTileDropped is the core "level editor" interaction: dragging a cell
-// from the selected part's sheet grid onto the canvas creates or updates
-// a keyframe for that part at the current playhead time, with Row/Col from
-// the dragged cell and X/Y from wherever it landed on the canvas. Drops
-// outside the canvas's bounds are ignored.
-func (a *Application) onTileDropped(partIdx, row, col int, absPos fyne.Position) {
+// out of the palette onto the canvas adds it to the rig as a NEW part,
+// placed where it landed and showing the dragged cell. Dragging always
+// creates rather than modifying, exactly as dragging from a tile palette
+// does in a level editor, which is what makes it possible to build a rig
+// of several pieces visible at once — the previous behaviour bound every
+// drop to the selected part, so a second drag only ever added another
+// keyframe to the one part and a part shows one cell at a time.
+//
+// The two other jobs get their own gestures: drag a part already on the
+// canvas to move it, and click a palette tile to re-cell the selected
+// keyframe (onTileTapped).
+//
+// Drops outside the canvas's bounds are ignored.
+func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.Position) {
 	// The drop ends the gesture, so the view unfreezes here however this
-	// returns - including the two rejection paths below.
+	// returns - including the rejection paths below.
 	defer a.canvasWidget.SetViewFrozen(false)
 
-	dir, part := a.directionAndPart(partIdx)
-	if dir == nil {
+	dir := a.Project.ActiveDirection()
+	if dir == nil || sheetName == "" {
 		return
 	}
 
@@ -260,16 +270,38 @@ func (a *Application) onTileDropped(partIdx, row, col int, absPos fyne.Position)
 	if local.X < 0 || local.Y < 0 || local.X > canvasSize.Width || local.Y > canvasSize.Height {
 		return // dropped outside the canvas - not a placement
 	}
-
 	x, y := a.canvasWidget.LocalToAnimXY(local)
 
 	a.Project.RecordUndo()
+	part := editor.AddPart(a.Project.CurrentTrack,
+		editor.NewSheetPart(editor.UniquePartName(a.Project.CurrentTrack, sheetName), "", sheetName))
+
+	// Keyed at the playhead, so dropping while parked at 0ms builds up the
+	// rig's first pose and dropping later in the timeline starts that
+	// part's animation where the artist is actually working.
 	kf := editor.AddKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
 	kf.Row, kf.Col = row, col
 	kf.X, kf.Y = x, y
+	// Stack new parts in front of what's already there, so a piece dropped
+	// later isn't hidden behind one dropped earlier.
+	kf.Z = float32(len(a.Project.CurrentTrack.Parts))
 
-	a.Project.Selection.PartIndex = partIdx
+	a.properties.SelectPart(len(a.Project.CurrentTrack.Parts) - 1)
 	a.Project.Selection.KeyframeIndex = kf.ID
+	a.Project.Dirty = true
+	a.refreshAll()
+}
+
+// onTileTapped re-points the selected keyframe at a different cell of the
+// palette's sheet. This is the counterpart to dragging: a click edits what
+// is already selected, a drag creates something new.
+func (a *Application) onTileTapped(row, col int) {
+	kf := a.Project.SelectedKeyframe()
+	if kf == nil {
+		return
+	}
+	a.Project.RecordUndo()
+	kf.Row, kf.Col = row, col
 	a.Project.Dirty = true
 	a.refreshAll()
 }
@@ -379,15 +411,13 @@ func (a *Application) saveToPath(path string) {
 	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentTrack.Metadata.Name)
 }
 
-// onImportSpriteSheet imports a sheet AND immediately creates a Sheet part
-// bound to it, then selects that part. Importing used to only populate
-// Project.LoadedSheets, which left the editor looking completely unchanged:
-// the palette only draws the *selected part's* sheet, and a fresh track has
-// no parts, so the artist was dropped back on an empty screen with no
-// discoverable way forward (the only route was "+ Add Part" and typing the
-// sheet's name into a free-text box from memory). Creating the part here is
-// what makes the tiles actually appear. It's a normal undoable edit, so an
-// artist who wanted the sheet only as a prop target can Ctrl+Z or delete it.
+// onImportSpriteSheet imports a sheet and shows it in the palette. It does
+// NOT create a part any more: dragging a tile out of the palette is what
+// makes parts now, so a part created here would just be an empty one with
+// no keyframes, drawn nowhere. Pointing the palette at the new sheet is
+// what makes the import visibly do something — that was the original
+// complaint when import only filled LoadedSheets and changed nothing on
+// screen.
 func (a *Application) onImportSpriteSheet() {
 	ui.ShowImportSheetDialog(a.Window, func(filePath, name string, cellW, cellH int, pivotX, pivotY float32) {
 		img, err := file.LoadImage(filePath)
@@ -398,38 +428,27 @@ func (a *Application) onImportSpriteSheet() {
 
 		tmpl := editor.NewSpriteSheetTemplate(name, filePath, img, cellW, cellH, pivotX, pivotY)
 		a.Project.LoadedSheets[name] = tmpl
+		a.Project.PaletteSheet = name
 
 		sprshPath := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + ".sprsh"
 		if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
 			dialog.ShowError(fmt.Errorf("failed to save sheet template: %w", err), a.Window)
 		}
 
-		created := a.addPartForSheet(name)
 		a.refreshAll()
-
-		msg := fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.",
-			name, cellW, cellH, tmpl.Cols(), tmpl.Rows())
-		if created {
-			msg += fmt.Sprintf("\n\nAdded part %q to direction %d and selected it — its tiles are now in the left panel. Drag one onto the canvas to place a keyframe.",
-				name, a.Project.Playback.ActiveDirection)
-		} else {
-			msg += "\n\nPick a part on the right and set its sheet to this one to draw with it."
-		}
-		dialog.ShowInformation("Import Complete", msg, a.Window)
+		dialog.ShowInformation("Import Complete",
+			fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.\n\n"+
+				"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.",
+				name, cellW, cellH, tmpl.Cols(), tmpl.Rows()),
+			a.Window)
 	})
 }
 
-// addPartForSheet creates a Sheet part named after the sheet and selects it,
-// so a freshly imported sheet is immediately visible and draggable. Returns
-// false if there's no active direction to add it to.
-func (a *Application) addPartForSheet(sheetName string) bool {
-	return a.addPart(editor.NewSheetPart(sheetName, "", sheetName))
-}
-
-// addPart adds the part to the track's rig — so it exists in every
-// direction at once — and selects it. It starts with no keyframes anywhere;
-// posing it in each facing is the artist's work, and which facings they
-// bother to pose it in is their call.
+// addPart adds a part to the track's rig - so it exists in every
+// direction at once - and selects it. Used by the "+ Add Part" dialog,
+// which is the way to create a nested-animation part or a prop-governed
+// one; a plain sheet part is usually quicker to make by dragging a tile
+// out of the palette (onTileDropped).
 func (a *Application) addPart(part *editor.Part) bool {
 	track := a.Project.CurrentTrack
 	if track == nil {

@@ -261,9 +261,9 @@ func (cw *CanvasWidget) screenRectFor(d resolvedDraw) (pos fyne.Position, size f
 	origin := cw.originScreen()
 	w, h, px, py := cw.partExtentAnim(d.part)
 	return fyne.NewPos(
-			origin.X+(d.tr.X-px)*zoom,
-			origin.Y+(d.tr.Y-py)*zoom,
-		), fyne.NewSize(w*zoom, h*zoom)
+		origin.X+(d.tr.X-px)*zoom,
+		origin.Y+(d.tr.Y-py)*zoom,
+	), fyne.NewSize(w*zoom, h*zoom)
 }
 
 func posInRect(p fyne.Position, rectPos fyne.Position, rectSize fyne.Size) bool {

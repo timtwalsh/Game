@@ -143,6 +143,36 @@ feedback after using the previous version:
      the canvas's own `Dragged`/`DragEnd`, and `SheetGridWidget`'s new
      `OnDragStart` plus the existing drop callback for palette drags.
 
+9. **Dragging a tile now creates a new part** (2026-09-24), from
+   "it doesn't let me have multiple parts on the sheet simultaneously, I
+   should be able to have all of the parts on a sheet". Every drop used
+   to land on the *selected* part, so dragging three tiles produced
+   three keyframes of one part — and a part shows one cell at a time, so
+   only ever one piece was visible. Building a rig of several pieces
+   meant finding "+ Add Part" and naming each by hand first.
+
+   The three jobs now have three gestures, which is how a level editor
+   behaves and what the earlier level-editor rework was already reaching
+   for:
+   - **drag from the palette** -> add a new part to the rig, keyed at
+     the playhead, at the drop position, showing the dragged cell;
+   - **drag a part on the canvas** -> move its existing keyframe
+     (unchanged);
+   - **click a palette tile** -> re-cell the selected keyframe.
+
+   Consequences worth knowing: the palette no longer follows the part
+   selection (it has its own sheet picker in the left column, since a
+   drag must work with nothing selected and a drop has to know which
+   sheet the cell came from — `Project.PaletteSheet`); new parts are
+   named `<sheet>_N` via `editor.UniquePartName`, because the part list
+   and timeline are labelled by name and identical labels are unusable
+   even though identity is really the ID; a dropped part's Z is set from
+   the part count so later drops sit in front rather than behind; and
+   **import no longer creates a part**, which it briefly did (entry 5) —
+   pointing the palette at the freshly imported sheet is what makes an
+   import visibly do something now, and an auto-created part would just
+   be an empty one drawn nowhere.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to

@@ -37,6 +37,11 @@ type SheetGridWidget struct {
 	// duration of the gesture.
 	OnDragStart func()
 
+	// OnTileTapped fires on a plain click (no drag). Clicking re-assigns
+	// the selected keyframe's cell, where dragging creates a whole new
+	// part — two different jobs, so two different gestures.
+	OnTileTapped func(row, col int)
+
 	// OnTileDropped fires on DragEnd with the cell that was picked up and
 	// the absolute (window-relative) screen position the drag ended at.
 	// The caller (app.go) is responsible for checking whether that
@@ -123,7 +128,18 @@ func (g *SheetGridWidget) DragEnd() {
 	}
 }
 
+// Tapped implements fyne.Tappable. Fyne delivers a tap only when the
+// pointer didn't drag, so this can't fire for a drag gesture.
+func (g *SheetGridWidget) Tapped(e *fyne.PointEvent) {
+	if g.sheet == nil || g.OnTileTapped == nil {
+		return
+	}
+	row, col := g.cellAt(e.Position)
+	g.OnTileTapped(row, col)
+}
+
 var _ fyne.Draggable = (*SheetGridWidget)(nil)
+var _ fyne.Tappable = (*SheetGridWidget)(nil)
 
 func (g *SheetGridWidget) cellAt(pos fyne.Position) (row, col int) {
 	if g.sheet == nil || g.sheet.CellW <= 0 || g.sheet.CellH <= 0 {

@@ -88,14 +88,14 @@ var (
 	ColorHandlePoint        = color.RGBA{R: 255, G: 255, B: 255, A: 220}
 
 	// Timeline colors
-	ColorTimelineBackground  = color.RGBA{R: 28, G: 28, B: 34, A: 255}
-	ColorFrameBox            = color.RGBA{R: 50, G: 50, B: 60, A: 255}
-	ColorFrameBoxSelected    = color.RGBA{R: 70, G: 110, B: 180, A: 255}
-	ColorFrameBoxHover       = color.RGBA{R: 60, G: 60, B: 75, A: 255}
-	ColorScrubber            = color.RGBA{R: 255, G: 180, B: 50, A: 255}
+	ColorTimelineBackground = color.RGBA{R: 28, G: 28, B: 34, A: 255}
+	ColorFrameBox           = color.RGBA{R: 50, G: 50, B: 60, A: 255}
+	ColorFrameBoxSelected   = color.RGBA{R: 70, G: 110, B: 180, A: 255}
+	ColorFrameBoxHover      = color.RGBA{R: 60, G: 60, B: 75, A: 255}
+	ColorScrubber           = color.RGBA{R: 255, G: 180, B: 50, A: 255}
 
 	// Properties colors
-	ColorSectionHeader     = color.RGBA{R: 180, G: 200, B: 255, A: 255}
-	ColorSpritePickerBg    = color.RGBA{R: 35, G: 35, B: 42, A: 255}
-	ColorSpriteSelected    = color.RGBA{R: 100, G: 160, B: 255, A: 180}
+	ColorSectionHeader  = color.RGBA{R: 180, G: 200, B: 255, A: 255}
+	ColorSpritePickerBg = color.RGBA{R: 35, G: 35, B: 42, A: 255}
+	ColorSpriteSelected = color.RGBA{R: 100, G: 160, B: 255, A: 180}
 )

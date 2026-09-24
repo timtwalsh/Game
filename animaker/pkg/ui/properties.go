@@ -23,19 +23,21 @@ import (
 type PropertiesPanel struct {
 	project *editor.Project
 
-	partListBox  *fyne.Container
-	partLinkBox  *fyne.Container
-	sheetGrid    *SheetGridWidget
-	paletteLabel *widget.Label
-	keyframeBox  *fyne.Container
-	schemaBox    *fyne.Container
-	previewBox   *fyne.Container
+	partListBox   *fyne.Container
+	partLinkBox   *fyne.Container
+	sheetGrid     *SheetGridWidget
+	paletteLabel  *widget.Label
+	paletteSelect *widget.Select
+	keyframeBox   *fyne.Container
+	schemaBox     *fyne.Container
+	previewBox    *fyne.Container
 
 	// OnTileDropped is forwarded from the active part's SheetGridWidget —
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
 	OnTileDragStart   func()
-	OnTileDropped     func(partIdx, row, col int, absPos fyne.Position)
+	OnTileDropped     func(sheetName string, row, col int, absPos fyne.Position)
+	OnTileTapped      func(row, col int)
 	OnImport          func()
 	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
 	OnAddProp         func()
@@ -115,17 +117,50 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 	return container.NewBorder(directionBar, nil, nil, nil, full)
 }
 
-// BuildPalette assembles the left column: a persistent, always-visible
-// tile grid for the selected part's active sheet — GraalShop's "Sprite
-// Book", scoped to whichever part is currently selected rather than
-// showing every loaded sheet at once (which part a dropped tile applies
-// to is otherwise ambiguous, since OnTileDropped only carries a row/col,
-// not which sheet they came from).
+// BuildPalette assembles the left column: GraalShop's "Sprite Book" — a
+// picker for which loaded sheet to show, and that sheet's cells as a
+// draggable grid. It is deliberately independent of the part selection:
+// dragging a tile creates a *new* part, so the palette has to work before
+// any part exists, and it names its own sheet so a drop knows which sheet
+// the cell came from.
 func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 	pp.ensureSheetGrid()
-	pp.paletteLabel = widget.NewLabel("No part selected")
-	pp.refreshPaletteLabel()
-	return container.NewBorder(pp.paletteLabel, nil, nil, nil, container.NewScroll(pp.sheetGrid))
+	pp.paletteLabel = widget.NewLabel("")
+	// Assigned after the options/selection are seeded below, per the Fyne
+	// re-fire hazard noted on refreshPartList.
+	pp.paletteSelect = widget.NewSelect(nil, nil)
+	pp.paletteSelect.PlaceHolder = "(no sheet imported)"
+	pp.refreshPalette()
+	pp.paletteSelect.OnChanged = func(name string) {
+		pp.project.PaletteSheet = name
+		pp.refreshSheetGrid()
+	}
+
+	hint := widget.NewLabel("Drag a tile onto the canvas to add it as a new part. " +
+		"Click a tile to re-cell the selected keyframe.")
+	hint.Wrapping = fyne.TextWrapWord
+
+	header := container.NewVBox(pp.paletteSelect, pp.paletteLabel)
+	return container.NewBorder(header, hint, nil, nil, container.NewScroll(pp.sheetGrid))
+}
+
+// refreshPalette re-seeds the sheet picker from what's loaded, keeping the
+// current choice when it still exists and falling back to the first sheet
+// so the palette is never blank while a sheet is available.
+func (pp *PropertiesPanel) refreshPalette() {
+	if pp.paletteSelect == nil {
+		return
+	}
+	names := pp.project.LoadedSheetNames()
+	pp.paletteSelect.Options = names
+	if pp.project.PaletteSheet == "" && len(names) > 0 {
+		pp.project.PaletteSheet = names[0]
+	}
+	if pp.project.PaletteSheet != "" && pp.paletteSelect.Selected != pp.project.PaletteSheet {
+		pp.paletteSelect.Selected = pp.project.PaletteSheet
+	}
+	pp.paletteSelect.Refresh()
+	pp.refreshSheetGrid()
 }
 
 func (pp *PropertiesPanel) ensureSheetGrid() {
@@ -140,44 +175,40 @@ func (pp *PropertiesPanel) ensureSheetGrid() {
 	}
 	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
 		if pp.OnTileDropped != nil {
-			pp.OnTileDropped(pp.project.Selection.PartIndex, row, col, absPos)
+			pp.OnTileDropped(pp.project.PaletteSheet, row, col, absPos)
+		}
+	}
+	pp.sheetGrid.OnTileTapped = func(row, col int) {
+		if pp.OnTileTapped != nil {
+			pp.OnTileTapped(row, col)
 		}
 	}
 }
 
+// refreshPaletteLabel describes the sheet on show. Getting Cell
+// Width/Height wrong at import is the easiest mistake to make here and the
+// resulting slicing is otherwise only visible by eye, so the grid is
+// spelled out.
 func (pp *PropertiesPanel) refreshPaletteLabel() {
 	if pp.paletteLabel == nil {
 		return
 	}
-	part := pp.project.SelectedPart()
+	sheet := pp.project.PaletteSheetTemplate()
 	switch {
-	case part == nil && len(pp.project.LoadedSheets) == 0:
+	case len(pp.project.LoadedSheets) == 0:
 		pp.paletteLabel.SetText("Import a sprite sheet to begin")
-	case part == nil:
-		pp.paletteLabel.SetText("Select a part to show its tiles")
-	case part.Kind == editor.PartKindNestedAni:
-		pp.paletteLabel.SetText(part.Name + " (nested - no sheet)")
+	case sheet == nil:
+		pp.paletteLabel.SetText("Pick a sheet above")
 	default:
-		name := pp.project.ResolveActiveSheetName(part)
-		sheet := pp.project.LoadedSheets[name]
-		switch {
-		case name == "":
-			pp.paletteLabel.SetText(part.Name + ": no sheet bound")
-		case sheet == nil:
-			pp.paletteLabel.SetText(part.Name + ": " + name + " (not loaded)")
-		default:
-			// The cell grid is spelled out because getting Cell Width/Height
-			// wrong at import is the easiest mistake to make here, and the
-			// resulting slicing is otherwise only visible by eye.
-			pp.paletteLabel.SetText(fmt.Sprintf("%s: %s — %dx%d cells of %dx%dpx",
-				part.Name, name, sheet.Cols(), sheet.Rows(), sheet.CellW, sheet.CellH))
-		}
+		pp.paletteLabel.SetText(fmt.Sprintf("%dx%d cells of %dx%dpx",
+			sheet.Cols(), sheet.Rows(), sheet.CellW, sheet.CellH))
 	}
 }
 
 // Refresh rebuilds every section from current project state.
 func (pp *PropertiesPanel) Refresh() {
 	pp.refreshPartList()
+	pp.refreshPalette()
 	pp.refreshDependentSections()
 }
 
@@ -271,6 +302,17 @@ func (pp *PropertiesPanel) SelectPart(idx int) {
 func (pp *PropertiesPanel) selectPart(idx int) {
 	pp.project.Selection.PartIndex = idx
 	pp.project.Selection.KeyframeIndex = -1
+	// Follow the palette to this part's sheet. The palette doesn't depend
+	// on the selection any more, but bringing up the sheet a part draws
+	// from is what you almost always want next after clicking it.
+	if part := pp.project.SelectedPart(); part != nil && part.Kind == editor.PartKindSheet {
+		if name := pp.project.ResolveActiveSheetName(part); name != "" {
+			if _, ok := pp.project.LoadedSheets[name]; ok {
+				pp.project.PaletteSheet = name
+				pp.refreshPalette()
+			}
+		}
+	}
 	pp.refreshPartList()
 	pp.refreshDependentSections()
 	if pp.OnPartChanged != nil {
@@ -369,16 +411,14 @@ func sheetPickerOptions(loaded []string, current string) []string {
 	return append([]string{current}, loaded...)
 }
 
+// refreshSheetGrid shows whichever sheet the palette picker names. It is
+// no longer derived from the selected part: a drag creates a new part, so
+// the palette must work with nothing selected.
 func (pp *PropertiesPanel) refreshSheetGrid() {
 	if pp.sheetGrid == nil {
 		return
 	}
-	part := pp.project.SelectedPart()
-	if part == nil || part.Kind != editor.PartKindSheet {
-		pp.sheetGrid.SetSheet(nil)
-	} else {
-		pp.sheetGrid.SetSheet(pp.project.ResolveActiveSheet(part))
-	}
+	pp.sheetGrid.SetSheet(pp.project.PaletteSheetTemplate())
 	pp.refreshPaletteLabel()
 }
 

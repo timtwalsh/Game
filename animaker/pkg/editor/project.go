@@ -21,6 +21,14 @@ type Project struct {
 	// prop's Default.
 	PreviewProps map[string]string
 
+	// PaletteSheet is the sheet the left palette is currently showing.
+	// The palette is no longer tied to the selected part: dragging a tile
+	// creates a *new* part, so the palette has to stand on its own rather
+	// than following a selection that may not exist yet. Set on import,
+	// and followed along when a part is selected so clicking a part still
+	// brings up the sheet it draws from.
+	PaletteSheet string
+
 	Selection *Selection
 }
 
@@ -109,6 +117,14 @@ func (p *Project) ResolveActiveSheetName(part *Part) string {
 		return def.Default
 	}
 	return ""
+}
+
+// PaletteSheetTemplate is the loaded template for PaletteSheet, or nil.
+func (p *Project) PaletteSheetTemplate() *SpriteSheetTemplate {
+	if p.PaletteSheet == "" {
+		return nil
+	}
+	return p.LoadedSheets[p.PaletteSheet]
 }
 
 // LoadedSheetNames returns every currently loaded sheet's name in stable

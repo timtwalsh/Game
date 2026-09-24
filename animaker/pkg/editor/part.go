@@ -23,6 +23,23 @@ func NewNestedAniPart(name, nestedPath string) *Part {
 	}
 }
 
+// UniquePartName returns base with a numeric suffix that no existing part
+// is using. Part identity is the ID, not the name, so duplicates would work
+// — but a rig with three parts all called "sprite" is unreadable in the
+// part list and the timeline, which is where the artist actually works.
+func UniquePartName(t *Track, base string) string {
+	taken := make(map[string]bool, len(t.Parts))
+	for _, p := range t.Parts {
+		taken[p.Name] = true
+	}
+	for i := 1; ; i++ {
+		name := fmt.Sprintf("%s_%d", base, i)
+		if !taken[name] {
+			return name
+		}
+	}
+}
+
 // AddPart adds a part to the track's rig, assigning it a fresh ID. The part
 // exists in every direction from this moment on — it just has no keyframes
 // in any of them yet.
