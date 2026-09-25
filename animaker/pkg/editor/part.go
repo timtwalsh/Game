@@ -2,14 +2,14 @@ package editor
 
 import "fmt"
 
-// NewSheetPart creates a Part that shows a cell from an active sheet.
+// NewSheetPart creates a Part that shows a cell from an active sheet. The
+// ID is assigned by AddPart, not here.
 func NewSheetPart(name, governingProp, fixedSheet string) *Part {
 	return &Part{
 		Name:          name,
 		Kind:          PartKindSheet,
 		GoverningProp: governingProp,
 		FixedSheet:    fixedSheet,
-		Keyframes:     []*Keyframe{},
 	}
 }
 
@@ -20,39 +20,65 @@ func NewNestedAniPart(name, nestedPath string) *Part {
 		Kind:           PartKindNestedAni,
 		NestedAniPath:  nestedPath,
 		NestedBindings: map[string]PropBinding{},
-		Keyframes:      []*Keyframe{},
 	}
 }
 
-// AddPart appends a part to a direction.
-func AddPart(dir *Direction, part *Part) {
-	dir.Parts = append(dir.Parts, part)
+// UniquePartName returns base with a numeric suffix that no existing part
+// is using. Part identity is the ID, not the name, so duplicates would work
+// — but a rig with three parts all called "sprite" is unreadable in the
+// part list and the timeline, which is where the artist actually works.
+func UniquePartName(t *Track, base string) string {
+	taken := make(map[string]bool, len(t.Parts))
+	for _, p := range t.Parts {
+		taken[p.Name] = true
+	}
+	for i := 1; ; i++ {
+		name := fmt.Sprintf("%s_%d", base, i)
+		if !taken[name] {
+			return name
+		}
+	}
 }
 
-// RemovePart removes the part at idx from a direction.
-func RemovePart(dir *Direction, idx int) error {
-	if idx < 0 || idx >= len(dir.Parts) {
+// AddPart adds a part to the track's rig, assigning it a fresh ID. The part
+// exists in every direction from this moment on — it just has no keyframes
+// in any of them yet.
+func AddPart(t *Track, part *Part) *Part {
+	part.ID = t.nextPartID()
+	t.Parts = append(t.Parts, part)
+	return part
+}
+
+// RemovePart removes the part at idx from the rig, along with its keyframes
+// in every direction — otherwise those keyframes would be orphaned, and a
+// later part could be given the same ID and inherit them.
+func RemovePart(t *Track, idx int) error {
+	if idx < 0 || idx >= len(t.Parts) {
 		return fmt.Errorf("invalid part index: %d", idx)
 	}
-	dir.Parts = append(dir.Parts[:idx], dir.Parts[idx+1:]...)
+	id := t.Parts[idx].ID
+	t.Parts = append(t.Parts[:idx], t.Parts[idx+1:]...)
+	for _, dir := range t.Directions {
+		delete(dir.Keyframes, id)
+	}
 	return nil
 }
 
 // AddDirection creates a new, empty direction on the track if it doesn't
-// already exist. Directions are never auto-populated from another
-// direction — each is authored independently, per spec.
-func AddDirection(t *Track, name string) *Direction {
-	if d, ok := t.Directions[name]; ok {
+// already exist. It starts with no keyframes: the track's parts all exist
+// in it immediately, but posing them in this facing is the artist's work.
+func AddDirection(t *Track, key int) *Direction {
+	if d, ok := t.Directions[key]; ok {
 		return d
 	}
-	d := &Direction{Parts: []*Part{}}
-	t.Directions[name] = d
+	d := NewDirection()
+	t.Directions[key] = d
 	return d
 }
 
-// RemoveDirection deletes a direction by name.
-func RemoveDirection(t *Track, name string) {
-	delete(t.Directions, name)
+// RemoveDirection deletes a direction by key.
+func RemoveDirection(t *Track, key int) {
+	delete(t.Directions, key)
 }
 
 // AddProp appends a prop definition to the track.

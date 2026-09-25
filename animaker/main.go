@@ -8,8 +8,10 @@ import (
 )
 
 func main() {
-	// Create Fyne application with dark editor theme
-	a := fyneApp.New()
+	// NewWithID, not New: without a unique ID Fyne has nowhere to store
+	// preferences, which it reports as an error on every launch and which
+	// also breaks the file dialog's favourite locations.
+	a := fyneApp.NewWithID("com.game.animaker")
 	a.Settings().SetTheme(&ui.DarkEditorTheme{})
 
 	// Create and run the animation maker

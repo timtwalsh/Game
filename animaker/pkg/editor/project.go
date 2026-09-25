@@ -1,6 +1,9 @@
 package editor
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Project is the top-level state container for the editor: the track being
 // edited, the sheet templates it currently has loaded, and UI/playback
@@ -18,6 +21,14 @@ type Project struct {
 	// prop's Default.
 	PreviewProps map[string]string
 
+	// PaletteSheet is the sheet the left palette is currently showing.
+	// The palette is no longer tied to the selected part: dragging a tile
+	// creates a *new* part, so the palette has to stand on its own rather
+	// than following a selection that may not exist yet. Set on import,
+	// and followed along when a part is selected so clicking a part still
+	// brings up the sheet it draws from.
+	PaletteSheet string
+
 	Selection *Selection
 }
 
@@ -29,7 +40,7 @@ type Selection struct {
 }
 
 type PlaybackState struct {
-	ActiveDirection string
+	ActiveDirection int
 	IsPlaying       bool
 	ElapsedMs       uint32
 	LoopEnabled     bool
@@ -46,19 +57,19 @@ func NewProject(name string) *Project {
 		UndoStack:    NewUndoStack(100),
 		Selection:    &Selection{PartIndex: -1, KeyframeIndex: -1},
 		Playback: &PlaybackState{
-			ActiveDirection: firstDirectionName(track),
+			ActiveDirection: firstDirectionKey(track),
 			LoopEnabled:     true,
 			SpeedFactor:     1.0,
 		},
 	}
 }
 
-func firstDirectionName(t *Track) string {
-	names := t.SortedDirectionNames()
-	if len(names) == 0 {
-		return "default"
+func firstDirectionKey(t *Track) int {
+	keys := t.SortedDirectionKeys()
+	if len(keys) == 0 {
+		return 0
 	}
-	return names[0]
+	return keys[0]
 }
 
 // ActiveDirection returns the direction currently selected for editing/
@@ -68,22 +79,28 @@ func (p *Project) ActiveDirection() *Direction {
 }
 
 // SelectedPart returns the part the Selection currently points at, or nil.
+// Selection.PartIndex indexes the Track's shared part list, so it stays
+// meaningful across a direction change.
 func (p *Project) SelectedPart() *Part {
-	dir := p.ActiveDirection()
-	if dir == nil || p.Selection.PartIndex < 0 || p.Selection.PartIndex >= len(dir.Parts) {
+	if p.CurrentTrack == nil || p.Selection.PartIndex < 0 || p.Selection.PartIndex >= len(p.CurrentTrack.Parts) {
 		return nil
 	}
-	return dir.Parts[p.Selection.PartIndex]
+	return p.CurrentTrack.Parts[p.Selection.PartIndex]
 }
 
-// SelectedKeyframe returns the keyframe the Selection currently points at
-// on the selected part, or nil.
+// SelectedKeyframe returns the keyframe the Selection currently points at,
+// on the selected part in the active direction, or nil.
 func (p *Project) SelectedKeyframe() *Keyframe {
 	part := p.SelectedPart()
-	if part == nil || p.Selection.KeyframeIndex < 0 || p.Selection.KeyframeIndex >= len(part.Keyframes) {
+	dir := p.ActiveDirection()
+	if part == nil || dir == nil {
 		return nil
 	}
-	return part.Keyframes[p.Selection.KeyframeIndex]
+	kfs := dir.KeyframesFor(part.ID)
+	if p.Selection.KeyframeIndex < 0 || p.Selection.KeyframeIndex >= len(kfs) {
+		return nil
+	}
+	return kfs[p.Selection.KeyframeIndex]
 }
 
 // ResolveActiveSheetName returns the sheet name a Sheet-kind part should
@@ -100,6 +117,26 @@ func (p *Project) ResolveActiveSheetName(part *Part) string {
 		return def.Default
 	}
 	return ""
+}
+
+// PaletteSheetTemplate is the loaded template for PaletteSheet, or nil.
+func (p *Project) PaletteSheetTemplate() *SpriteSheetTemplate {
+	if p.PaletteSheet == "" {
+		return nil
+	}
+	return p.LoadedSheets[p.PaletteSheet]
+}
+
+// LoadedSheetNames returns every currently loaded sheet's name in stable
+// sorted order. The UI uses it to offer sheets as a pick-list rather than
+// making the artist retype a name they have to remember exactly.
+func (p *Project) LoadedSheetNames() []string {
+	names := make([]string, 0, len(p.LoadedSheets))
+	for n := range p.LoadedSheets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ResolveActiveSheet is ResolveActiveSheetName plus the LoadedSheets lookup.
@@ -150,13 +187,13 @@ func (p *Project) Redo() bool {
 }
 
 func (p *Project) clampSelection() {
-	dir := p.ActiveDirection()
-	if dir == nil {
-		p.Playback.ActiveDirection = firstDirectionName(p.CurrentTrack)
-		dir = p.ActiveDirection()
+	if p.ActiveDirection() == nil {
+		p.Playback.ActiveDirection = firstDirectionKey(p.CurrentTrack)
 	}
-	if dir == nil || p.Selection.PartIndex >= len(dir.Parts) {
+	if p.Selection.PartIndex >= len(p.CurrentTrack.Parts) {
 		p.Selection.PartIndex = -1
+	}
+	if p.SelectedKeyframe() == nil {
 		p.Selection.KeyframeIndex = -1
 	}
 }
@@ -186,15 +223,22 @@ func (p *Project) AdvancePlayback(deltaMs uint32) {
 	}
 }
 
-func (p *Project) TogglePlayback() {
-	dir := p.ActiveDirection()
-	if dir == nil || len(dir.Parts) == 0 {
+// Play resumes/starts playback from wherever the playhead currently is
+// (does not reset to 0 - that's Stop's job).
+func (p *Project) Play() {
+	// Nothing to play until this facing has keyframes spanning some time —
+	// AdvancePlayback no-ops on a zero duration, so this just avoids
+	// leaving IsPlaying stuck on with a frozen playhead.
+	if dir := p.ActiveDirection(); dir == nil || dir.TotalDurationMs() == 0 {
 		return
 	}
-	p.Playback.IsPlaying = !p.Playback.IsPlaying
-	if p.Playback.IsPlaying {
-		p.Playback.ElapsedMs = 0
-	}
+	p.Playback.IsPlaying = true
+}
+
+// Stop pauses playback and resets the playhead to 0.
+func (p *Project) Stop() {
+	p.Playback.IsPlaying = false
+	p.Playback.ElapsedMs = 0
 }
 
 const scrubStepMs = 50
@@ -202,12 +246,12 @@ const scrubStepMs = 50
 func (p *Project) StepForward() {
 	p.Playback.IsPlaying = false
 	dir := p.ActiveDirection()
-	total := uint32(0)
+	limit := uint32(0)
 	if dir != nil {
-		total = dir.TotalDurationMs()
+		limit = dir.EditableDurationMs()
 	}
 	p.Playback.ElapsedMs += scrubStepMs
-	if total > 0 && p.Playback.ElapsedMs > total {
+	if limit > 0 && p.Playback.ElapsedMs > limit {
 		p.Playback.ElapsedMs = 0
 	}
 }
@@ -217,7 +261,7 @@ func (p *Project) StepBackward() {
 	if p.Playback.ElapsedMs < scrubStepMs {
 		dir := p.ActiveDirection()
 		if dir != nil {
-			p.Playback.ElapsedMs = dir.TotalDurationMs()
+			p.Playback.ElapsedMs = dir.EditableDurationMs()
 			return
 		}
 		p.Playback.ElapsedMs = 0
@@ -228,13 +272,33 @@ func (p *Project) StepBackward() {
 
 // SetActiveDirection switches which direction is being edited/previewed,
 // resetting playback position and selection.
-func (p *Project) SetActiveDirection(name string) {
-	if _, ok := p.CurrentTrack.Directions[name]; !ok {
+func (p *Project) SetActiveDirection(key int) {
+	if _, ok := p.CurrentTrack.Directions[key]; !ok {
 		return
 	}
-	p.Playback.ActiveDirection = name
+	p.Playback.ActiveDirection = key
 	p.Playback.ElapsedMs = 0
 	p.Playback.IsPlaying = false
-	p.Selection.PartIndex = -1
+	// The selected part carries across: the part list belongs to the Track,
+	// so index N is the same part in every facing and switching direction
+	// just changes which keyframes you're editing. Only the keyframe
+	// selection is dropped, since keyframes are per-direction.
 	p.Selection.KeyframeIndex = -1
+}
+
+// Seek moves the playhead directly to timeMs without changing IsPlaying.
+// Used by the timeline's scrub bar. It clamps to EditableDurationMs, not
+// TotalDurationMs — clamping to the latter made the playhead unmovable on a
+// track whose only keyframe is at 0ms, which in turn made it impossible to
+// ever add a second keyframe. See Direction.EditableDurationMs.
+func (p *Project) Seek(timeMs uint32) {
+	dir := p.ActiveDirection()
+	if dir == nil {
+		p.Playback.ElapsedMs = 0
+		return
+	}
+	if limit := dir.EditableDurationMs(); timeMs > limit {
+		timeMs = limit
+	}
+	p.Playback.ElapsedMs = timeMs
 }

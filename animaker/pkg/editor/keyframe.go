@@ -18,64 +18,65 @@ func (kf *Keyframe) Clone() *Keyframe {
 	return &c
 }
 
-// AddKeyframe inserts a keyframe into a part at the given time, keeping
-// Keyframes sorted by TimeMs. If one already exists at that exact time,
-// it's replaced rather than duplicated.
-func AddKeyframe(part *Part, timeMs uint32) *Keyframe {
-	for _, kf := range part.Keyframes {
+// AddKeyframe inserts a keyframe for a part in one direction, keeping that
+// part's keyframes sorted by TimeMs. If one already exists at that exact
+// time it's returned rather than duplicated.
+func AddKeyframe(dir *Direction, partID int, timeMs uint32) *Keyframe {
+	if dir.Keyframes == nil {
+		dir.Keyframes = map[int][]*Keyframe{}
+	}
+	for _, kf := range dir.Keyframes[partID] {
 		if kf.TimeMs == timeMs {
 			return kf
 		}
 	}
 	kf := NewKeyframe(timeMs)
-	part.Keyframes = append(part.Keyframes, kf)
-	sortKeyframes(part)
-	reindexKeyframes(part)
+	dir.Keyframes[partID] = append(dir.Keyframes[partID], kf)
+	normalizeKeyframes(dir, partID)
 	return kf
 }
 
-// DeleteKeyframe removes the keyframe at idx from a part.
-func DeleteKeyframe(part *Part, idx int) error {
-	if idx < 0 || idx >= len(part.Keyframes) {
+// DeleteKeyframe removes a part's keyframe at idx in one direction.
+func DeleteKeyframe(dir *Direction, partID, idx int) error {
+	kfs := dir.KeyframesFor(partID)
+	if idx < 0 || idx >= len(kfs) {
 		return fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-	part.Keyframes = append(part.Keyframes[:idx], part.Keyframes[idx+1:]...)
-	reindexKeyframes(part)
+	dir.Keyframes[partID] = append(kfs[:idx], kfs[idx+1:]...)
+	normalizeKeyframes(dir, partID)
 	return nil
 }
 
-// DuplicateKeyframe clones the keyframe at idx to a new time and inserts it.
-func DuplicateKeyframe(part *Part, idx int, newTimeMs uint32) (*Keyframe, error) {
-	if idx < 0 || idx >= len(part.Keyframes) {
+// DuplicateKeyframe clones a part's keyframe at idx to a new time.
+func DuplicateKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) (*Keyframe, error) {
+	kfs := dir.KeyframesFor(partID)
+	if idx < 0 || idx >= len(kfs) {
 		return nil, fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-	nkf := part.Keyframes[idx].Clone()
+	nkf := kfs[idx].Clone()
 	nkf.TimeMs = newTimeMs
-	part.Keyframes = append(part.Keyframes, nkf)
-	sortKeyframes(part)
-	reindexKeyframes(part)
+	dir.Keyframes[partID] = append(kfs, nkf)
+	normalizeKeyframes(dir, partID)
 	return nkf, nil
 }
 
-// MoveKeyframe changes the time of the keyframe at idx.
-func MoveKeyframe(part *Part, idx int, newTimeMs uint32) error {
-	if idx < 0 || idx >= len(part.Keyframes) {
+// MoveKeyframe changes the time of a part's keyframe at idx.
+func MoveKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) error {
+	kfs := dir.KeyframesFor(partID)
+	if idx < 0 || idx >= len(kfs) {
 		return fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-	part.Keyframes[idx].TimeMs = newTimeMs
-	sortKeyframes(part)
-	reindexKeyframes(part)
+	kfs[idx].TimeMs = newTimeMs
+	normalizeKeyframes(dir, partID)
 	return nil
 }
 
-func sortKeyframes(part *Part) {
-	sort.Slice(part.Keyframes, func(i, j int) bool {
-		return part.Keyframes[i].TimeMs < part.Keyframes[j].TimeMs
-	})
-}
-
-func reindexKeyframes(part *Part) {
-	for i, kf := range part.Keyframes {
+// normalizeKeyframes re-sorts a part's keyframes by time and renumbers
+// their IDs to match, so a Keyframe.ID is always its index in the slice.
+func normalizeKeyframes(dir *Direction, partID int) {
+	kfs := dir.Keyframes[partID]
+	sort.Slice(kfs, func(i, j int) bool { return kfs[i].TimeMs < kfs[j].TimeMs })
+	for i, kf := range kfs {
 		kf.ID = i
 	}
 }
@@ -87,26 +88,29 @@ type ResolvedTransform struct {
 	Row, Col    int // Sheet kind only; step function, not interpolated
 }
 
-// ValueAt returns the part's interpolated transform at timeMs, linearly
-// interpolating X/Y/Z/Rotation between the two surrounding keyframes.
-// Row/Col hold at the earlier keyframe's value until the next keyframe is
-// reached (a step function — cells aren't blended).
-func (p *Part) ValueAt(timeMs uint32) ResolvedTransform {
-	if len(p.Keyframes) == 0 {
+// ValueAt returns a part's interpolated transform at timeMs in this
+// direction, linearly interpolating X/Y/Z/Rotation between the two
+// surrounding keyframes. Row/Col hold at the earlier keyframe's value until
+// the next keyframe is reached (a step function — cells aren't blended).
+// A part with no keyframes in this direction resolves to the zero value;
+// the canvas skips drawing it.
+func (d *Direction) ValueAt(partID int, timeMs uint32) ResolvedTransform {
+	kfs := d.KeyframesFor(partID)
+	if len(kfs) == 0 {
 		return ResolvedTransform{}
 	}
-	first := p.Keyframes[0]
-	if len(p.Keyframes) == 1 || timeMs <= first.TimeMs {
+	first := kfs[0]
+	if len(kfs) == 1 || timeMs <= first.TimeMs {
 		return kfToResolved(first)
 	}
-	last := p.Keyframes[len(p.Keyframes)-1]
+	last := kfs[len(kfs)-1]
 	if timeMs >= last.TimeMs {
 		return kfToResolved(last)
 	}
-	for i := 1; i < len(p.Keyframes); i++ {
-		b := p.Keyframes[i]
+	for i := 1; i < len(kfs); i++ {
+		b := kfs[i]
 		if timeMs <= b.TimeMs {
-			a := p.Keyframes[i-1]
+			a := kfs[i-1]
 			var t float32
 			if span := float32(b.TimeMs - a.TimeMs); span > 0 {
 				t = float32(timeMs-a.TimeMs) / span
