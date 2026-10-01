@@ -20,6 +20,12 @@ type SpriteSheetTemplate struct {
 	CellW, CellH   int
 	PivotX, PivotY float32 // in cell-local pixel space
 
+	// SprshPath is where this sheet's .sprsh lives on disk, when known
+	// (set on import and on load). Editor-only: it's how a saved track
+	// finds its sheets again (see file.SheetRef), never part of the sheet's
+	// identity, which is its Name.
+	SprshPath string
+
 	// cells caches every cell, cropped once at construction. Beyond
 	// avoiding a re-crop on each repaint, this is where cells get
 	// normalized to a (0,0) origin — see CellImage.

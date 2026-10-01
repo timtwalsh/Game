@@ -99,8 +99,15 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 		if err != nil {
 			return
 		}
+		// The Select re-fires this on every programmatic SetSelected
+		// (undo, load, refreshDirectionSelect), which always names the
+		// direction already active - so only a real switch can prompt.
+		switched := key != a.Project.Playback.ActiveDirection
 		a.Project.SetActiveDirection(key)
 		a.refreshAll()
+		if switched {
+			a.offerTimingCopy(key)
+		}
 	})
 	a.refreshDirectionSelect()
 
@@ -120,6 +127,28 @@ func (a *Application) refreshDirectionSelect() {
 		a.directionSel.SetSelected(strconv.Itoa(a.Project.Playback.ActiveDirection))
 	}
 	a.directionSel.Refresh()
+}
+
+// offerTimingCopy prompts, on switching to a direction with no keyframes,
+// to copy another direction's keyframe times into it. Only times: the
+// poses are the artist's to author per facing, so the editor never copies
+// them between directions on its own.
+func (a *Application) offerTimingCopy(key int) {
+	track := a.Project.CurrentTrack
+	dir := track.Directions[key]
+	if dir == nil || dir.TotalKeyframes() > 0 {
+		return
+	}
+	sources := track.TimingSources(key)
+	if len(sources) == 0 {
+		return
+	}
+	ui.ShowCopyTimingDialog(a.Window, key, sources, func(src int) {
+		a.Project.RecordUndo()
+		editor.CopyKeyframeTimes(track, src, key)
+		a.Project.Dirty = true
+		a.refreshAll()
+	})
 }
 
 // directionAndPart resolves a part index (into the track's shared part
@@ -302,6 +331,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnImport = a.onImportSpriteSheet
 	a.properties.OnAddPart = a.onAddPart
 	a.properties.OnAddProp = a.onAddProp
+	a.properties.OnLoadPreviewSheet = a.onLoadPreviewSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
 	a.properties.OnPartRemoved = func(idx int) {
 		if a.Project.Selection.PartIndex == idx {
@@ -310,6 +340,7 @@ func (a *Application) wireCallbacks() {
 		}
 		a.refreshAll()
 	}
+	a.properties.OnKeyframeRetimed = func() { a.refreshAll() }
 	a.properties.OnKeyframeChanged = func() {
 		a.canvasWidget.Refresh()
 		a.timeline.Refresh()
@@ -436,10 +467,26 @@ func (a *Application) onOpenTrack() {
 		filePath := reader.URI().Path()
 		reader.Close()
 
-		track, err := file.LoadTrack(filePath)
+		track, refs, err := file.LoadTrack(filePath)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("failed to load track: %w", err), a.Window)
 			return
+		}
+
+		// The .anif names its sheets but doesn't contain them, so load
+		// them now - previously nothing did, and a reopened track drew
+		// nothing at all. Sheets already loaded this session are kept.
+		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
+		for name, s := range sheets {
+			a.Project.LoadedSheets[name] = s
+		}
+		if _, ok := a.Project.LoadedSheets[a.Project.PaletteSheet]; !ok {
+			a.Project.PaletteSheet = ""
+		}
+		for _, name := range track.ReferencedSheetNames() {
+			if _, ok := a.Project.LoadedSheets[name]; ok && a.Project.PaletteSheet == "" {
+				a.Project.PaletteSheet = name
+			}
 		}
 
 		a.Project.CurrentTrack = track
@@ -459,6 +506,7 @@ func (a *Application) onOpenTrack() {
 		a.refreshDirectionSelect()
 		a.refreshAll()
 		a.Window.SetTitle("ANIFile Animation Maker — " + track.Metadata.Name)
+		a.reportUnloadedSheets(missing, problems)
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
 	fd.Resize(fyne.NewSize(600, 400))
@@ -488,15 +536,54 @@ func (a *Application) onSaveAsTrack() {
 	fd.Show()
 }
 
+// sheetRefs is where each imported sheet's .sprsh is, for the .anif to
+// record so the track reopens with its art. Preview-only sheets are left
+// out: they're never part of the track.
+func (a *Application) sheetRefs() []file.SheetRef {
+	var refs []file.SheetRef
+	for _, name := range a.Project.LoadedSheetNames() {
+		if s := a.Project.LoadedSheets[name]; s.SprshPath != "" {
+			refs = append(refs, file.SheetRef{Name: name, SprshPath: s.SprshPath})
+		}
+	}
+	return refs
+}
+
 func (a *Application) saveToPath(path string) {
 	a.Project.CurrentTrack.Metadata.UpdatedAt = time.Now()
-	if err := file.SaveTrack(a.Project.CurrentTrack, path); err != nil {
+	if err := file.SaveTrack(a.Project.CurrentTrack, path, a.sheetRefs()); err != nil {
 		dialog.ShowError(fmt.Errorf("failed to save: %w", err), a.Window)
 		return
 	}
 	a.Project.SavePath = path
 	a.Project.Dirty = false
 	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentTrack.Metadata.Name)
+}
+
+// reportUnloadedSheets tells the artist which sheets a just-opened track
+// couldn't find, rather than leaving parts silently undrawn.
+func (a *Application) reportUnloadedSheets(missing, problems []string) {
+	if len(missing) == 0 && len(problems) == 0 {
+		return
+	}
+	var b strings.Builder
+	if len(missing) > 0 {
+		fmt.Fprintf(&b, "Couldn't find these sprite sheets: %s.\n\n", strings.Join(missing, ", "))
+		b.WriteString("Parts using them won't draw until they're loaded. Use Import Sprite Sheet " +
+			"on each image and give it exactly that Sheet Name - the track's parts refer to " +
+			"sheets by name, so they'll pick it up. Saving afterwards records where it is.")
+	}
+	if len(problems) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("These sheet files were found but couldn't be loaded:\n" + strings.Join(problems, "\n"))
+	}
+	msg := widget.NewLabel(b.String())
+	msg.Wrapping = fyne.TextWrapWord
+	d := dialog.NewCustom("Missing Sprite Sheets", "OK", msg, a.Window)
+	d.Resize(fyne.NewSize(520, 300))
+	d.Show()
 }
 
 // onImportSpriteSheet imports a sheet and shows it in the palette. It does
@@ -507,29 +594,70 @@ func (a *Application) saveToPath(path string) {
 // complaint when import only filled LoadedSheets and changed nothing on
 // screen.
 func (a *Application) onImportSpriteSheet() {
-	ui.ShowImportSheetDialog(a.Window, func(filePath, name string, cellW, cellH int, pivotX, pivotY float32) {
-		img, err := file.LoadImage(filePath)
+	ui.ShowImportSheetDialog(a.Window, func(imp ui.SheetImport) {
+		img, err := file.LoadImage(imp.FilePath)
 		if err != nil {
 			dialog.ShowError(fmt.Errorf("failed to load image: %w", err), a.Window)
 			return
 		}
 
-		tmpl := editor.NewSpriteSheetTemplate(name, filePath, img, cellW, cellH, pivotX, pivotY)
-		a.Project.LoadedSheets[name] = tmpl
-		a.Project.PaletteSheet = name
+		tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
+		a.Project.LoadedSheets[imp.Name] = tmpl
+		a.Project.PaletteSheet = imp.Name
 
-		sprshPath := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + ".sprsh"
+		sprshPath := strings.TrimSuffix(imp.FilePath, filepath.Ext(imp.FilePath)) + ".sprsh"
 		if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
 			dialog.ShowError(fmt.Errorf("failed to save sheet template: %w", err), a.Window)
+		} else {
+			tmpl.SprshPath = sprshPath
+		}
+
+		propNote := ""
+		if imp.PropName != "" {
+			if a.Project.CurrentTrack.FindProp(imp.PropName) == nil {
+				a.Project.RecordUndo()
+				editor.EnsureProp(a.Project.CurrentTrack, imp.PropName, imp.Name)
+				propNote = fmt.Sprintf("\n\nDeclared prop %q with this sheet as its default.", imp.PropName)
+			} else {
+				propNote = fmt.Sprintf("\n\nAdded as another option for prop %q - "+
+					"pick it under Preview Overrides to see it.", imp.PropName)
+			}
 		}
 
 		a.refreshAll()
 		dialog.ShowInformation("Import Complete",
 			fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.\n\n"+
-				"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.",
-				name, cellW, cellH, tmpl.Cols(), tmpl.Rows()),
+				"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.%s",
+				imp.Name, imp.CellW, imp.CellH, tmpl.Cols(), tmpl.Rows(), propNote),
 			a.Window)
 	})
+}
+
+// onLoadPreviewSheet lets the artist try other art on a prop on the fly —
+// "show this as sprite_red.png instead" — without importing it into the
+// track. Project.LoadPreviewSheet slices it on the prop's existing grid.
+func (a *Application) onLoadPreviewSheet(propName string) {
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil || reader == nil {
+			return
+		}
+		filePath := reader.URI().Path()
+		reader.Close()
+
+		img, err := file.LoadImage(filePath)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to load image: %w", err), a.Window)
+			return
+		}
+		if _, err := a.Project.LoadPreviewSheet(propName, filePath, img); err != nil {
+			dialog.ShowError(err, a.Window)
+			return
+		}
+		a.refreshAll()
+	}, a.Window)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
+	fd.Resize(fyne.NewSize(600, 400))
+	fd.Show()
 }
 
 // addPart adds a part to the track's rig - so it exists in every
@@ -559,7 +687,11 @@ func (a *Application) onAddDirection() {
 }
 
 func (a *Application) onAddProp() {
-	ui.ShowAddPropDialog(a.Window, func(name, def string) {
+	ui.ShowAddPropDialog(a.Window, a.Project.LoadedSheetNames(), func(name, def string) {
+		if a.Project.CurrentTrack.FindProp(name) != nil {
+			dialog.ShowError(fmt.Errorf("there's already a prop called %q", name), a.Window)
+			return
+		}
 		a.Project.RecordUndo()
 		editor.AddProp(a.Project.CurrentTrack, name, def)
 		a.refreshAll()

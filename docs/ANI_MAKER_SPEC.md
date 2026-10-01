@@ -149,6 +149,8 @@ type PropDef struct {
 
 **One prop can govern multiple Parts** — e.g. `arms` governs both `Arm_Left` and `Arm_Right`. See [Open questions](#open-questions--genuinely-unresolved) for how a single prop value resolves to two different physical sheets.
 
+**In the editor, a prop is usually declared at import** (2026-10-01): ticking "Swappable art" when importing a sheet declares a prop (named after the sheet unless renamed) with that sheet as its default, or adds the sheet as another option for an existing prop. Parts dropped from a sheet a prop is currently set to are linked to that prop. Every place a prop's value is chosen is a pick-list of loaded sheets, since a value naming no loaded sheet makes linked parts draw nothing. To try other art on the fly, a preview override can also load any image file; it is sliced on the prop's default sheet's grid and pivot (as a swap would be at runtime) and is preview-only, never saved into the `.anif` and never written as a `.sprsh`.
+
 **Props are declared per-Track file, not in a shared "character" manifest.** This was an explicit choice (see discussion 2026-09-18): a `Character` manifest owning the schema once was considered and would prevent drift, but the team is staying small and would rather keep track files self-contained. The cost this accepts: nothing *structurally* guarantees `human_walk.anif` and `human_idle.anif` agree on what `hair` means or that it exists in both. A linter validating that a family of Track files (e.g. everything matching `human_*.anif`) agree on their prop schema is planned but **not yet built** — treat it as load-bearing, not a nice-to-have, because of the next point.
 
 **Why the linter matters at runtime, specifically:** a character's prop values (customization) live on the runtime instance, not on any one Track, and are expected to carry over automatically when a state machine swaps which Track is playing (idle → walk). If two Tracks for the same character don't agree on prop names, that swap is exactly when a customization silently stops applying — a visible bug, not a theoretical one.
@@ -238,6 +240,23 @@ nested_ani_path = "base_wood_torch.anif"
 (Only direction `2` is posed here for brevity. `0`/`1`/`3` reference the
 same three parts - the rig is shared - but each holds its own keyframes,
 and a direction that poses a part nowhere simply has no keyframes for it.)
+
+The editor also writes a `[[sheets]]` list (2026-10-01): each loaded sheet's
+`name` and the `path` to its `.sprsh`, relative to the `.anif`:
+
+```toml
+[[sheets]]
+name = "long_blonde"
+path = "art/long_blonde.sprsh"
+```
+
+This is an **editor hint only**. Parts and props still refer to sheets by name,
+and the game resolves names against its own art library; it can ignore this
+table. The editor uses it to reopen a track with its art. For a track without
+it, or a stale path, the editor searches the `.anif`'s own folder (and a few
+levels of subfolders) for a `.sprsh` declaring the needed name, and lists any
+sheet it still can't find. Keeping a track's sheets beside it is the expected
+layout.
 
 ### `.sprsh` (a sprite sheet template) — TOML
 

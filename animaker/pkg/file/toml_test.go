@@ -31,11 +31,11 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	_ = body
 
 	path := filepath.Join(t.TempDir(), "human_walk.anif")
-	if err := SaveTrack(track, path); err != nil {
+	if err := SaveTrack(track, path, nil); err != nil {
 		t.Fatalf("SaveTrack failed: %v", err)
 	}
 
-	loaded, err := LoadTrack(path)
+	loaded, _, err := LoadTrack(path)
 	if err != nil {
 		t.Fatalf("LoadTrack failed: %v", err)
 	}

@@ -22,6 +22,13 @@ type tomlTrack struct {
 	// Directions are keyed by the string form of their int key (TOML table
 	// keys must be strings) - converted at the Save/LoadTrack boundary.
 	Directions map[string]tomlDirection `toml:"directions"`
+
+	// Sheets is an editor hint: where the editor found each sheet the
+	// last time this track was saved. Parts and props refer to sheets by
+	// name only, which stays the real reference (the game resolves names
+	// against its own art library); this just lets the editor reopen a
+	// track with its art instead of with nothing loaded.
+	Sheets []tomlSheetRef `toml:"sheets,omitempty"`
 }
 
 type tomlTrackMeta struct {
@@ -66,6 +73,11 @@ type tomlKeyframe struct {
 	Col         int     `toml:"col,omitempty"`
 }
 
+type tomlSheetRef struct {
+	Name string `toml:"name"`
+	Path string `toml:"path"` // the .sprsh, relative to the .anif when possible
+}
+
 // ---- TOML structure for .sprsh files (a SpriteSheetTemplate) ----
 
 type tomlSheetTemplate struct {
@@ -93,8 +105,16 @@ func partKindFromString(s string) editor.PartKind {
 	return editor.PartKindSheet
 }
 
-// SaveTrack writes a track to a .anif TOML file.
-func SaveTrack(t *editor.Track, path string) error {
+// SheetRef locates a sheet's .sprsh. SprshPath is absolute in memory;
+// SaveTrack writes it relative to the .anif.
+type SheetRef struct {
+	Name      string
+	SprshPath string
+}
+
+// SaveTrack writes a track to a .anif TOML file, along with where to find
+// the given sheets again (see tomlTrack.Sheets).
+func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 	tt := tomlTrack{
 		Metadata: tomlTrackMeta{
 			Name: t.Metadata.Name, Version: t.Metadata.Version,
@@ -105,6 +125,14 @@ func SaveTrack(t *editor.Track, path string) error {
 
 	for _, prop := range t.Props {
 		tt.Props = append(tt.Props, tomlPropDef{Name: prop.Name, Default: prop.Default})
+	}
+
+	for _, ref := range sheets {
+		p := ref.SprshPath
+		if rel, err := filepath.Rel(filepath.Dir(path), p); err == nil {
+			p = filepath.ToSlash(rel)
+		}
+		tt.Sheets = append(tt.Sheets, tomlSheetRef{Name: ref.Name, Path: p})
 	}
 
 	for _, part := range t.Parts {
@@ -147,11 +175,20 @@ func SaveTrack(t *editor.Track, path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
-// LoadTrack reads a track from a .anif TOML file.
-func LoadTrack(path string) (*editor.Track, error) {
+// LoadTrack reads a track from a .anif TOML file, plus where it says its
+// sheets are (absolute paths; possibly stale - see LoadSheetsForTrack).
+func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	var tt tomlTrack
 	if _, err := toml.DecodeFile(path, &tt); err != nil {
-		return nil, fmt.Errorf("failed to decode track: %w", err)
+		return nil, nil, fmt.Errorf("failed to decode track: %w", err)
+	}
+	var refs []SheetRef
+	for _, r := range tt.Sheets {
+		p := filepath.FromSlash(r.Path)
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(filepath.Dir(path), p)
+		}
+		refs = append(refs, SheetRef{Name: r.Name, SprshPath: p})
 	}
 
 	t := &editor.Track{
@@ -189,7 +226,7 @@ func LoadTrack(path string) (*editor.Track, error) {
 			}
 		}
 		if knownPart[part.ID] {
-			return nil, fmt.Errorf("duplicate part id %d (%q)", part.ID, part.Name)
+			return nil, nil, fmt.Errorf("duplicate part id %d (%q)", part.ID, part.Name)
 		}
 		knownPart[part.ID] = true
 		t.Parts = append(t.Parts, part)
@@ -198,12 +235,12 @@ func LoadTrack(path string) (*editor.Track, error) {
 	for dirName, td := range tt.Directions {
 		dirKey, err := strconv.Atoi(dirName)
 		if err != nil {
-			return nil, fmt.Errorf("direction key %q is not an integer: %w", dirName, err)
+			return nil, nil, fmt.Errorf("direction key %q is not an integer: %w", dirName, err)
 		}
 		dir := editor.NewDirection()
 		for _, tkf := range td.Keyframes {
 			if !knownPart[tkf.PartID] {
-				return nil, fmt.Errorf("direction %s has a keyframe for unknown part id %d", dirName, tkf.PartID)
+				return nil, nil, fmt.Errorf("direction %s has a keyframe for unknown part id %d", dirName, tkf.PartID)
 			}
 			dir.Keyframes[tkf.PartID] = append(dir.Keyframes[tkf.PartID], &editor.Keyframe{
 				ID: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
@@ -218,7 +255,7 @@ func LoadTrack(path string) (*editor.Track, error) {
 		t.Directions[0] = editor.NewDirection()
 	}
 
-	return t, nil
+	return t, refs, nil
 }
 
 // ---- Save/Load SpriteSheetTemplate (.sprsh) ----
@@ -261,5 +298,7 @@ func LoadSheetTemplate(sprshPath string) (*editor.SpriteSheetTemplate, error) {
 		return nil, err
 	}
 
-	return editor.NewSpriteSheetTemplate(ts.Name, imgPath, img, ts.CellW, ts.CellH, ts.PivotX, ts.PivotY), nil
+	s := editor.NewSpriteSheetTemplate(ts.Name, imgPath, img, ts.CellW, ts.CellH, ts.PivotX, ts.PivotY)
+	s.SprshPath = sprshPath
+	return s, nil
 }

@@ -118,6 +118,19 @@ func AddProp(t *Track, name, def string) {
 	t.Props = append(t.Props, PropDef{Name: name, Default: def})
 }
 
+// EnsureProp makes sheetName an option of the prop called name, declaring
+// the prop with sheetName as its default if the track doesn't have it yet.
+// An existing prop keeps its default: importing "hair_long" into an
+// existing "hair" prop adds another sheet to swap to, it doesn't change
+// what the track shows out of the box. Reports whether a prop was created.
+func EnsureProp(t *Track, name, sheetName string) bool {
+	if t.FindProp(name) != nil {
+		return false
+	}
+	AddProp(t, name, sheetName)
+	return true
+}
+
 // RemoveProp removes the prop at idx.
 func RemoveProp(t *Track, idx int) error {
 	if idx < 0 || idx >= len(t.Props) {

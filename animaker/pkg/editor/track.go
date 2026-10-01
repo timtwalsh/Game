@@ -214,6 +214,29 @@ func (t *Track) nextPartID() int {
 	return next
 }
 
+// ReferencedSheetNames lists every sheet the track names — parts' fixed
+// sheets and props' defaults — sorted and without duplicates. These are
+// the sheets it needs loaded to draw as authored.
+func (t *Track) ReferencedSheetNames() []string {
+	seen := map[string]bool{}
+	for _, p := range t.Parts {
+		if p.Kind == PartKindSheet && p.FixedSheet != "" {
+			seen[p.FixedSheet] = true
+		}
+	}
+	for _, pd := range t.Props {
+		if pd.Default != "" {
+			seen[pd.Default] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // SortedDirectionKeys returns direction keys in ascending numeric order.
 func (t *Track) SortedDirectionKeys() []int {
 	keys := make([]int, 0, len(t.Directions))

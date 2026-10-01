@@ -242,6 +242,82 @@ feedback after using the previous version:
     are labelled by name); a refusal shows the error and reopens the
     dialog with what was typed. Undoable.
 
+13. **Props are declared at import; right panel regrouped** (2026-10-01).
+    Reported: the user imported a sheet, clicked "+ Add Prop", typed
+    `body` as the default sheet without knowing what it meant, linked
+    the part to that prop, and the sprite vanished — no sheet was named
+    `body`, so the part resolved to nothing. Props were only reachable
+    through that free-text field, with nothing explaining them.
+    - The import dialog's **Sheet Name is required**, and a **"Swappable
+      art (a prop)"** tick plus prop name (defaulting to the sheet name)
+      declares the prop with this sheet as its default via
+      `editor.EnsureProp`. Naming a prop that already exists adds the
+      sheet as another option without changing the default.
+    - A new part dropped from a sheet some prop is currently set to is
+      **linked to that prop** (`Project.PropForSheet`) and named after it
+      (`hair_1`); `FixedSheet` is still set so unlinking keeps the art.
+    - "+ Add Prop"'s default and every Preview Override are **pick-lists
+      of loaded sheets**, not free text, and a duplicate prop name is
+      refused. Short explanations sit in both dialogs and the PROPS pane.
+    - The right panel is now **two panes**: parts, selected part link,
+      selected keyframe and preview overrides in one scrolling pane (the
+      user's request), props schema below it.
+    - **Preview-only sheets.** Each Preview Override row has "Load
+      file...": any image is sliced on the prop's *default* sheet's grid
+      (cell size and pivot) — what a runtime swap does, per the spec's
+      template rule — and set as that prop's override
+      (`Project.LoadPreviewSheet`). These live in `Project.PreviewSheets`,
+      apart from `LoadedSheets`: no `.sprsh` is written, `PreviewProps`
+      was already outside the `.anif`, and they're offered only as preview
+      values, never as a fixed sheet, prop default or palette sheet, so
+      nothing authored can depend on them. While a preview shows, a drop
+      of the prop's own default-sheet tile still keys the selected part
+      (`partShowsSheet`), since the palette shows the authored sheet.
+
+14. **Copy timing into an empty direction; type a keyframe's time**
+    (2026-10-01).
+    - Switching to a direction with no keyframes prompts to copy keyframe
+      **times** from another (direction 0 preselected when it has any).
+      The user chose times only: each copied keyframe has a zero pose
+      (origin, cell 0,0), so no position or cell leaks between facings —
+      the rule from the parts-move entry still holds, the editor never
+      copies authored poses across directions; this copies structure,
+      and only on the artist's say-so. `editor.CopyKeyframeTimes`,
+      `Track.TimingSources`. The prompt fires only on a real switch,
+      since the direction Select re-fires on programmatic SetSelected.
+    - The Selected Keyframe section has a **Time (ms)** field, applied on
+      Enter or "Set" (not per keystroke: typing 600 would pass through 6
+      and 60, re-sorting and colliding on the way). It refuses a time the
+      part already has a keyframe at, keeps the playhead on the keyframe,
+      is undoable, and ignores "Lock timing" (which guards drags).
+
+15. **Tab selects a field's text** (2026-10-01). Requested: tabbing into a
+    field should select its contents so typing replaces them. Fyne's Entry
+    just puts the caret at the end. `ui.newEntry` (`entry.go`) selects all
+    on focus and is used for every text field in the editor; a click
+    still places the caret, because Fyne's mouse-down positions it after
+    focusing, which clears that selection. Both behaviours are tested
+    against Fyne directly. Use `newEntry`, not `widget.NewEntry`, for new
+    fields.
+
+16. **Reopening a track loads its sheets** (2026-10-01). Reported: a saved
+    WIP `.anif` reopened with no sprite sheet. The `.anif` names sheets
+    but never said where they are, and `onOpenTrack` loaded none
+    (`file.LoadSheetTemplate` existed with no caller). Now:
+    - Saving writes `[[sheets]]` (name + `.sprsh` path relative to the
+      `.anif`) from each loaded sheet's new `SprshPath`; preview-only
+      sheets are left out. Editor hint only — names remain the reference.
+    - Opening calls `file.LoadSheetsForTrack`: recorded paths first, then
+      a bounded search of the `.anif`'s folder for `.sprsh` files whose
+      *declared* name matches (filenames follow the image, not the
+      sheet name). The user confirmed that expecting a track's art
+      beside the `.anif` is reasonable, so that folder is the fallback.
+    - Anything still missing (or found but unloadable, e.g. image gone)
+      is listed in a dialog with the fix: re-import with that exact
+      Sheet Name.
+    - `LoadTrack` now returns `(track, refs, err)`; `SaveTrack` takes the
+      refs.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to

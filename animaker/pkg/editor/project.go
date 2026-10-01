@@ -21,6 +21,11 @@ type Project struct {
 	// prop's Default.
 	PreviewProps map[string]string
 
+	// PreviewSheets are sheets loaded only to preview as a prop's value
+	// (see LoadPreviewSheet). Kept apart from LoadedSheets so they're never
+	// saved and never offered anywhere an authored choice is made.
+	PreviewSheets map[string]*SpriteSheetTemplate
+
 	// PaletteSheet is the sheet the left palette is currently showing.
 	// The palette is no longer tied to the selected part: dragging a tile
 	// creates a *new* part, so the palette has to stand on its own rather
@@ -51,11 +56,12 @@ type PlaybackState struct {
 func NewProject(name string) *Project {
 	track := NewTrack(name)
 	return &Project{
-		CurrentTrack: track,
-		LoadedSheets: make(map[string]*SpriteSheetTemplate),
-		PreviewProps: make(map[string]string),
-		UndoStack:    NewUndoStack(100),
-		Selection:    &Selection{PartIndex: -1, KeyframeIndex: -1},
+		CurrentTrack:  track,
+		LoadedSheets:  make(map[string]*SpriteSheetTemplate),
+		PreviewProps:  make(map[string]string),
+		PreviewSheets: make(map[string]*SpriteSheetTemplate),
+		UndoStack:     NewUndoStack(100),
+		Selection:     &Selection{PartIndex: -1, KeyframeIndex: -1},
 		Playback: &PlaybackState{
 			ActiveDirection: firstDirectionKey(track),
 			LoopEnabled:     true,
@@ -119,6 +125,35 @@ func (p *Project) ResolveActiveSheetName(part *Part) string {
 	return ""
 }
 
+// PropForSheet returns the prop whose default or current preview value is
+// sheetName, or "" if none is. A part made from that sheet's tiles is
+// linked to the prop, so it swaps with it. The default counts even while a
+// preview is showing, so dropping the prop's own tiles still links.
+func (p *Project) PropForSheet(sheetName string) string {
+	for _, pd := range p.CurrentTrack.Props {
+		if pd.Default == sheetName || p.PreviewProps[pd.Name] == sheetName {
+			return pd.Name
+		}
+	}
+	return ""
+}
+
+// partShowsSheet reports whether a palette tile from sheetName can be one
+// of part's frames: the sheet it currently draws from, or — while a
+// preview override is showing — the prop's authored default, since the
+// palette shows the authored sheet and the preview reuses its grid.
+func (p *Project) partShowsSheet(part *Part, sheetName string) bool {
+	if p.ResolveActiveSheetName(part) == sheetName {
+		return true
+	}
+	if part.GoverningProp != "" {
+		if def := p.CurrentTrack.FindProp(part.GoverningProp); def != nil {
+			return def.Default == sheetName
+		}
+	}
+	return false
+}
+
 // PaletteSheetTemplate is the loaded template for PaletteSheet, or nil.
 func (p *Project) PaletteSheetTemplate() *SpriteSheetTemplate {
 	if p.PaletteSheet == "" {
@@ -139,13 +174,14 @@ func (p *Project) LoadedSheetNames() []string {
 	return names
 }
 
-// ResolveActiveSheet is ResolveActiveSheetName plus the LoadedSheets lookup.
+// ResolveActiveSheet is ResolveActiveSheetName plus the sheet lookup,
+// which includes preview-only sheets.
 func (p *Project) ResolveActiveSheet(part *Part) *SpriteSheetTemplate {
 	name := p.ResolveActiveSheetName(part)
 	if name == "" {
 		return nil
 	}
-	return p.LoadedSheets[name]
+	return p.lookupSheet(name)
 }
 
 // -- Undo/redo --
