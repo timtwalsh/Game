@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -47,28 +48,90 @@ func DeleteKeyframe(dir *Direction, partID, idx int) error {
 	return nil
 }
 
-// DuplicateKeyframe clones a part's keyframe at idx to a new time.
+// ErrKeyframeTimeTaken is returned when a keyframe would be moved onto a
+// time another keyframe of the same part already occupies.
+var ErrKeyframeTimeTaken = errors.New("another keyframe of this part is already at that time")
+
+// DuplicateKeyframe copies a part's keyframe at idx to newTimeMs and
+// returns the keyframe now holding that pose. If the part already has a
+// keyframe at newTimeMs, the pose is pasted onto it rather than inserting a
+// second one at the same instant: two keyframes sharing a time give
+// ValueAt a zero-length segment and make "the keyframe at the playhead"
+// ambiguous, which the canvas drag and the selection both depend on.
+// Duplicating onto the source's own time is a no-op that returns the
+// source.
 func DuplicateKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) (*Keyframe, error) {
 	kfs := dir.KeyframesFor(partID)
 	if idx < 0 || idx >= len(kfs) {
 		return nil, fmt.Errorf("invalid keyframe index: %d", idx)
 	}
-	nkf := kfs[idx].Clone()
-	nkf.TimeMs = newTimeMs
-	dir.Keyframes[partID] = append(kfs, nkf)
-	normalizeKeyframes(dir, partID)
-	return nkf, nil
+	src := kfs[idx]
+	if src.TimeMs == newTimeMs {
+		return src, nil
+	}
+	// Taken before AddKeyframe, whose insert may reallocate the slice.
+	pose := *src
+	dst := AddKeyframe(dir, partID, newTimeMs)
+	dst.X, dst.Y, dst.Z = pose.X, pose.Y, pose.Z
+	dst.RotationDeg = pose.RotationDeg
+	dst.Row, dst.Col = pose.Row, pose.Col
+	return dst, nil
 }
 
-// MoveKeyframe changes the time of a part's keyframe at idx.
+// MoveKeyframe changes the time of a part's keyframe at idx, refusing with
+// ErrKeyframeTimeTaken if another keyframe of the same part is already at
+// newTimeMs. The keyframes are re-sorted afterwards, so the moved
+// keyframe's index can change — callers tracking it should hold the
+// *Keyframe and read its ID, not keep using idx.
 func MoveKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) error {
 	kfs := dir.KeyframesFor(partID)
 	if idx < 0 || idx >= len(kfs) {
 		return fmt.Errorf("invalid keyframe index: %d", idx)
 	}
+	for i, kf := range kfs {
+		if i != idx && kf.TimeMs == newTimeMs {
+			return ErrKeyframeTimeTaken
+		}
+	}
 	kfs[idx].TimeMs = newTimeMs
 	normalizeKeyframes(dir, partID)
 	return nil
+}
+
+// EnsureKeyframe returns a part's keyframe at timeMs in this direction,
+// creating one if there isn't one. A created keyframe is seeded from the
+// part's interpolated pose at that moment, so it starts as a continuation
+// of the animation rather than snapping to the origin; an existing one is
+// returned untouched. created reports which happened.
+func EnsureKeyframe(dir *Direction, partID int, timeMs uint32) (kf *Keyframe, created bool) {
+	for _, existing := range dir.KeyframesFor(partID) {
+		if existing.TimeMs == timeMs {
+			return existing, false
+		}
+	}
+	// Resolved before inserting, while the surrounding keyframes still
+	// describe the pose being continued.
+	seed := dir.ValueAt(partID, timeMs)
+	kf = AddKeyframe(dir, partID, timeMs)
+	kf.X, kf.Y, kf.Z = seed.X, seed.Y, seed.Z
+	kf.RotationDeg = seed.RotationDeg
+	kf.Row, kf.Col = seed.Row, seed.Col
+	return kf, true
+}
+
+// DuplicateOffsetMs is how far after the source "Duplicate Keyframe" puts
+// the copy when the playhead is sitting on the source itself.
+const DuplicateOffsetMs = 100
+
+// DuplicateTargetMs picks where "Duplicate Keyframe" puts its copy: at the
+// playhead, since that's where the artist has scrubbed to — or, when the
+// playhead is on the source keyframe, DuplicateOffsetMs after it, since a
+// copy at the source's own time would be a no-op.
+func DuplicateTargetMs(sourceMs, playheadMs uint32) uint32 {
+	if playheadMs == sourceMs {
+		return sourceMs + DuplicateOffsetMs
+	}
+	return playheadMs
 }
 
 // normalizeKeyframes re-sorts a part's keyframes by time and renumbers
@@ -109,7 +172,16 @@ func (d *Direction) ValueAt(partID int, timeMs uint32) ResolvedTransform {
 	}
 	for i := 1; i < len(kfs); i++ {
 		b := kfs[i]
-		if timeMs <= b.TimeMs {
+		// Exactly on a keyframe resolves to that keyframe outright. Folding
+		// equality into the segment test below (timeMs <= b.TimeMs) lands
+		// on t=1, which gets X/Y/Z right but takes Row/Col from the
+		// *previous* keyframe, since cells step rather than blend — so a
+		// playhead parked on a middle keyframe (exactly where clicking its
+		// marker puts it) drew the wrong cell.
+		if timeMs == b.TimeMs {
+			return kfToResolved(b)
+		}
+		if timeMs < b.TimeMs {
 			a := kfs[i-1]
 			var t float32
 			if span := float32(b.TimeMs - a.TimeMs); span > 0 {

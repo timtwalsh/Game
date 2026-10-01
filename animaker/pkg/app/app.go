@@ -32,6 +32,12 @@ type Application struct {
 
 	playbackTicker *time.Ticker
 	playbackDone   chan bool
+
+	// The keyframe a canvas drag is moving, and where it sat when the drag
+	// began. Held by pointer for the whole gesture rather than looked up
+	// again on every mouse-move.
+	dragKf               *editor.Keyframe
+	dragOrigX, dragOrigY float32
 }
 
 // New creates a new Application instance.
@@ -134,30 +140,39 @@ func (a *Application) wireCallbacks() {
 		a.properties.SelectPart(idx)
 		a.refreshAll()
 	}
+	// Dragging a placed part auto-keys it: if the part has no keyframe at
+	// the playhead, the drag creates one (seeded from its current pose)
+	// and moves that. Previously a drag only moved a keyframe sitting
+	// *exactly* at the playhead and silently did nothing otherwise — which,
+	// once parts are placed at 0ms, is every drag made anywhere else on
+	// the timeline. "New Keyframe" still exists for keying without moving.
 	a.canvasWidget.OnPartDragStart = func(idx int) {
-		a.Project.RecordUndo()
-		a.properties.SelectPart(idx)
-	}
-	a.canvasWidget.OnPartDragged = func(idx int, x, y float32) {
 		dir, part := a.directionAndPart(idx)
 		if dir == nil {
 			return
 		}
-		// Only an existing keyframe at exactly the current playhead time
-		// moves - dragging doesn't implicitly create one. Use "New
-		// Keyframe" first, per the intended workflow.
-		for _, kf := range dir.KeyframesFor(part.ID) {
-			if kf.TimeMs == a.Project.Playback.ElapsedMs {
-				kf.X, kf.Y = x, y
-				a.Project.Dirty = true
-				a.canvasWidget.Refresh()
-				a.properties.Refresh()
-				return
-			}
+		// Keying lands at the playhead, so it must not be moving.
+		a.Project.Playback.IsPlaying = false
+		a.Project.RecordUndo()
+		a.properties.SelectPart(idx)
+		kf, _ := editor.EnsureKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
+		a.dragKf = kf
+		a.dragOrigX, a.dragOrigY = kf.X, kf.Y
+		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Dirty = true
+		a.refreshAll()
+	}
+	a.canvasWidget.OnPartDragged = func(idx int, dx, dy float32) {
+		if a.dragKf == nil {
+			return
 		}
+		a.dragKf.X, a.dragKf.Y = a.dragOrigX+dx, a.dragOrigY+dy
+		a.canvasWidget.Refresh()
+		a.properties.Refresh()
 	}
 	a.canvasWidget.OnPartDragEnd = func() {
-		a.timeline.Refresh()
+		a.dragKf = nil
+		a.refreshAll()
 	}
 
 	// -- Timeline --
@@ -193,19 +208,64 @@ func (a *Application) wireCallbacks() {
 		if dir == nil {
 			return
 		}
-		elapsed := a.Project.Playback.ElapsedMs
-		// Seed the new keyframe from wherever the part's interpolated pose
-		// currently is, so it starts as a continuation rather than
-		// snapping to zero - the artist then drags it into place.
-		seed := dir.ValueAt(part.ID, elapsed)
 		a.Project.RecordUndo()
-		kf := editor.AddKeyframe(dir, part.ID, elapsed)
-		kf.X, kf.Y, kf.Z, kf.RotationDeg = seed.X, seed.Y, seed.Z, seed.RotationDeg
-		kf.Row, kf.Col = seed.Row, seed.Col
+		kf, _ := editor.EnsureKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
 		sel.KeyframeIndex = kf.ID
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
+	// Duplicate copies the selected keyframe's pose to the playhead — or
+	// just after the source, if the playhead is sitting on it. Onto a time
+	// that already has a keyframe, it pastes the pose rather than stacking
+	// a second keyframe there (see editor.DuplicateKeyframe).
+	a.timeline.OnDuplicateKeyframe = func() {
+		sel := a.Project.Selection
+		dir, part := a.directionAndPart(sel.PartIndex)
+		if dir == nil {
+			return
+		}
+		kfs := dir.KeyframesFor(part.ID)
+		if sel.KeyframeIndex < 0 || sel.KeyframeIndex >= len(kfs) {
+			return
+		}
+		target := editor.DuplicateTargetMs(kfs[sel.KeyframeIndex].TimeMs, a.Project.Playback.ElapsedMs)
+		a.Project.RecordUndo()
+		dup, err := editor.DuplicateKeyframe(dir, part.ID, sel.KeyframeIndex, target)
+		if err != nil {
+			return
+		}
+		sel.KeyframeIndex = dup.ID
+		a.Project.Seek(dup.TimeMs)
+		a.Project.Dirty = true
+		a.refreshAll()
+	}
+	// Retiming: one undo step for the whole drag, recorded at its start.
+	a.timeline.OnKeyframeRetimeStart = func(partIdx int, kf *editor.Keyframe) {
+		a.Project.Playback.IsPlaying = false
+		a.Project.RecordUndo()
+		a.properties.SelectPart(partIdx)
+		a.Project.Selection.KeyframeIndex = kf.ID
+		a.refreshAll()
+	}
+	a.timeline.OnKeyframeRetimed = func(partIdx int, kf *editor.Keyframe, newTimeMs uint32) {
+		dir, part := a.directionAndPart(partIdx)
+		if dir == nil || kf.TimeMs == newTimeMs {
+			return
+		}
+		// Refused if it would land exactly on another keyframe of this
+		// part; the marker just holds for that one mouse-move, and the
+		// next one carries it past.
+		if editor.MoveKeyframe(dir, part.ID, kf.ID, newTimeMs) != nil {
+			return
+		}
+		// Moving can reorder the keyframes, so re-read the index, and keep
+		// the playhead on the keyframe so the canvas shows its pose.
+		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Seek(kf.TimeMs)
+		a.Project.Dirty = true
+		a.refreshAll()
+	}
+	a.timeline.OnKeyframeRetimeEnd = func() { a.refreshAll() }
 	a.timeline.OnPlay = func() { a.Project.Play() }
 	a.timeline.OnStop = func() {
 		a.Project.Stop()

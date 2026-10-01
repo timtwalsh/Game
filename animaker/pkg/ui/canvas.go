@@ -38,6 +38,12 @@ type CanvasWidget struct {
 	showGrid bool
 
 	draggingPartIdx int // -1 = not dragging
+	// dragStartLocal is where the press began, widget-local. Drags report
+	// movement relative to it rather than the cursor's absolute position,
+	// so a sprite moves with the point it was grabbed by instead of
+	// snapping its pivot to the cursor — which for a 160px cell grabbed by
+	// a corner was a jump of half its size on the first frame.
+	dragStartLocal fyne.Position
 
 	// viewFrozen pins the extent while a drag is in progress — see
 	// SetViewFrozen.
@@ -47,11 +53,13 @@ type CanvasWidget struct {
 	// OnPartTapped fires with the part index under the click, or -1 if the
 	// click landed on empty space (a deselect).
 	OnPartTapped func(partIdx int)
-	// OnPartDragStart/Dragged/DragEnd fire while an existing part is being
-	// repositioned directly on the canvas. Dragged's x/y are already
-	// converted to the animation's own coordinate space.
+	// OnPartDragStart/Dragged/DragEnd fire while a placed part is being
+	// repositioned directly on the canvas. Dragged reports dx/dy in the
+	// animation's own coordinate space, measured from where the drag
+	// started — the caller adds them to the keyframe's position as it was
+	// at OnPartDragStart.
 	OnPartDragStart func(partIdx int)
-	OnPartDragged   func(partIdx int, animX, animY float32)
+	OnPartDragged   func(partIdx int, dx, dy float32)
 	OnPartDragEnd   func()
 }
 
@@ -295,21 +303,30 @@ func (cw *CanvasWidget) Tapped(e *fyne.PointEvent) {
 
 func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 	if cw.draggingPartIdx < 0 {
-		cw.draggingPartIdx = cw.hitTest(e.Position)
+		// Fyne's first Dragged event already carries the first movement,
+		// so the press point is Position minus Dragged. Hit-testing
+		// Position instead would test a point a few pixels off, and miss a
+		// small part grabbed near its edge.
+		start := e.Position.Subtract(fyne.NewPos(e.Dragged.DX, e.Dragged.DY))
+		cw.draggingPartIdx = cw.hitTest(start)
 		if cw.draggingPartIdx < 0 {
 			return
 		}
+		cw.dragStartLocal = start
 		cw.SetViewFrozen(true)
 		if cw.OnPartDragStart != nil {
 			cw.OnPartDragStart(cw.draggingPartIdx)
 		}
 	}
-	if cw.draggingPartIdx < 0 {
+	if cw.draggingPartIdx < 0 || cw.zoom == 0 {
 		return
 	}
-	x, y := cw.LocalToAnimXY(e.Position)
+	// The view is frozen for the whole drag, so a delta in widget pixels
+	// maps to animation pixels by zoom alone — no origin shift to undo.
+	dx := (e.Position.X - cw.dragStartLocal.X) / cw.zoom
+	dy := (e.Position.Y - cw.dragStartLocal.Y) / cw.zoom
 	if cw.OnPartDragged != nil {
-		cw.OnPartDragged(cw.draggingPartIdx, x, y)
+		cw.OnPartDragged(cw.draggingPartIdx, dx, dy)
 	}
 }
 
