@@ -21,6 +21,15 @@ type Project struct {
 	// prop's Default.
 	PreviewProps map[string]string
 
+	// PreviewSheets are sheets loaded only to preview as a prop's value
+	// (see LoadPreviewSheet). Kept apart from LoadedSheets so they're never
+	// saved and never offered anywhere an authored choice is made.
+	PreviewSheets map[string]*SpriteSheetTemplate
+
+	// LoadedAnims are the .anif files nested parts play, keyed by AnimKey
+	// (absolute path). Like LoadedSheets, editor state, not saved.
+	LoadedAnims map[string]*NestedAnim
+
 	// PaletteSheet is the sheet the left palette is currently showing.
 	// The palette is no longer tied to the selected part: dragging a tile
 	// creates a *new* part, so the palette has to stand on its own rather
@@ -45,17 +54,25 @@ type PlaybackState struct {
 	ElapsedMs       uint32
 	LoopEnabled     bool
 	SpeedFactor     float32
+
+	// NestedClockMs is the clock nested animations play on: it runs while
+	// playing but never wraps with the parent, so a nested animation loops
+	// at its own length. Seeking sets it to the seek time, so scrubbing
+	// shows a deterministic pose.
+	NestedClockMs uint32
 }
 
 // NewProject creates a new project with a fresh, empty track.
 func NewProject(name string) *Project {
 	track := NewTrack(name)
 	return &Project{
-		CurrentTrack: track,
-		LoadedSheets: make(map[string]*SpriteSheetTemplate),
-		PreviewProps: make(map[string]string),
-		UndoStack:    NewUndoStack(100),
-		Selection:    &Selection{PartIndex: -1, KeyframeIndex: -1},
+		CurrentTrack:  track,
+		LoadedSheets:  make(map[string]*SpriteSheetTemplate),
+		PreviewProps:  make(map[string]string),
+		PreviewSheets: make(map[string]*SpriteSheetTemplate),
+		LoadedAnims:   make(map[string]*NestedAnim),
+		UndoStack:     NewUndoStack(100),
+		Selection:     &Selection{PartIndex: -1, KeyframeIndex: -1},
 		Playback: &PlaybackState{
 			ActiveDirection: firstDirectionKey(track),
 			LoopEnabled:     true,
@@ -119,6 +136,35 @@ func (p *Project) ResolveActiveSheetName(part *Part) string {
 	return ""
 }
 
+// PropForSheet returns the prop whose default or current preview value is
+// sheetName, or "" if none is. A part made from that sheet's tiles is
+// linked to the prop, so it swaps with it. The default counts even while a
+// preview is showing, so dropping the prop's own tiles still links.
+func (p *Project) PropForSheet(sheetName string) string {
+	for _, pd := range p.CurrentTrack.Props {
+		if pd.Default == sheetName || p.PreviewProps[pd.Name] == sheetName {
+			return pd.Name
+		}
+	}
+	return ""
+}
+
+// partShowsSheet reports whether a palette tile from sheetName can be one
+// of part's frames: the sheet it currently draws from, or — while a
+// preview override is showing — the prop's authored default, since the
+// palette shows the authored sheet and the preview reuses its grid.
+func (p *Project) partShowsSheet(part *Part, sheetName string) bool {
+	if p.ResolveActiveSheetName(part) == sheetName {
+		return true
+	}
+	if part.GoverningProp != "" {
+		if def := p.CurrentTrack.FindProp(part.GoverningProp); def != nil {
+			return def.Default == sheetName
+		}
+	}
+	return false
+}
+
 // PaletteSheetTemplate is the loaded template for PaletteSheet, or nil.
 func (p *Project) PaletteSheetTemplate() *SpriteSheetTemplate {
 	if p.PaletteSheet == "" {
@@ -139,13 +185,34 @@ func (p *Project) LoadedSheetNames() []string {
 	return names
 }
 
-// ResolveActiveSheet is ResolveActiveSheetName plus the LoadedSheets lookup.
+// ResolveActiveSheet is ResolveActiveSheetName plus the sheet lookup,
+// which includes preview-only sheets.
 func (p *Project) ResolveActiveSheet(part *Part) *SpriteSheetTemplate {
 	name := p.ResolveActiveSheetName(part)
 	if name == "" {
 		return nil
 	}
-	return p.LoadedSheets[name]
+	return p.lookupSheet(name)
+}
+
+// DeletePart removes the part at idx from the rig, with its keyframes in
+// every direction, and keeps the selection pointing at the same part it
+// did before. Removing a part shifts every later part's index down by one,
+// so a selection below the deleted part has to move with it - otherwise
+// deleting a part above the selected one silently re-selected its
+// neighbour, and the next edit landed on the wrong part.
+func (p *Project) DeletePart(idx int) error {
+	if err := RemovePart(p.CurrentTrack, idx); err != nil {
+		return err
+	}
+	switch sel := p.Selection; {
+	case sel.PartIndex == idx:
+		sel.PartIndex, sel.KeyframeIndex = -1, -1
+	case sel.PartIndex > idx:
+		sel.PartIndex--
+	}
+	p.Dirty = true
+	return nil
 }
 
 // -- Undo/redo --
@@ -208,11 +275,16 @@ func (p *Project) AdvancePlayback(deltaMs uint32) {
 	if !p.Playback.IsPlaying || dir == nil {
 		return
 	}
+	step := uint32(float32(deltaMs) * p.Playback.SpeedFactor)
+	// Before the early return: a parent with nothing to animate itself
+	// (e.g. one keyframe placing a nested torch) still plays its nested
+	// animations.
+	p.Playback.NestedClockMs += step
 	total := dir.TotalDurationMs()
 	if total == 0 {
 		return
 	}
-	p.Playback.ElapsedMs += uint32(float32(deltaMs) * p.Playback.SpeedFactor)
+	p.Playback.ElapsedMs += step
 	if p.Playback.ElapsedMs >= total {
 		if p.Playback.LoopEnabled {
 			p.Playback.ElapsedMs %= total
@@ -229,16 +301,30 @@ func (p *Project) Play() {
 	// Nothing to play until this facing has keyframes spanning some time —
 	// AdvancePlayback no-ops on a zero duration, so this just avoids
 	// leaving IsPlaying stuck on with a frozen playhead.
-	if dir := p.ActiveDirection(); dir == nil || dir.TotalDurationMs() == 0 {
+	// A parent that holds still but contains a nested animation (one
+	// keyframe placing a torch) still has something to play: the torch.
+	dir := p.ActiveDirection()
+	if dir == nil || (dir.TotalDurationMs() == 0 && !p.hasPosedNested(dir)) {
 		return
 	}
 	p.Playback.IsPlaying = true
+}
+
+// hasPosedNested reports whether any nested part is posed in dir.
+func (p *Project) hasPosedNested(dir *Direction) bool {
+	for _, part := range p.CurrentTrack.Parts {
+		if part.Kind == PartKindNestedAni && len(dir.KeyframesFor(part.ID)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Stop pauses playback and resets the playhead to 0.
 func (p *Project) Stop() {
 	p.Playback.IsPlaying = false
 	p.Playback.ElapsedMs = 0
+	p.Playback.NestedClockMs = 0
 }
 
 const scrubStepMs = 50
@@ -278,6 +364,7 @@ func (p *Project) SetActiveDirection(key int) {
 	}
 	p.Playback.ActiveDirection = key
 	p.Playback.ElapsedMs = 0
+	p.Playback.NestedClockMs = 0
 	p.Playback.IsPlaying = false
 	// The selected part carries across: the part list belongs to the Track,
 	// so index N is the same part in every facing and switching direction
@@ -301,4 +388,5 @@ func (p *Project) Seek(timeMs uint32) {
 		timeMs = limit
 	}
 	p.Playback.ElapsedMs = timeMs
+	p.Playback.NestedClockMs = timeMs
 }

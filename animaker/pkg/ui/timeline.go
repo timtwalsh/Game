@@ -114,11 +114,13 @@ type scrubArea struct {
 	OnWheel            func(e *fyne.ScrollEvent)
 	OnPartSelected     func(partIdx int)
 	OnPartRename       func(partIdx int)
+	OnPartDelete       func(partIdx int)
 
 	// rowLabels are kept across renderer rebuilds rather than recreated on
 	// every refresh (which playback does each tick), so Fyne isn't left
 	// caching a renderer for a fresh throwaway widget per row per frame.
-	rowLabels []*partLabel
+	rowLabels  []*partLabel
+	rowDeletes []*rowDeleteButton
 }
 
 func newScrubArea(project *editor.Project) *scrubArea {
@@ -300,6 +302,62 @@ func (s *scrubArea) rowLabel(rowIdx int) *partLabel {
 	return s.rowLabels[rowIdx]
 }
 
+// rowDelete returns the reusable delete button for a timeline row.
+func (s *scrubArea) rowDelete(rowIdx int) *rowDeleteButton {
+	for len(s.rowDeletes) <= rowIdx {
+		idx := len(s.rowDeletes)
+		s.rowDeletes = append(s.rowDeletes, newRowDeleteButton(func() {
+			if s.OnPartDelete != nil {
+				s.OnPartDelete(idx)
+			}
+		}))
+	}
+	return s.rowDeletes[rowIdx]
+}
+
+// timelineDeleteWidth is the strip at the left of the label column that
+// holds each row's delete button.
+const timelineDeleteWidth = 18
+
+// rowDeleteButton is the small x at the left of a timeline row that
+// deletes that row's part (app.go confirms first). A drawn glyph rather
+// than a widget.Button, whose minimum height is taller than a row. It sits
+// beside the name rather than inside partLabel, so its click never
+// competes with the name's click/double-click.
+type rowDeleteButton struct {
+	widget.BaseWidget
+	glyph *canvas.Text
+	onTap func()
+}
+
+var _ fyne.Tappable = (*rowDeleteButton)(nil)
+
+func newRowDeleteButton(onTap func()) *rowDeleteButton {
+	b := &rowDeleteButton{onTap: onTap}
+	b.glyph = canvas.NewText("\u00d7", ColorDelete)
+	b.glyph.TextSize = 14
+	b.glyph.TextStyle = fyne.TextStyle{Bold: true}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *rowDeleteButton) Tapped(*fyne.PointEvent) { b.onTap() }
+
+func (b *rowDeleteButton) CreateRenderer() fyne.WidgetRenderer {
+	return &rowDeleteRenderer{b: b}
+}
+
+type rowDeleteRenderer struct{ b *rowDeleteButton }
+
+func (r *rowDeleteRenderer) Layout(size fyne.Size) {
+	m := r.b.glyph.MinSize()
+	r.b.glyph.Move(fyne.NewPos((size.Width-m.Width)/2, (size.Height-m.Height)/2))
+}
+func (r *rowDeleteRenderer) MinSize() fyne.Size           { return r.b.glyph.MinSize() }
+func (r *rowDeleteRenderer) Refresh()                     { r.b.glyph.Refresh() }
+func (r *rowDeleteRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.b.glyph} }
+func (r *rowDeleteRenderer) Destroy()                     {}
+
 // partLabel is a part's name in the timeline's label column. Click selects
 // the part; double-click renames it. It's its own widget, rather than the
 // scrubArea handling double-taps, because Fyne holds back a widget's every
@@ -416,10 +474,15 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 		rowBg.Move(fyne.NewPos(0, rowY))
 		objs = append(objs, rowBg)
 
+		del := s.rowDelete(rowIdx)
+		del.Resize(fyne.NewSize(timelineDeleteWidth, timelineRowHeight-2))
+		del.Move(fyne.NewPos(0, rowY))
+		objs = append(objs, del)
+
 		label := s.rowLabel(rowIdx)
 		label.setName(part.Name)
-		label.Resize(fyne.NewSize(timelineLabelWidth, timelineRowHeight-2))
-		label.Move(fyne.NewPos(0, rowY))
+		label.Resize(fyne.NewSize(timelineLabelWidth-timelineDeleteWidth, timelineRowHeight-2))
+		label.Move(fyne.NewPos(timelineDeleteWidth, rowY))
 		objs = append(objs, label)
 
 		for ki, kf := range dir.KeyframesFor(part.ID) {
@@ -476,6 +539,7 @@ type TimelineWidget struct {
 	OnScrub               func(timeMs uint32)
 	OnPartSelected        func(partIdx int)
 	OnPartRename          func(partIdx int)
+	OnPartDelete          func(partIdx int)
 	OnPlay                func()
 	OnStop                func()
 }
@@ -520,6 +584,11 @@ func (tw *TimelineWidget) Build() fyne.CanvasObject {
 	tw.scrub.OnPartSelected = func(partIdx int) {
 		if tw.OnPartSelected != nil {
 			tw.OnPartSelected(partIdx)
+		}
+	}
+	tw.scrub.OnPartDelete = func(partIdx int) {
+		if tw.OnPartDelete != nil {
+			tw.OnPartDelete(partIdx)
 		}
 	}
 	tw.scrub.OnPartRename = func(partIdx int) {

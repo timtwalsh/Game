@@ -214,6 +214,53 @@ func (t *Track) nextPartID() int {
 	return next
 }
 
+// ReferencedSheetNames lists every sheet the track names — parts' fixed
+// sheets and props' defaults — sorted and without duplicates. These are
+// the sheets it needs loaded to draw as authored.
+func (t *Track) ReferencedSheetNames() []string {
+	seen := map[string]bool{}
+	for _, p := range t.Parts {
+		if p.Kind == PartKindSheet && p.FixedSheet != "" {
+			seen[p.FixedSheet] = true
+		}
+	}
+	for _, pd := range t.Props {
+		if pd.Default != "" && !pd.IsAnimProp() {
+			seen[pd.Default] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ReferencedAnimPaths lists every nested .anif the track names - nested
+// parts' own paths and animation props' defaults - without duplicates.
+func (t *Track) ReferencedAnimPaths() []string {
+	seen := map[string]bool{}
+	var paths []string
+	add := func(p string) {
+		if p != "" && !seen[AnimKey(p)] {
+			seen[AnimKey(p)] = true
+			paths = append(paths, p)
+		}
+	}
+	for _, p := range t.Parts {
+		if p.Kind == PartKindNestedAni {
+			add(p.NestedAniPath)
+		}
+	}
+	for _, pd := range t.Props {
+		if pd.IsAnimProp() {
+			add(pd.Default)
+		}
+	}
+	return paths
+}
+
 // SortedDirectionKeys returns direction keys in ascending numeric order.
 func (t *Track) SortedDirectionKeys() []int {
 	keys := make([]int, 0, len(t.Directions))

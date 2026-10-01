@@ -4,6 +4,9 @@ import (
 	"animaker/pkg/editor"
 	"math"
 	"testing"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/test"
 )
 
 // Ticks must stay legible at every zoom: never closer than the minimum
@@ -120,5 +123,38 @@ func TestFormatTimelineMs(t *testing.T) {
 		if got := formatTimelineMs(in); got != want {
 			t.Errorf("formatTimelineMs(%d) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Requested: a delete x at the left of each timeline row, beside (not
+// over) the double-click-to-rename name.
+func TestTimelineRowHasDeleteBesideName(t *testing.T) {
+	test.NewTempApp(t)
+	p := editor.NewProject("t")
+	editor.AddPart(p.CurrentTrack, editor.NewSheetPart("head", "", "sheet"))
+	editor.AddPart(p.CurrentTrack, editor.NewSheetPart("legs", "", "sheet"))
+
+	s := newScrubArea(p)
+	deleted := -1
+	s.OnPartDelete = func(idx int) { deleted = idx }
+	w := test.NewWindow(s)
+	defer w.Close()
+	w.Resize(fyne.NewSize(600, 200))
+	s.Refresh()
+
+	del, label := s.rowDelete(1), s.rowLabel(1)
+	if del.Position().X != 0 || del.Size().Width != timelineDeleteWidth {
+		t.Errorf("delete at x=%v width %v, want x=0 width %v", del.Position().X, del.Size().Width, timelineDeleteWidth)
+	}
+	if label.Position().X < del.Position().X+del.Size().Width {
+		t.Errorf("name starts at x=%v, overlapping the delete button", label.Position().X)
+	}
+	if label.Position().Y != del.Position().Y {
+		t.Errorf("delete (y=%v) and name (y=%v) aren't on the same row", del.Position().Y, label.Position().Y)
+	}
+
+	test.Tap(del)
+	if deleted != 1 {
+		t.Errorf("tapping row 1's x asked to delete %d, want 1", deleted)
 	}
 }

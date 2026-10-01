@@ -3,7 +3,9 @@ package ui
 import (
 	"animaker/pkg/editor"
 	"fmt"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -12,10 +14,11 @@ import (
 )
 
 // PropertiesPanel owns two separate panels, built by two separate calls:
-// Build() is the right column — direction bar, part list (with delete),
-// prop/fixed-sheet linking for the selected part, the selected keyframe's
-// transform fields plus nudge buttons (or a bindings editor for a
-// NestedAni part), and the props schema / preview overrides. BuildPalette()
+// Build() is the right column — direction bar, then one scrolling pane of
+// part list (with delete), prop/fixed-sheet linking for the selected part,
+// the selected keyframe's transform fields plus nudge buttons (or a
+// bindings editor for a NestedAni part) and preview overrides, and below
+// it the props schema. BuildPalette()
 // is the left column — the selected part's active sheet as a draggable
 // tile grid (SheetGridWidget), GraalShop-style: always visible, not
 // nested inside another section. Both share the same underlying state
@@ -32,6 +35,11 @@ type PropertiesPanel struct {
 	schemaBox     *fyne.Container
 	previewBox    *fyne.Container
 
+	// rigBox/rigScroll are the one scrolling column holding the part list,
+	// part link, selected keyframe and preview overrides. See relayout.
+	rigBox    *fyne.Container
+	rigScroll *container.Scroll
+
 	// OnTileDropped is forwarded from the active part's SheetGridWidget —
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
@@ -39,12 +47,20 @@ type PropertiesPanel struct {
 	OnTileDropped     func(sheetName string, row, col int, absPos fyne.Position)
 	OnTileTapped      func(row, col int)
 	OnImport          func()
+	OnImportAnim      func()
 	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
 	OnAddProp         func()
 	OnPartChanged     func()
-	OnPartRemoved     func(idx int)
+	// OnPartDelete asks app.go to delete a part; it confirms first.
+	OnPartDelete func(idx int)
 	OnKeyframeChanged func()
+	OnKeyframeRetimed func() // the selected keyframe's time was typed in
 	OnPropsChanged    func()
+	// OnLoadPreviewSheet asks app.go (which owns the window, for the file
+	// dialog) to load an image as a preview-only option for a prop.
+	OnLoadPreviewSheet func(propName string)
+	// OnRemoveSheet asks app.go to remove an imported sheet; it confirms.
+	OnRemoveSheet func(sheetName string)
 }
 
 func NewPropertiesPanel(project *editor.Project) *PropertiesPanel {
@@ -63,6 +79,11 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 	importBtn := widget.NewButton("Import Sprite Sheet...", func() {
 		if pp.OnImport != nil {
 			pp.OnImport()
+		}
+	})
+	importAnimBtn := widget.NewButton("Import Animation...", func() {
+		if pp.OnImportAnim != nil {
+			pp.OnImportAnim()
 		}
 	})
 	addPartBtn := widget.NewButton("+ Add Part", func() {
@@ -85,34 +106,35 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 
 	pp.Refresh()
 
-	// Every major section is its own resizable pane (nested VSplits, since
-	// Fyne's Split only takes two children) instead of one long scrolling
-	// VBox.
-	partArea := container.NewVScroll(container.NewVBox(
+	// Two resizable panes. Everything about the rig as you're posing it -
+	// the part list, the selected part's sheet/prop link, its selected
+	// keyframe, and which sheet each prop previews as - is one scrolling
+	// pane, so editing a part doesn't mean hunting across four small
+	// splits. The props schema, edited far less often, sits below it.
+	pp.rigBox = container.NewVBox(
 		newSectionHeader("PARTS"),
-		container.NewHBox(importBtn, addPartBtn),
+		container.NewGridWithColumns(2, importBtn, importAnimBtn),
+		addPartBtn,
 		pp.partListBox,
 		pp.partLinkBox,
-	))
+		widget.NewSeparator(),
+		newSectionHeader("SELECTED KEYFRAME"),
+		pp.keyframeBox,
+		widget.NewSeparator(),
+		newSectionHeader("PREVIEW OVERRIDES"),
+		pp.previewBox,
+	)
+	pp.rigScroll = container.NewVScroll(pp.rigBox)
 
-	keyframeArea := container.NewVScroll(container.NewVBox(
-		newSectionHeader("SELECTED KEYFRAME"), pp.keyframeBox,
-	))
-
+	propsHint := widget.NewLabel("A prop is a swappable art slot (e.g. hair). Its value is a sheet; " +
+		"parts linked to it draw from that sheet. Tick \"Swappable art\" when importing to make one.")
+	propsHint.Wrapping = fyne.TextWrapWord
 	propsArea := container.NewVScroll(container.NewVBox(
-		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn), pp.schemaBox,
+		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn), propsHint, pp.schemaBox,
 	))
-	previewArea := container.NewVScroll(container.NewVBox(
-		newSectionHeader("PREVIEW OVERRIDES"), pp.previewBox,
-	))
-	propsAndPreview := container.NewVSplit(propsArea, previewArea)
-	propsAndPreview.SetOffset(0.5)
 
-	keyframeAndBelow := container.NewVSplit(keyframeArea, propsAndPreview)
-	keyframeAndBelow.SetOffset(0.4)
-
-	full := container.NewVSplit(partArea, keyframeAndBelow)
-	full.SetOffset(0.3)
+	full := container.NewVSplit(pp.rigScroll, propsArea)
+	full.SetOffset(0.75)
 
 	return container.NewBorder(directionBar, nil, nil, nil, full)
 }
@@ -141,7 +163,19 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 		"Click a tile to re-cell the selected keyframe.")
 	hint.Wrapping = fyne.TextWrapWord
 
-	header := container.NewVBox(pp.paletteSelect, pp.paletteLabel)
+	// Removes the sheet on show from the track - e.g. one imported by
+	// mistake, which otherwise stays recorded in the .anif for good.
+	removeBtn := widget.NewButton("Remove", func() {
+		if pp.OnRemoveSheet != nil && pp.project.PaletteSheet != "" {
+			pp.OnRemoveSheet(pp.project.PaletteSheet)
+		}
+	})
+	removeBtn.Importance = widget.DangerImportance
+
+	header := container.NewVBox(
+		container.NewBorder(nil, nil, nil, removeBtn, pp.paletteSelect),
+		pp.paletteLabel,
+	)
 	return container.NewBorder(header, hint, nil, nil, container.NewScroll(pp.sheetGrid))
 }
 
@@ -157,7 +191,10 @@ func (pp *PropertiesPanel) refreshPalette() {
 	if pp.project.PaletteSheet == "" && len(names) > 0 {
 		pp.project.PaletteSheet = names[0]
 	}
-	if pp.project.PaletteSheet != "" && pp.paletteSelect.Selected != pp.project.PaletteSheet {
+	// Set directly, not with SetSelected, which would re-fire OnChanged.
+	// Covers the palette's sheet being removed, too: Selected must not keep
+	// naming a sheet that's no longer an option.
+	if pp.paletteSelect.Selected != pp.project.PaletteSheet {
 		pp.paletteSelect.Selected = pp.project.PaletteSheet
 	}
 	pp.paletteSelect.Refresh()
@@ -229,6 +266,20 @@ func (pp *PropertiesPanel) refreshDependentSections() {
 	pp.refreshPreview()
 }
 
+// relayout re-lays out the shared rig column after one of its sections
+// was rebuilt. A section's own Refresh only re-lays out *its* children at
+// its old size; the column around it never hears that the section grew or
+// shrank, so the sections below kept their old positions and drew on top
+// of each other. Refreshing the column positions the sections again, and
+// refreshing the scroll resizes the column if its total height changed.
+func (pp *PropertiesPanel) relayout() {
+	if pp.rigBox == nil {
+		return
+	}
+	pp.rigBox.Refresh()
+	pp.rigScroll.Refresh()
+}
+
 // -- Part list + prop linking --
 
 // refreshPartList rebuilds the part list as plain buttons+delete rows
@@ -238,6 +289,7 @@ func (pp *PropertiesPanel) refreshDependentSections() {
 // note in map/objects/animaker.md); a list of buttons has no such
 // self-triggering hazard.
 func (pp *PropertiesPanel) refreshPartList() {
+	defer pp.relayout()
 	if pp.partListBox == nil {
 		return
 	}
@@ -269,17 +321,8 @@ func (pp *PropertiesPanel) refreshPartList() {
 			btn.Importance = widget.HighImportance
 		}
 		delBtn := widget.NewButton("Delete", func() {
-			pp.project.RecordUndo()
-			// Removes the part from the rig and its keyframes from every
-			// direction, not just the one on screen.
-			editor.RemovePart(track, idx)
-			if sel != nil && sel.PartIndex == idx {
-				sel.PartIndex = -1
-				sel.KeyframeIndex = -1
-			}
-			pp.Refresh()
-			if pp.OnPartRemoved != nil {
-				pp.OnPartRemoved(idx)
+			if pp.OnPartDelete != nil {
+				pp.OnPartDelete(idx)
 			}
 		})
 		delBtn.Importance = widget.DangerImportance
@@ -324,6 +367,7 @@ func (pp *PropertiesPanel) selectPart(idx int) {
 }
 
 func (pp *PropertiesPanel) refreshPartLink() {
+	defer pp.relayout()
 	if pp.partLinkBox == nil {
 		return
 	}
@@ -336,14 +380,17 @@ func (pp *PropertiesPanel) refreshPartLink() {
 	}
 
 	if part.Kind == editor.PartKindNestedAni {
-		pp.partLinkBox.Add(widget.NewLabel("Nested: " + part.NestedAniPath))
+		pp.buildNestedLink(part)
 		pp.partLinkBox.Refresh()
 		return
 	}
 
+	// Only sheet-valued props: an .anif prop can't give a sheet part a cell.
 	propOptions := []string{"(none - fixed sheet)"}
 	for _, pd := range pp.project.CurrentTrack.Props {
-		propOptions = append(propOptions, pd.Name)
+		if !pd.IsAnimProp() {
+			propOptions = append(propOptions, pd.Name)
+		}
 	}
 	propSelect := widget.NewSelect(propOptions, nil)
 	if part.GoverningProp == "" {
@@ -399,6 +446,69 @@ func (pp *PropertiesPanel) refreshPartLink() {
 	pp.partLinkBox.Refresh()
 }
 
+// buildNestedLink is the nested-part counterpart of the sheet link: which
+// animation-valued prop (if any) chooses the animation, else which loaded
+// animation it plays. Changing either is undoable.
+func (pp *PropertiesPanel) buildNestedLink(part *editor.Part) {
+	const none = "(none - fixed animation)"
+	propOptions := []string{none}
+	for _, pd := range pp.project.CurrentTrack.Props {
+		if pd.IsAnimProp() {
+			propOptions = append(propOptions, pd.Name)
+		}
+	}
+	propSelect := widget.NewSelect(propOptions, nil)
+	if part.GoverningProp == "" {
+		propSelect.SetSelected(none)
+	} else {
+		propSelect.SetSelected(part.GoverningProp)
+	}
+
+	paths := pp.project.LoadedAnimPaths()
+	if part.NestedAniPath != "" && pp.project.LoadedAnims[editor.AnimKey(part.NestedAniPath)] == nil {
+		paths = append([]string{part.NestedAniPath}, paths...) // keep showing an unloaded binding
+	}
+	labels := AnimLabels(paths)
+	animSelect := widget.NewSelect(labels, nil)
+	animSelect.PlaceHolder = "(no animation)"
+	if part.NestedAniPath != "" {
+		animSelect.SetSelected(labelFor(labels, paths, part.NestedAniPath))
+	}
+	if part.GoverningProp != "" {
+		animSelect.Disable()
+	}
+
+	changed := func() {
+		pp.project.Dirty = true
+		if pp.OnPartChanged != nil {
+			pp.OnPartChanged()
+		}
+	}
+	// Assigned after the SetSelected calls above, which would re-fire them.
+	propSelect.OnChanged = func(v string) {
+		pp.project.RecordUndo()
+		if v == none {
+			part.GoverningProp = ""
+			animSelect.Enable()
+		} else {
+			part.GoverningProp = v
+			animSelect.Disable()
+		}
+		changed()
+	}
+	animSelect.OnChanged = func(label string) {
+		pp.project.RecordUndo()
+		part.NestedAniPath = valueFor(labels, paths, label)
+		changed()
+	}
+
+	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Prop:"), nil, propSelect))
+	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Animation:"), nil, animSelect))
+	if len(pp.project.LoadedAnims) == 0 {
+		pp.partLinkBox.Add(widget.NewLabel("No animations imported yet - use Import Animation."))
+	}
+}
+
 // sheetPickerOptions lists the loaded sheets, keeping current if it names a
 // sheet that isn't loaded (e.g. a track opened without its art) so the
 // Select can still display it instead of silently blanking the binding.
@@ -428,6 +538,7 @@ func (pp *PropertiesPanel) refreshSheetGrid() {
 // -- Selected keyframe --
 
 func (pp *PropertiesPanel) refreshKeyframe() {
+	defer pp.relayout()
 	if pp.keyframeBox == nil {
 		return
 	}
@@ -447,6 +558,8 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		return
 	}
 
+	timeRow := pp.buildTimeEntry(part, kf)
+
 	xEntry := numEntry(fmt.Sprintf("%v", kf.X), func(v float32) { kf.X = v; pp.notifyKeyframeChanged() })
 	yEntry := numEntry(fmt.Sprintf("%v", kf.Y), func(v float32) { kf.Y = v; pp.notifyKeyframeChanged() })
 	zEntry := numEntry(fmt.Sprintf("%v", kf.Z), func(v float32) { kf.Z = v; pp.notifyKeyframeChanged() })
@@ -459,6 +572,7 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		widget.NewLabel("Rotation"), rotEntry,
 	)
 	pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms  (row %d, col %d)", part.Name, kf.TimeMs, kf.Row, kf.Col)))
+	pp.keyframeBox.Add(timeRow)
 	pp.keyframeBox.Add(grid)
 	pp.keyframeBox.Add(pp.buildNudgeControls(kf))
 
@@ -467,6 +581,62 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 	}
 
 	pp.keyframeBox.Refresh()
+}
+
+// buildTimeEntry is an exact alternative to dragging a keyframe's marker
+// along the timeline, which lands wherever the mouse happens to stop
+// (592ms when you meant 600). Unlike the X/Y entries, it applies on Enter
+// or "Set" rather than per keystroke: retiming re-sorts the keyframes, and
+// typing "600" would otherwise pass through 6ms and 60ms on the way,
+// colliding with whatever keyframes sit there. It ignores "Lock timing",
+// which guards against accidental drags, not deliberate typing.
+func (pp *PropertiesPanel) buildTimeEntry(part *editor.Part, kf *editor.Keyframe) fyne.CanvasObject {
+	entry := newEntry()
+	entry.SetText(strconv.FormatUint(uint64(kf.TimeMs), 10))
+	status := widget.NewLabel("")
+
+	apply := func() {
+		dir := pp.project.ActiveDirection()
+		if dir == nil {
+			return
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(entry.Text), 10, 32)
+		if err != nil {
+			status.SetText("Enter a whole number of ms")
+			return
+		}
+		newMs := uint32(v)
+		if newMs == kf.TimeMs {
+			status.SetText("")
+			return
+		}
+		for _, other := range dir.KeyframesFor(part.ID) {
+			if other != kf && other.TimeMs == newMs {
+				status.SetText(fmt.Sprintf("%s already has a keyframe at %dms", part.Name, newMs))
+				return
+			}
+		}
+		pp.project.RecordUndo()
+		if err := editor.MoveKeyframe(dir, part.ID, kf.ID, newMs); err != nil {
+			status.SetText(err.Error())
+			return
+		}
+		// Moving re-sorts, so re-read the index; and keep the playhead on
+		// the keyframe so the canvas still shows the pose being edited.
+		pp.project.Selection.KeyframeIndex = kf.ID
+		pp.project.Seek(kf.TimeMs)
+		pp.project.Dirty = true
+		if pp.OnKeyframeRetimed != nil {
+			pp.OnKeyframeRetimed()
+		}
+	}
+	entry.OnSubmitted = func(string) { apply() }
+	setBtn := widget.NewButton("Set", apply)
+
+	return container.NewVBox(
+		container.NewBorder(nil, nil, widget.NewLabel("Time (ms)"), setBtn, entry),
+		status,
+	)
 }
 
 // nudgeStep is how far one click of an arrow/+/- button moves a value —
@@ -532,7 +702,7 @@ func (pp *PropertiesPanel) buildNestedBindingsEditor(part *editor.Part) fyne.Can
 		name := propName
 		b := binding
 		modeSelect := widget.NewSelect([]string{"passthrough", "static"}, nil)
-		valueEntry := widget.NewEntry()
+		valueEntry := newEntry()
 		if b.PassthroughFrom != "" {
 			modeSelect.SetSelected("passthrough")
 			valueEntry.SetText(b.PassthroughFrom)
@@ -567,7 +737,7 @@ func (pp *PropertiesPanel) buildNestedBindingsEditor(part *editor.Part) fyne.Can
 		box.Add(row)
 	}
 
-	newPropEntry := widget.NewEntry()
+	newPropEntry := newEntry()
 	newPropEntry.SetPlaceHolder("prop name, e.g. direction")
 	addBtn := widget.NewButton("+ Binding", func() {
 		if newPropEntry.Text == "" {
@@ -595,7 +765,11 @@ func (pp *PropertiesPanel) refreshSchema() {
 	pp.schemaBox.RemoveAll()
 	for i, prop := range pp.project.CurrentTrack.Props {
 		idx := i
-		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, prop.Default))
+		def := prop.Default
+		if prop.IsAnimProp() {
+			def = filepath.Base(def)
+		}
+		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, def))
 		delBtn := widget.NewButton("x", func() {
 			pp.project.RecordUndo()
 			editor.RemoveProp(pp.project.CurrentTrack, idx)
@@ -613,35 +787,59 @@ func (pp *PropertiesPanel) refreshSchema() {
 // -- Preview overrides --
 
 func (pp *PropertiesPanel) refreshPreview() {
+	defer pp.relayout()
 	if pp.previewBox == nil {
 		return
 	}
 	pp.previewBox.RemoveAll()
+	if len(pp.project.CurrentTrack.Props) == 0 {
+		hint := widget.NewLabel("No props declared. Only a part linked to a prop can preview other art.")
+		hint.Wrapping = fyne.TextWrapWord
+		pp.previewBox.Add(hint)
+	}
 	for _, prop := range pp.project.CurrentTrack.Props {
 		name := prop.Name
-		entry := widget.NewEntry()
-		if v, ok := pp.project.PreviewProps[name]; ok {
-			entry.SetText(v)
-		} else {
-			entry.SetText(prop.Default)
+		current := prop.Default
+		if v, ok := pp.project.PreviewProps[name]; ok && v != "" {
+			current = v
 		}
-		entry.OnChanged = func(v string) {
-			pp.project.PreviewProps[name] = v
+		// A pick-list, for the same reason as the part's sheet picker: a
+		// value naming nothing loaded makes linked parts draw nothing. An
+		// animation prop lists loaded animations instead of sheets.
+		values := sheetPickerOptions(pp.project.PreviewOptionNames(), current)
+		labels := values
+		if prop.IsAnimProp() {
+			values = sheetPickerOptions(pp.project.LoadedAnimPaths(), current)
+			labels = AnimLabels(values)
+		}
+		sel := widget.NewSelect(labels, nil)
+		if current != "" {
+			sel.SetSelected(labelFor(labels, values, current))
+		}
+		// Assigned after SetSelected so seeding doesn't fire it.
+		sel.OnChanged = func(label string) {
+			pp.project.PreviewProps[name] = valueFor(labels, values, label)
 			pp.refreshSheetGrid()
 			if pp.OnPartChanged != nil {
 				pp.OnPartChanged()
 			}
 		}
-		row := container.NewBorder(nil, nil, widget.NewLabel(name+":"), nil, entry)
-		pp.previewBox.Add(row)
+		// Loads any image, sliced on this prop's grid, as a preview-only
+		// option — not saved, not part of the .anif.
+		loadBtn := widget.NewButton("Load file...", func() {
+			if pp.OnLoadPreviewSheet != nil {
+				pp.OnLoadPreviewSheet(name)
+			}
+		})
+		pp.previewBox.Add(container.NewBorder(nil, nil, widget.NewLabel(name+":"), loadBtn, sel))
 	}
 	pp.previewBox.Refresh()
 }
 
 // -- Helpers --
 
-func numEntry(initial string, onChange func(float32)) *widget.Entry {
-	e := widget.NewEntry()
+func numEntry(initial string, onChange func(float32)) *selectAllEntry {
+	e := newEntry()
 	e.SetText(initial)
 	e.OnChanged = func(s string) {
 		if v, err := strconv.ParseFloat(s, 32); err == nil {

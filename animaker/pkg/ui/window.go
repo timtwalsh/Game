@@ -41,6 +41,7 @@ func BuildMenuBar(
 	onSave func(),
 	onSaveAs func(),
 	onImportSheet func(),
+	onImportAnim func(),
 	onUndo func(),
 	onRedo func(),
 	onToggleGrid func(),
@@ -54,6 +55,7 @@ func BuildMenuBar(
 		fyne.NewMenuItem("Save As...", onSaveAs),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Import Sprite Sheet...", onImportSheet),
+		fyne.NewMenuItem("Import Animation...", onImportAnim),
 	)
 
 	editMenu := fyne.NewMenu("Edit",

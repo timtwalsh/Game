@@ -14,8 +14,10 @@ package editor
 //     says where and which cell.
 //   - Nothing is selected, or the selected part can't show this cell
 //     because it draws from a different sheet: the cell is added to the rig
-//     as a new part. That is how a rig of several simultaneously-visible
-//     pieces gets built — deselect (click empty canvas, or Esc) and drop.
+//     as a new part, linked to whichever prop is currently set to that
+//     sheet (see PropForSheet), if any. That is how a rig of several
+//     simultaneously-visible pieces gets built — deselect (click empty
+//     canvas, or Esc) and drop.
 //
 // Returns (-1, nil) if there is no active direction or no sheet.
 func (p *Project) DropTile(sheetName string, row, col int, x, y float32) (int, *Keyframe) {
@@ -26,15 +28,23 @@ func (p *Project) DropTile(sheetName string, row, col int, x, y float32) (int, *
 	timeMs := p.Playback.ElapsedMs
 
 	if part := p.SelectedPart(); part != nil && part.Kind == PartKindSheet &&
-		p.ResolveActiveSheetName(part) == sheetName {
+		p.partShowsSheet(part, sheetName) {
 		kf, _ := EnsureKeyframe(dir, part.ID, timeMs)
 		kf.Row, kf.Col = row, col
 		kf.X, kf.Y = x, y
 		return p.Selection.PartIndex, kf
 	}
 
+	// A sheet imported as a prop's art makes a part linked to that prop,
+	// named after the slot ("hair_1") rather than the particular sheet.
+	// FixedSheet is set either way, so unlinking it later keeps the art.
 	track := p.CurrentTrack
-	part := AddPart(track, NewSheetPart(UniquePartName(track, sheetName), "", sheetName))
+	prop := p.PropForSheet(sheetName)
+	base := sheetName
+	if prop != "" {
+		base = prop
+	}
+	part := AddPart(track, NewSheetPart(UniquePartName(track, base), prop, sheetName))
 	kf := AddKeyframe(dir, part.ID, timeMs)
 	kf.Row, kf.Col = row, col
 	kf.X, kf.Y = x, y

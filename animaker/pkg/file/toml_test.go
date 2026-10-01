@@ -1,6 +1,8 @@
 package file
 
 import (
+	"strings"
+	"os"
 	"animaker/pkg/editor"
 	"path/filepath"
 	"testing"
@@ -31,11 +33,11 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	_ = body
 
 	path := filepath.Join(t.TempDir(), "human_walk.anif")
-	if err := SaveTrack(track, path); err != nil {
+	if err := SaveTrack(track, path, nil); err != nil {
 		t.Fatalf("SaveTrack failed: %v", err)
 	}
 
-	loaded, err := LoadTrack(path)
+	loaded, _, err := LoadTrack(path)
 	if err != nil {
 		t.Fatalf("LoadTrack failed: %v", err)
 	}
@@ -101,8 +103,14 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 		t.Fatalf("Body part round-tripped wrong: %+v", lBody)
 	}
 
-	if lTorch == nil || lTorch.Kind != editor.PartKindNestedAni || lTorch.NestedAniPath != "base_wood_torch.anif" {
-		t.Fatalf("Torch part round-tripped wrong: %+v", lTorch)
+	// A nested path is absolute in memory (it's what LoadedAnims is keyed
+	// by) but written relative to the .anif, so tracks move as a folder.
+	wantTorch := editor.AnimKey(filepath.Join(filepath.Dir(path), "base_wood_torch.anif"))
+	if lTorch == nil || lTorch.Kind != editor.PartKindNestedAni || lTorch.NestedAniPath != wantTorch {
+		t.Fatalf("Torch part round-tripped wrong: %+v, want path %s", lTorch, wantTorch)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), `nested_ani_path = "base_wood_torch.anif"`) {
+		t.Errorf("nested path not written relative to the .anif:\n%s", data)
 	}
 	if b := lTorch.NestedBindings["direction"]; b.PassthroughFrom != "direction" {
 		t.Errorf("Torch direction binding round-tripped wrong: %+v", b)

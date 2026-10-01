@@ -2,6 +2,8 @@ package ui
 
 import (
 	"animaker/pkg/editor"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +16,7 @@ import (
 
 // ShowNewTrackDialog displays a dialog for creating a new track (.anif).
 func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
-	nameEntry := widget.NewEntry()
+	nameEntry := newEntry()
 	nameEntry.SetText("untitled")
 	nameEntry.SetPlaceHolder("human_walk")
 
@@ -35,10 +37,22 @@ func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
 	form.Show()
 }
 
+// SheetImport is what the import dialog collects.
+type SheetImport struct {
+	FilePath       string
+	Name           string // the sheet's name: what parts, props and the palette refer to it by
+	CellW, CellH   int
+	PivotX, PivotY float32
+	// PropName is the prop this sheet is art for, or "" for a sheet that
+	// isn't swappable. See editor.EnsureProp.
+	PropName string
+}
+
 // ShowImportSheetDialog displays a dialog for importing a sprite sheet
-// template: pick a file, then define its fixed cell size and one pivot for
-// the whole sheet.
-func ShowImportSheetDialog(win fyne.Window, onImport func(filePath, name string, cellW, cellH int, pivotX, pivotY float32)) {
+// template: pick a file, then name the sheet, define its fixed cell size
+// and one pivot for the whole sheet, and say whether it's swappable art
+// for a prop.
+func ShowImportSheetDialog(win fyne.Window, onImport func(SheetImport)) {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
@@ -53,21 +67,49 @@ func ShowImportSheetDialog(win fyne.Window, onImport func(filePath, name string,
 	fd.Show()
 }
 
-func showSheetGridDialog(win fyne.Window, filePath string, onImport func(string, string, int, int, float32, float32)) {
+func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetImport)) {
 	baseName := filepath.Base(filePath)
 	defaultName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
-	nameEntry := widget.NewEntry()
+	// Required: the form's Import button stays disabled while it's blank.
+	nameEntry := newEntry()
 	nameEntry.SetText(defaultName)
+	nameEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("the sheet needs a name")
+		}
+		return nil
+	}
 
-	cellWEntry := widget.NewEntry()
+	cellWEntry := newEntry()
 	cellWEntry.SetText("32")
-	cellHEntry := widget.NewEntry()
+	cellHEntry := newEntry()
 	cellHEntry.SetText("32")
-	pivotXEntry := widget.NewEntry()
+	pivotXEntry := newEntry()
 	pivotXEntry.SetText("16")
-	pivotYEntry := widget.NewEntry()
+	pivotYEntry := newEntry()
 	pivotYEntry.SetText("16")
+
+	// The prop name defaults to the sheet name, so the common case (this
+	// sheet is the first art for a new slot) is one tick. Naming an
+	// existing prop adds this sheet as another option for it instead.
+	propEntry := newEntry()
+	propEntry.SetPlaceHolder("hair, arms, body, ...")
+	propEntry.Disable()
+	propCheck := widget.NewCheck("Swappable art (a prop)", func(on bool) {
+		if on {
+			if propEntry.Text == "" {
+				propEntry.SetText(strings.TrimSpace(nameEntry.Text))
+			}
+			propEntry.Enable()
+		} else {
+			propEntry.Disable()
+		}
+	})
+	propHint := widget.NewLabel("A prop is a slot whose art can be swapped per character, " +
+		"e.g. \"hair\" switching between hair_short and hair_long. " +
+		"Parts made from this sheet's tiles will follow it.")
+	propHint.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
 		"Import Sprite Sheet",
@@ -79,26 +121,37 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(string,
 			{Text: "Cell Height", Widget: cellHEntry},
 			{Text: "Pivot X", Widget: pivotXEntry},
 			{Text: "Pivot Y", Widget: pivotYEntry},
+			{Text: "", Widget: propCheck},
+			{Text: "Prop Name", Widget: propEntry},
+			{Text: "", Widget: propHint},
 		},
 		func(confirmed bool) {
 			if !confirmed || onImport == nil {
 				return
 			}
-			cellW, _ := strconv.Atoi(cellWEntry.Text)
-			cellH, _ := strconv.Atoi(cellHEntry.Text)
+			imp := SheetImport{FilePath: filePath, Name: strings.TrimSpace(nameEntry.Text)}
+			imp.CellW, _ = strconv.Atoi(cellWEntry.Text)
+			imp.CellH, _ = strconv.Atoi(cellHEntry.Text)
 			pivotX, _ := strconv.ParseFloat(pivotXEntry.Text, 32)
 			pivotY, _ := strconv.ParseFloat(pivotYEntry.Text, 32)
-			if cellW <= 0 {
-				cellW = 32
+			imp.PivotX, imp.PivotY = float32(pivotX), float32(pivotY)
+			if imp.CellW <= 0 {
+				imp.CellW = 32
 			}
-			if cellH <= 0 {
-				cellH = 32
+			if imp.CellH <= 0 {
+				imp.CellH = 32
 			}
-			onImport(filePath, nameEntry.Text, cellW, cellH, float32(pivotX), float32(pivotY))
+			if propCheck.Checked {
+				imp.PropName = strings.TrimSpace(propEntry.Text)
+				if imp.PropName == "" {
+					imp.PropName = imp.Name
+				}
+			}
+			onImport(imp)
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(420, 380))
+	form.Resize(fyne.NewSize(460, 520))
 	form.Show()
 }
 
@@ -106,7 +159,7 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(string,
 // Directions are keyed by int (0=up, 1=right, 2=down, 3=left by the game's
 // own convention, but any int is accepted).
 func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
-	keyEntry := widget.NewEntry()
+	keyEntry := newEntry()
 	keyEntry.SetPlaceHolder("0=up, 1=right, 2=down, 3=left, ...")
 
 	form := dialog.NewForm(
@@ -131,28 +184,49 @@ func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
 	form.Show()
 }
 
-// ShowAddPropDialog displays a dialog for declaring a new prop on the track.
-func ShowAddPropDialog(win fyne.Window, onCreate func(name, defaultSheet string)) {
-	nameEntry := widget.NewEntry()
+// ShowAddPropDialog displays a dialog for declaring a new prop on the
+// track. The default is a pick-list of imported sheets, not free text: a
+// default naming no loaded sheet makes every part linked to the prop draw
+// nothing, which is exactly how typing "body" here made a sprite vanish.
+//
+// labels/values are the default's options, in parallel: loaded sheets
+// (label = value = sheet name) and loaded nested animations (label =
+// "torch.anif", value = its path). The value type decides the prop's kind:
+// a sheet prop governs sheet parts, an .anif prop governs nested parts.
+func ShowAddPropDialog(win fyne.Window, labels, values []string, onCreate func(name, defaultValue string)) {
+	nameEntry := newEntry()
 	nameEntry.SetPlaceHolder("hair, arms, legs, ...")
-	defaultEntry := widget.NewEntry()
-	defaultEntry.SetPlaceHolder("sheet name to use by default")
+	nameEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("the prop needs a name")
+		}
+		return nil
+	}
+	defaultSelect := widget.NewSelect(labels, nil)
+	defaultSelect.PlaceHolder = "(import a sheet or animation first)"
+	if len(labels) > 0 {
+		defaultSelect.SetSelected(labels[0])
+	}
+	hint := widget.NewLabel("A prop is a swappable art slot. Its value is a sheet (for sheet " +
+		"parts) or an .anif (for nested animation parts); linked parts use whichever it's set to.")
+	hint.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
 		"Add Prop",
 		"Add", "Cancel",
 		[]*widget.FormItem{
 			{Text: "Name", Widget: nameEntry},
-			{Text: "Default Sheet", Widget: defaultEntry},
+			{Text: "Default", Widget: defaultSelect},
+			{Text: "", Widget: hint},
 		},
 		func(confirmed bool) {
-			if confirmed && onCreate != nil && nameEntry.Text != "" {
-				onCreate(nameEntry.Text, defaultEntry.Text)
+			if confirmed && onCreate != nil {
+				onCreate(strings.TrimSpace(nameEntry.Text), valueFor(labels, values, defaultSelect.Selected))
 			}
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(400, 220))
+	form.Resize(fyne.NewSize(420, 280))
 	form.Show()
 }
 
@@ -161,8 +235,8 @@ func ShowAddPropDialog(win fyne.Window, onCreate func(name, defaultSheet string)
 // governing-prop dropdown; sheetNames lists the currently loaded sheets, so
 // the fixed sheet is picked from what exists rather than typed from memory
 // (a typo there produces a part that silently draws nothing).
-func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
-	nameEntry := widget.NewEntry()
+func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animPaths []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
+	nameEntry := newEntry()
 	nameEntry.SetPlaceHolder("Body, Hair, Arm_Left, ...")
 
 	kindSelect := widget.NewSelect([]string{"sheet", "nested_ani"}, nil)
@@ -178,15 +252,20 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate
 		fixedSheetSelect.SetSelected(sheetNames[0])
 	}
 
-	nestedPathEntry := widget.NewEntry()
-	nestedPathEntry.SetPlaceHolder("base_wood_torch.anif")
+	// A pick-list of imported animations rather than a typed path, which
+	// was easy to get wrong and gave no hint which files were available.
+	nestedSelect := widget.NewSelect(animLabels, nil)
+	nestedSelect.PlaceHolder = "(use Import Animation first)"
+	if len(animLabels) == 1 {
+		nestedSelect.SetSelected(animLabels[0])
+	}
 
 	items := []*widget.FormItem{
 		{Text: "Name", Widget: nameEntry},
 		{Text: "Kind", Widget: kindSelect},
 		{Text: "Governing Prop", Widget: propSelect},
 		{Text: "Fixed Sheet", Widget: fixedSheetSelect},
-		{Text: "Nested .anif Path", Widget: nestedPathEntry},
+		{Text: "Nested Animation", Widget: nestedSelect},
 	}
 	if len(sheetNames) == 0 {
 		items = append(items, &widget.FormItem{
@@ -211,7 +290,7 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate
 			if governingProp == propOptions[0] {
 				governingProp = ""
 			}
-			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, nestedPathEntry.Text)
+			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, valueFor(animLabels, animPaths, nestedSelect.Selected))
 		},
 		win,
 	)
@@ -224,7 +303,7 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate
 // taken); the dialog then shows it and reopens with what was typed, so the
 // artist can correct it rather than start over.
 func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name string) error) {
-	nameEntry := widget.NewEntry()
+	nameEntry := newEntry()
 	nameEntry.SetText(current)
 
 	form := dialog.NewForm(
@@ -248,8 +327,45 @@ func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name st
 	)
 	form.Resize(fyne.NewSize(400, 160))
 	form.Show()
-	// Focused with the text selected, so typing replaces "sprite_1"
-	// outright and Enter confirms.
+	// Focused, which selects the text (newEntry), so typing replaces
+	// "sprite_1" outright and Enter confirms.
 	win.Canvas().Focus(nameEntry)
-	nameEntry.TypedShortcut(&fyne.ShortcutSelectAll{})
+}
+
+// ShowCopyTimingDialog offers to scaffold an empty direction with another
+// direction's keyframe times. sources must be non-empty; its first entry
+// is preselected (direction 0 whenever it has keyframes). onCopy runs only
+// if the artist chooses to copy.
+func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy func(src int)) {
+	options := make([]string, len(sources))
+	for i, k := range sources {
+		options[i] = strconv.Itoa(k)
+	}
+	srcSelect := widget.NewSelect(options, nil)
+	srcSelect.SetSelected(options[0])
+
+	msg := widget.NewLabel(fmt.Sprintf("Direction %d has no keyframes yet. Copy the keyframe times "+
+		"from another direction as a starting point? Only the timing is copied: every "+
+		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", target))
+	msg.Wrapping = fyne.TextWrapWord
+
+	form := dialog.NewForm(
+		"Empty Direction",
+		"Copy Times", "Start Empty",
+		[]*widget.FormItem{
+			{Text: "", Widget: msg},
+			{Text: "Copy from direction", Widget: srcSelect},
+		},
+		func(confirmed bool) {
+			if !confirmed || onCopy == nil {
+				return
+			}
+			if src, err := strconv.Atoi(srcSelect.Selected); err == nil {
+				onCopy(src)
+			}
+		},
+		win,
+	)
+	form.Resize(fyne.NewSize(440, 260))
+	form.Show()
 }

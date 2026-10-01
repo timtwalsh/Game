@@ -77,3 +77,30 @@ func TestDropTileFromOtherSheetAddsAPart(t *testing.T) {
 		t.Errorf("rig has %d parts, want 2", got)
 	}
 }
+
+// A sheet imported as a prop's art produces parts linked to that prop, so
+// they swap when the prop's value changes.
+func TestDropTileFromPropSheetLinksThePart(t *testing.T) {
+	p := NewProject("test")
+	EnsureProp(p.CurrentTrack, "hair", "hair_short")
+
+	idx, _ := p.DropTile("hair_short", 0, 0, 0, 0)
+
+	part := p.CurrentTrack.Parts[idx]
+	if part.GoverningProp != "hair" || part.FixedSheet != "hair_short" || part.Name != "hair_1" {
+		t.Errorf("part = %+v, want hair_1 governed by hair, fixed hair_short", *part)
+	}
+}
+
+func TestEnsurePropKeepsAnExistingDefault(t *testing.T) {
+	track := NewTrack("t")
+	if !EnsureProp(track, "hair", "hair_short") {
+		t.Fatal("first EnsureProp didn't create the prop")
+	}
+	if EnsureProp(track, "hair", "hair_long") {
+		t.Error("second EnsureProp created a duplicate prop")
+	}
+	if len(track.Props) != 1 || track.Props[0].Default != "hair_short" {
+		t.Errorf("props = %+v, want one hair prop defaulting to hair_short", track.Props)
+	}
+}
