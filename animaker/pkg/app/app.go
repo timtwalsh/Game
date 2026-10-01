@@ -191,6 +191,32 @@ func (a *Application) wireCallbacks() {
 		}
 		a.refreshAll()
 	}
+	a.timeline.OnPartSelected = func(partIdx int) {
+		a.properties.SelectPart(partIdx)
+		a.refreshAll()
+	}
+	// Double-clicking a row's name renames the part, so a rig built by
+	// dropping tiles (which names parts sprite_1, sprite_2...) can be
+	// relabelled "head", "left_arm", "legs" where the artist is looking.
+	a.timeline.OnPartRename = func(partIdx int) {
+		if partIdx < 0 || partIdx >= len(a.Project.CurrentTrack.Parts) {
+			return
+		}
+		current := a.Project.CurrentTrack.Parts[partIdx].Name
+		ui.ShowRenamePartDialog(a.Window, current, func(name string) error {
+			if strings.TrimSpace(name) == current {
+				return nil
+			}
+			snap := a.Project.TakeSnapshot()
+			if err := editor.RenamePart(a.Project.CurrentTrack, partIdx, name); err != nil {
+				return err
+			}
+			a.Project.UndoStack.Push(snap)
+			a.Project.Dirty = true
+			a.refreshAll()
+			return nil
+		})
+	}
 	a.timeline.OnKeyframeDeleted = func(partIdx, kfIdx int) {
 		dir, part := a.directionAndPart(partIdx)
 		if dir == nil {
