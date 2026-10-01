@@ -173,6 +173,40 @@ feedback after using the previous version:
    import visibly do something now, and an auto-created part would just
    be an empty one drawn nowhere.
 
+10. **Timeline editing** (2026-10-01), requested together:
+    - **Dragging a placed part auto-keys it.** A canvas drag used to move
+      only a keyframe sitting *exactly* at the playhead and silently do
+      nothing otherwise — so once parts were dropped at 0ms, every drag
+      anywhere else on the timeline was a no-op. It now creates a
+      keyframe at the playhead if there isn't one, seeded from the
+      part's current pose (`editor.EnsureKeyframe`), and moves that.
+      Drags also report a delta from where they started, so a sprite
+      moves with the point it was grabbed by instead of snapping its
+      pivot to the cursor, and both the canvas and the timeline
+      hit-test the *press* point (Fyne's first `Dragged` event has
+      already moved).
+    - **Drag a marker to retime it**, with a **Lock timing** checkbox
+      that makes marker drags scrub instead. `MoveKeyframe` refuses to
+      land on a time another keyframe of the same part holds
+      (`ErrKeyframeTimeTaken`), and the drag holds the `*Keyframe`
+      rather than its index, because a retime re-sorts.
+    - **Duplicate Keyframe** copies the selected pose to the playhead, or
+      `DuplicateOffsetMs` after the source if the playhead is on it.
+      Onto an already-keyed time it pastes the pose rather than stacking
+      a second keyframe — `DuplicateKeyframe` previously did stack, which
+      gives `ValueAt` a zero-length segment.
+    - **Timeline zoom**: `-`/`+`/Fit buttons and Ctrl+wheel, anchored so
+      the time under the cursor (or the playhead, for the buttons) stays
+      put. Ruler ticks and labels pick a 1-2-5 interval to suit the zoom.
+
+    Found along the way: **a playhead exactly on a middle keyframe drew
+    the previous keyframe's cell.** `ValueAt` folded equality into the
+    preceding segment at t=1, which gets position right but takes
+    Row/Col from that segment's start. Clicking a marker seeks exactly
+    onto its keyframe, so the canvas had been showing the wrong cell at
+    every middle keyframe. Fixed; the regression test was confirmed to
+    fail against the old code.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -216,12 +250,17 @@ feedback after using the previous version:
   - `deepcopy.go`, `undo.go` — full-track-snapshot undo/redo.
 - `pkg/ui/` — Fyne widgets:
   - `timeline.go` — `scrubArea` (unexported): a custom-drawn ruler plus
-    one row per Part, keyframes as markers positioned by `TimeMs`, click
-    the ruler/a row to scrub, click a marker to select it (also seeks the
-    playhead there). `TimelineWidget` wraps it with Play/Stop, New/Delete
-    Keyframe, speed, and loop controls. "New Keyframe" seeds the new
-    keyframe from the part's current interpolated pose (`Direction.ValueAt`)
-    rather than snapping to zero, so it starts as a continuation.
+    one row per Part, keyframes as markers positioned by `TimeMs`. Click
+    the ruler or a row to scrub; click a marker to select it (also seeks
+    there); drag a marker to retime it unless timing is locked, else
+    drag scrubs — decided by where the drag *started*. Zoom is
+    `msPerPixel`; `zoomAnchorOffset`/`niceTickStep` are pure and tested.
+    It implements `Scrollable` only so Ctrl+wheel can zoom; every other
+    wheel event is forwarded to the enclosing `container.Scroll`.
+    `TimelineWidget` adds Play/Stop, New/Duplicate/Delete Keyframe, Lock
+    timing, speed, loop and zoom controls. New Keyframe and the canvas's
+    auto-key share `editor.EnsureKeyframe`, which seeds from the
+    interpolated pose and leaves an existing keyframe untouched.
   - `canvas.go` — resolves every Part's transform at the current
     `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell
     around a full-span origin crosshair with the character-sized
@@ -324,27 +363,20 @@ Deliberate scope cuts, not oversights:
 - **No ghost/preview image follows the cursor during a drag** from the
   sheet grid to the canvas — the cell is picked up at drag-start and
   placed at drag-end with no visual feedback in between.
-- **Dragging a part directly on the canvas never creates a keyframe**,
-  only moves one that already exists at the exact current playhead
-  `TimeMs` — this is intentional (matches the requested workflow: select
-  a part, "New Keyframe", *then* drag), not a bug, but it means dragging
-  a part when the playhead isn't sitting exactly on one of its keyframes
-  silently does nothing.
-- **No drag-to-retime a keyframe marker** on the timeline ruler — moving
-  a keyframe in time isn't wired to any UI action yet, only its transform
-  values (via the properties panel or a canvas drag).
 - **No keyboard arrow-key nudging** — GraalShop supports both clicking
   its nudge arrows and pressing the keyboard arrow keys for pixel-by-pixel
   movement; only the click-buttons (`buildNudgeControls`) were built here.
   Wiring plain (non-modifier) arrow keys risks conflicting with Fyne
   `Entry` widgets' own cursor-movement handling, so it needs more care
   than a quick add.
-- **The left palette shows only the selected part's active sheet**, not
-  every loaded sheet the way GraalShop's Sprite Book does — a deliberate
-  scoping choice, not a faithfulness gap: `SheetGridWidget.OnTileDropped`
-  only carries a `(row, col)`, so the target part (and therefore which
-  sheet a drop means) has to be established by which part is currently
-  selected, not inferred from an unscoped, all-sheets palette.
+- **The palette shows one sheet at a time**, picked from a dropdown,
+  rather than every loaded sheet at once the way GraalShop's Sprite Book
+  does. Not a data-model limit — `onTileDropped` now receives the sheet
+  name — just an unbuilt layout.
+- **Timeline zoom is per-session** — it resets to 100% on restart and
+  isn't saved with the track. Retiming has **no snapping**, so a dragged
+  marker lands on whatever ms the cursor maps to; zooming in is the way
+  to place one precisely.
 - The two items `docs/ANI_MAKER_SPEC.md`'s own "Open questions" section
   flags (how one prop fans out to multiple physical sheets; the sword
   "bent state" mechanism) are exactly as unresolved in code as in that
@@ -357,10 +389,12 @@ partless track — `PropertiesPanel.refreshPartSelect` called
 `Select`'s own `OnChanged` (even with an empty value), which called
 `Refresh()`, which called `ClearSelected()` again: unbounded recursion,
 stack overflow, caught via a captured-output smoke test before merge.
-See `selectPartByName`'s guard against empty names and the
-`refreshDependentSections` split in `properties.go` if a similar
-Fyne `Select` pattern is added elsewhere — `SetSelected`/`ClearSelected`
-re-firing their own change handler is the trap.
+The part list has since become plain buttons (`refreshPartList`), which
+sidesteps it entirely; the `refreshDependentSections` split in
+`properties.go` remains for any `Select`-driven section that refreshes
+from its own handler. `SetSelected`/`ClearSelected` re-firing their own
+change handler is the trap — assign `OnChanged` *after* seeding a
+`Select`'s value, as every `Select` in this package now does.
 
 ## Connected to
 
@@ -420,7 +454,16 @@ duration, and the four default directions.
 silently: the view always contains the origin and reference box, grows
 for negative coordinates, stays identical across a scrub, and
 `LocalToAnimXY` round-trips (so a dropped tile lands where it was
-released). `pkg/ui/properties_test.go` — `sheetPickerOptions`. The rest
+released). `pkg/editor/keyframe_ops_test.go` — the exactly-on-a-middle-keyframe
+`ValueAt` regression; `MoveKeyframe` re-sorting with the moved keyframe's
+ID tracking it, and refusing occupied times; `DuplicateKeyframe`
+inserting, pasting onto an occupied time, and no-op onto its own time;
+`EnsureKeyframe` leaving existing keyframes untouched and seeding new
+ones from the interpolated pose. `pkg/ui/timeline_test.go` — tick and
+label spacing at every zoom (labels always on ticks), zoom clamping, the
+anchor keeping the time under the cursor fixed, and `timeForX`/`xForTime`
+round-tripping at every zoom. `pkg/ui/properties_test.go` —
+`sheetPickerOptions`. The rest
 of `pkg/ui` and all of `pkg/app` have no automated tests, being GUI wiring
 verified by manual launch. Note that launching the binary and confirming
 it stays responsive is a real part of the check here, not a formality: a

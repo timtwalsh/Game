@@ -213,11 +213,13 @@ func (pp *PropertiesPanel) Refresh() {
 }
 
 // refreshDependentSections rebuilds everything that depends on which part
-// is selected, but not the part-select widget itself. Callers already
-// inside a Select.OnChanged handler must use this instead of Refresh() —
-// Select.SetSelected/ClearSelected both re-fire OnChanged, so calling
-// refreshPartSelect() from within its own callback recurses forever (hit
-// as an actual stack-overflow crash during manual testing).
+// is selected, but not the part list itself. It exists as a separate step
+// because of a Fyne trap: Select.SetSelected/ClearSelected re-fire the
+// Select's own OnChanged, so a handler that rebuilt the widget it was
+// called from recursed forever — an actual startup stack-overflow back
+// when the part list was a Select. The part list is now plain buttons, but
+// the split is kept for any Select-driven section that refreshes from its
+// own handler.
 func (pp *PropertiesPanel) refreshDependentSections() {
 	pp.refreshPartLink()
 	pp.refreshSheetGrid()
