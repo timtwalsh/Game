@@ -293,6 +293,26 @@ func posInRect(p fyne.Position, rectPos fyne.Position, rectSize fyne.Size) bool 
 		p.Y >= rectPos.Y && p.Y <= rectPos.Y+rectSize.Height
 }
 
+// dragTarget is the part a drag starting at pos would move: the selected
+// part, if pos is inside it, else none (-1). Only the selected part can be
+// moved on the canvas - requested so that parts can't be nudged by
+// accident, e.g. a background piece grabbed while reaching for the one in
+// front. Click to select, then drag. Because the selection decides rather
+// than what's on top, a part covered by another can still be dragged once
+// it's selected (from the part list or the timeline).
+func (cw *CanvasWidget) dragTarget(pos fyne.Position) int {
+	sel := cw.project.Selection
+	if sel == nil || sel.PartIndex < 0 {
+		return -1
+	}
+	for _, d := range cw.resolvedDraws() {
+		if d.partIdx == sel.PartIndex && posInRect(pos, d.rect, d.size) {
+			return d.partIdx
+		}
+	}
+	return -1
+}
+
 // hitTest returns the topmost (highest Z) part under pos, or -1.
 func (cw *CanvasWidget) hitTest(pos fyne.Position) int {
 	draws := cw.resolvedDraws()
@@ -322,7 +342,7 @@ func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 		// Position instead would test a point a few pixels off, and miss a
 		// small part grabbed near its edge.
 		start := e.Position.Subtract(fyne.NewPos(e.Dragged.DX, e.Dragged.DY))
-		cw.draggingPartIdx = cw.hitTest(start)
+		cw.draggingPartIdx = cw.dragTarget(start)
 		if cw.draggingPartIdx < 0 {
 			return
 		}

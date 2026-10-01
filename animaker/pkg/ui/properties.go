@@ -504,8 +504,103 @@ func (pp *PropertiesPanel) buildNestedLink(part *editor.Part) {
 
 	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Prop:"), nil, propSelect))
 	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Animation:"), nil, animSelect))
+	pp.buildNestedDirection(part)
 	if len(pp.project.LoadedAnims) == 0 {
 		pp.partLinkBox.Add(widget.NewLabel("No animations imported yet - use Import Animation."))
+	}
+}
+
+// nestedDirModeLabels are the Direction picker's choices, indexed by
+// editor.NestedDirMode.
+var nestedDirModeLabels = []string{"Inherit from parent", "Static", "Per keyframe"}
+
+// buildNestedDirection is how a nested part picks which direction of its
+// animation plays: turn with the parent, one fixed direction, or set on
+// each keyframe (edited in the Selected Keyframe section). Switching mode
+// keeps showing the same direction (Project.SetNestedDirectionMode).
+func (pp *PropertiesPanel) buildNestedDirection(part *editor.Part) {
+	modeSelect := widget.NewSelect(nestedDirModeLabels, nil)
+	modeSelect.SetSelected(nestedDirModeLabels[part.DirectionMode])
+
+	keys := pp.nestedDirectionKeys(part)
+	labels := directionLabels(keys)
+	staticSelect := widget.NewSelect(labels, nil)
+	staticSelect.SetSelected(directionLabel(part.StaticDirection))
+
+	// Assigned after the SetSelected calls above, which would re-fire them.
+	modeSelect.OnChanged = func(label string) {
+		for i, l := range nestedDirModeLabels {
+			if l == label && editor.NestedDirMode(i) != part.DirectionMode {
+				pp.project.RecordUndo()
+				pp.project.SetNestedDirectionMode(part, editor.NestedDirMode(i))
+				pp.notifyPartChanged()
+				// The static picker and the keyframe section depend on it.
+				pp.refreshPartLink()
+				pp.refreshKeyframe()
+			}
+		}
+	}
+	staticSelect.OnChanged = func(label string) {
+		if k, ok := directionKeyFor(keys, labels, label); ok && k != part.StaticDirection {
+			pp.project.RecordUndo()
+			part.StaticDirection = k
+			pp.notifyPartChanged()
+		}
+	}
+
+	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Direction:"), nil, modeSelect))
+	if part.DirectionMode == editor.NestedDirStatic {
+		pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Plays:"), nil, staticSelect))
+	}
+}
+
+// nestedDirectionKeys lists the directions the part's nested animation
+// has, or the four defaults if it isn't loaded.
+func (pp *PropertiesPanel) nestedDirectionKeys(part *editor.Part) []int {
+	if anim := pp.project.ResolveNestedAnim(part); anim != nil {
+		if keys := anim.Track.SortedDirectionKeys(); len(keys) > 0 {
+			return keys
+		}
+	}
+	return editor.DefaultDirectionKeys
+}
+
+// directionLabel names a direction key the way the game numbers them.
+func directionLabel(k int) string {
+	switch k {
+	case 0:
+		return "0 (up)"
+	case 1:
+		return "1 (right)"
+	case 2:
+		return "2 (down)"
+	case 3:
+		return "3 (left)"
+	}
+	return strconv.Itoa(k)
+}
+
+func directionLabels(keys []int) []string {
+	labels := make([]string, len(keys))
+	for i, k := range keys {
+		labels[i] = directionLabel(k)
+	}
+	return labels
+}
+
+func directionKeyFor(keys []int, labels []string, label string) (int, bool) {
+	for i, l := range labels {
+		if l == label {
+			return keys[i], true
+		}
+	}
+	return 0, false
+}
+
+func (pp *PropertiesPanel) notifyPartChanged() {
+	pp.project.Dirty = true
+	if pp.OnPartChanged != nil {
+		pp.OnPartChanged()
 	}
 }
 
@@ -550,20 +645,47 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		pp.keyframeBox.Refresh()
 		return
 	}
-	kf := pp.project.SelectedKeyframe()
-	if kf == nil {
-		pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s: drag a tile onto the canvas to key it in direction %d",
-			part.Name, pp.project.Playback.ActiveDirection)))
+	dir := pp.project.ActiveDirection()
+	if dir == nil {
 		pp.keyframeBox.Refresh()
 		return
 	}
 
-	timeRow := pp.buildTimeEntry(part, kf)
+	// The position fields are always shown for a selected part - requested,
+	// since they used to appear only once a keyframe was selected, and
+	// clicking a part never selected one. With no keyframe selected they
+	// edit the part's keyframe at the playhead, adding one on the first
+	// edit if there isn't one there (as a canvas drag does), seeded from
+	// the pose the part is showing.
+	kf := pp.project.SelectedKeyframe()
+	playhead := pp.project.Playback.ElapsedMs
+	if kf == nil {
+		for _, existing := range dir.KeyframesFor(part.ID) {
+			if existing.TimeMs == playhead {
+				kf = existing // edited in place; the selection is left alone
+			}
+		}
+	}
+	pose := dir.ValueAt(part.ID, playhead)
+	if kf != nil {
+		pose = editor.ResolvedTransform{X: kf.X, Y: kf.Y, Z: kf.Z, RotationDeg: kf.RotationDeg,
+			Row: kf.Row, Col: kf.Col, Direction: kf.Direction}
+	}
+	// target is the keyframe an edit applies to, created (undoably) on the
+	// first edit when there isn't one at the playhead.
+	target := func() *editor.Keyframe {
+		if kf == nil {
+			pp.project.RecordUndo()
+			kf, _ = editor.EnsureKeyframe(dir, part.ID, playhead)
+			pp.project.Selection.KeyframeIndex = kf.ID
+		}
+		return kf
+	}
 
-	xEntry := numEntry(fmt.Sprintf("%v", kf.X), func(v float32) { kf.X = v; pp.notifyKeyframeChanged() })
-	yEntry := numEntry(fmt.Sprintf("%v", kf.Y), func(v float32) { kf.Y = v; pp.notifyKeyframeChanged() })
-	zEntry := numEntry(fmt.Sprintf("%v", kf.Z), func(v float32) { kf.Z = v; pp.notifyKeyframeChanged() })
-	rotEntry := numEntry(fmt.Sprintf("%v", kf.RotationDeg), func(v float32) { kf.RotationDeg = v; pp.notifyKeyframeChanged() })
+	xEntry := numEntry(fmt.Sprintf("%v", pose.X), func(v float32) { target().X = v; pp.notifyKeyframeChanged() })
+	yEntry := numEntry(fmt.Sprintf("%v", pose.Y), func(v float32) { target().Y = v; pp.notifyKeyframeChanged() })
+	zEntry := numEntry(fmt.Sprintf("%v", pose.Z), func(v float32) { target().Z = v; pp.notifyKeyframeChanged() })
+	rotEntry := numEntry(fmt.Sprintf("%v", pose.RotationDeg), func(v float32) { target().RotationDeg = v; pp.notifyKeyframeChanged() })
 
 	grid := container.NewGridWithColumns(2,
 		widget.NewLabel("X"), xEntry,
@@ -571,10 +693,31 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		widget.NewLabel("Z"), zEntry,
 		widget.NewLabel("Rotation"), rotEntry,
 	)
-	pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms  (row %d, col %d)", part.Name, kf.TimeMs, kf.Row, kf.Col)))
-	pp.keyframeBox.Add(timeRow)
+	if kf != nil {
+		pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms  (row %d, col %d)", part.Name, kf.TimeMs, kf.Row, kf.Col)))
+		pp.keyframeBox.Add(pp.buildTimeEntry(part, kf))
+	} else {
+		note := widget.NewLabel(fmt.Sprintf("%s @ %dms - not keyed here yet; editing adds a keyframe at the playhead.",
+			part.Name, playhead))
+		note.Wrapping = fyne.TextWrapWord
+		pp.keyframeBox.Add(note)
+	}
 	pp.keyframeBox.Add(grid)
-	pp.keyframeBox.Add(pp.buildNudgeControls(kf))
+	if part.Kind == editor.PartKindNestedAni && part.DirectionMode == editor.NestedDirPerKeyframe {
+		keys := pp.nestedDirectionKeys(part)
+		labels := directionLabels(keys)
+		dirSelect := widget.NewSelect(labels, nil)
+		dirSelect.SetSelected(directionLabel(pose.Direction))
+		// Assigned after SetSelected, which would re-fire it.
+		dirSelect.OnChanged = func(label string) {
+			if k, ok := directionKeyFor(keys, labels, label); ok {
+				target().Direction = k
+				pp.notifyKeyframeChanged()
+			}
+		}
+		pp.keyframeBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Direction"), nil, dirSelect))
+	}
+	pp.keyframeBox.Add(pp.buildNudgeControls(target))
 
 	if part.Kind == editor.PartKindNestedAni {
 		pp.keyframeBox.Add(pp.buildNestedBindingsEditor(part))
@@ -653,10 +796,13 @@ const (
 // entries (which mutate in place without rebuilding, to avoid disrupting
 // an in-progress keystroke), a nudge click rebuilds the keyframe section
 // afterward so the entries visibly reflect the new value immediately.
-func (pp *PropertiesPanel) buildNudgeControls(kf *editor.Keyframe) fyne.CanvasObject {
-	nudge := func(apply func()) func() {
+//
+// target returns the keyframe to nudge, creating it at the playhead on
+// first use (see refreshKeyframe).
+func (pp *PropertiesPanel) buildNudgeControls(target func() *editor.Keyframe) fyne.CanvasObject {
+	nudge := func(apply func(kf *editor.Keyframe)) func() {
 		return func() {
-			apply()
+			apply(target())
 			pp.notifyKeyframeChanged()
 			pp.refreshKeyframe()
 		}
@@ -664,25 +810,25 @@ func (pp *PropertiesPanel) buildNudgeControls(kf *editor.Keyframe) fyne.CanvasOb
 
 	xyPad := container.NewGridWithColumns(3,
 		layout.NewSpacer(),
-		widget.NewButton("Y-", nudge(func() { kf.Y -= nudgeStepXY })),
+		widget.NewButton("Y-", nudge(func(kf *editor.Keyframe) { kf.Y -= nudgeStepXY })),
 		layout.NewSpacer(),
-		widget.NewButton("X-", nudge(func() { kf.X -= nudgeStepXY })),
+		widget.NewButton("X-", nudge(func(kf *editor.Keyframe) { kf.X -= nudgeStepXY })),
 		widget.NewLabel("pos"),
-		widget.NewButton("X+", nudge(func() { kf.X += nudgeStepXY })),
+		widget.NewButton("X+", nudge(func(kf *editor.Keyframe) { kf.X += nudgeStepXY })),
 		layout.NewSpacer(),
-		widget.NewButton("Y+", nudge(func() { kf.Y += nudgeStepXY })),
+		widget.NewButton("Y+", nudge(func(kf *editor.Keyframe) { kf.Y += nudgeStepXY })),
 		layout.NewSpacer(),
 	)
 
 	zRow := container.NewHBox(
 		widget.NewLabel("Z:"),
-		widget.NewButton("Back -", nudge(func() { kf.Z -= nudgeStepZ })),
-		widget.NewButton("Fwd +", nudge(func() { kf.Z += nudgeStepZ })),
+		widget.NewButton("Back -", nudge(func(kf *editor.Keyframe) { kf.Z -= nudgeStepZ })),
+		widget.NewButton("Fwd +", nudge(func(kf *editor.Keyframe) { kf.Z += nudgeStepZ })),
 	)
 	rotRow := container.NewHBox(
 		widget.NewLabel("Rot:"),
-		widget.NewButton("-", nudge(func() { kf.RotationDeg -= nudgeStepRot })),
-		widget.NewButton("+", nudge(func() { kf.RotationDeg += nudgeStepRot })),
+		widget.NewButton("-", nudge(func(kf *editor.Keyframe) { kf.RotationDeg -= nudgeStepRot })),
+		widget.NewButton("+", nudge(func(kf *editor.Keyframe) { kf.RotationDeg += nudgeStepRot })),
 	)
 
 	return container.NewVBox(xyPad, zRow, rotRow)
@@ -699,6 +845,9 @@ func (pp *PropertiesPanel) buildNestedBindingsEditor(part *editor.Part) fyne.Can
 	box := container.NewVBox(newSectionHeader("Bindings"))
 
 	for propName, binding := range part.NestedBindings {
+		if propName == "direction" {
+			continue // set with the part's Direction picker instead
+		}
 		name := propName
 		b := binding
 		modeSelect := widget.NewSelect([]string{"passthrough", "static"}, nil)
@@ -738,7 +887,7 @@ func (pp *PropertiesPanel) buildNestedBindingsEditor(part *editor.Part) fyne.Can
 	}
 
 	newPropEntry := newEntry()
-	newPropEntry.SetPlaceHolder("prop name, e.g. direction")
+	newPropEntry.SetPlaceHolder("nested prop name, e.g. torch_sheet")
 	addBtn := widget.NewButton("+ Binding", func() {
 		if newPropEntry.Text == "" {
 			return

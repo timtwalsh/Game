@@ -135,7 +135,63 @@ type Part struct {
 
 	// NestedAni kind:
 	NestedAniPath  string
-	NestedBindings map[string]PropBinding // child prop name -> binding ("direction" included)
+	NestedBindings map[string]PropBinding // child prop name -> binding
+
+	// DirectionMode chooses which of the nested animation's directions
+	// plays (NestedAni kind). StaticDirection is used in NestedDirStatic;
+	// in NestedDirPerKeyframe each keyframe's Direction is.
+	DirectionMode   NestedDirMode
+	StaticDirection int
+}
+
+// NestedDirMode is how a nested part picks its animation's direction.
+type NestedDirMode int
+
+const (
+	// NestedDirInherit turns with the parent: the nested animation plays
+	// the parent's active direction. The default.
+	NestedDirInherit NestedDirMode = iota
+	// NestedDirStatic always plays one fixed direction (StaticDirection),
+	// e.g. a torch that looks the same whichever way the character faces.
+	NestedDirStatic
+	// NestedDirPerKeyframe takes the direction from the part's keyframes
+	// (Keyframe.Direction), stepping like a sheet part's cell does - so a
+	// held item can turn mid-animation.
+	NestedDirPerKeyframe
+)
+
+func (m NestedDirMode) String() string {
+	switch m {
+	case NestedDirStatic:
+		return "static"
+	case NestedDirPerKeyframe:
+		return "keyframe"
+	}
+	return "inherit"
+}
+
+// ParseNestedDirMode is String's inverse; anything unknown is Inherit.
+func ParseNestedDirMode(s string) NestedDirMode {
+	switch s {
+	case "static":
+		return NestedDirStatic
+	case "keyframe":
+		return NestedDirPerKeyframe
+	}
+	return NestedDirInherit
+}
+
+// NestedDirectionAt is the direction a nested part asks its animation to
+// play, given the parent's direction and the part's resolved transform at
+// this moment (whose Direction is the per-keyframe value).
+func (p *Part) NestedDirectionAt(parentDir int, tr ResolvedTransform) int {
+	switch p.DirectionMode {
+	case NestedDirStatic:
+		return p.StaticDirection
+	case NestedDirPerKeyframe:
+		return tr.Direction
+	}
+	return parentDir
 }
 
 // PropBinding configures one prop on a nested Part: either mirror one of
@@ -154,6 +210,10 @@ type Keyframe struct {
 	X, Y, Z     float32 // Z is tweened like X/Y, feeds draw-order sort
 	RotationDeg float32
 	Row, Col    int // Sheet kind only
+	// Direction is which direction a NestedAni part's animation plays from
+	// this keyframe on, when the part's DirectionMode is
+	// NestedDirPerKeyframe. Stepped, like Row/Col.
+	Direction int
 }
 
 // DefaultRefBoxWidth/Height size the reference box to roughly one

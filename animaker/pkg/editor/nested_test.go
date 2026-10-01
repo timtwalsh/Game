@@ -71,7 +71,7 @@ func TestNestedAnimationPlaysOnItsOwnClock(t *testing.T) {
 	}
 }
 
-func TestNestedDirectionFollowsParentOrBinding(t *testing.T) {
+func TestNestedDirectionInheritsOrIsStatic(t *testing.T) {
 	p, part := walkWithTorch(t)
 
 	p.SetActiveDirection(2)
@@ -80,13 +80,13 @@ func TestNestedDirectionFollowsParentOrBinding(t *testing.T) {
 		t.Errorf("parent facing 2: torch row = %d, want 1 (turns with the parent)", got)
 	}
 
-	part.NestedBindings = map[string]PropBinding{"direction": {StaticValue: "0"}}
+	part.DirectionMode, part.StaticDirection = NestedDirStatic, 0
 	if got := p.FlattenNested(part)[0].Row; got != 0 {
-		t.Errorf("direction pinned to 0: row = %d, want 0", got)
+		t.Errorf("static direction 0: row = %d, want 0", got)
 	}
 
 	// A facing the torch doesn't have falls back to its first.
-	part.NestedBindings = nil
+	part.DirectionMode = NestedDirInherit
 	p.CurrentTrack.Directions[1] = NewDirection()
 	p.SetActiveDirection(1)
 	AddKeyframe(p.ActiveDirection(), part.ID, 0)
@@ -152,5 +152,56 @@ func TestStillParentWithNestedAnimationCanPlay(t *testing.T) {
 	p.Play()
 	if !p.Playback.IsPlaying {
 		t.Error("Play refused: the parent holds still but its torch should flicker")
+	}
+}
+
+// Requested: the nested direction can also be set per keyframe, stepping
+// like a cell - e.g. a held torch turning partway through the walk.
+func TestNestedDirectionPerKeyframeSteps(t *testing.T) {
+	p, part := walkWithTorch(t)
+	part.DirectionMode = NestedDirPerKeyframe
+	dir := p.ActiveDirection()
+	dir.KeyframesFor(part.ID)[0].Direction = 0
+	second := AddKeyframe(dir, part.ID, 200)
+	second.X, second.Y, second.Direction = 10, 20, 2
+
+	p.Seek(100)
+	if got := p.FlattenNested(part)[0].Row; got != 0 {
+		t.Errorf("at 100ms row = %d, want direction 0's row 0", got)
+	}
+	p.Seek(200)
+	if got := p.FlattenNested(part)[0].Row; got != 1 {
+		t.Errorf("at 200ms row = %d, want direction 2's row 1", got)
+	}
+
+	// The canvas box covers both directions the part shows.
+	if _, _, _, _, ok := p.NestedExtent(part); !ok {
+		t.Error("no extent for a per-keyframe nested part")
+	}
+}
+
+// Switching mode keeps showing the same direction, so the artist sees no
+// jump: an inherited part facing 2 becomes per-keyframe with its direction-2
+// keyframes set to 2, or static at 2.
+func TestSwitchingDirectionModeDoesNotJump(t *testing.T) {
+	p, part := walkWithTorch(t)
+	p.SetActiveDirection(2)
+	AddKeyframe(p.ActiveDirection(), part.ID, 0)
+
+	before := p.FlattenNested(part)[0].Row
+	p.SetNestedDirectionMode(part, NestedDirPerKeyframe)
+	if kf := p.ActiveDirection().KeyframesFor(part.ID)[0]; kf.Direction != 2 {
+		t.Errorf("seeded keyframe direction = %d, want 2", kf.Direction)
+	}
+	if got := p.FlattenNested(part)[0].Row; got != before {
+		t.Errorf("switching to per-keyframe changed the row %d -> %d", before, got)
+	}
+
+	p.SetNestedDirectionMode(part, NestedDirStatic)
+	if part.StaticDirection != 2 {
+		t.Errorf("static direction seeded as %d, want 2", part.StaticDirection)
+	}
+	if got := p.FlattenNested(part)[0].Row; got != before {
+		t.Errorf("switching to static changed the row %d -> %d", before, got)
 	}
 }

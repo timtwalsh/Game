@@ -75,6 +75,7 @@ func DuplicateKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) (*Keyf
 	dst.X, dst.Y, dst.Z = pose.X, pose.Y, pose.Z
 	dst.RotationDeg = pose.RotationDeg
 	dst.Row, dst.Col = pose.Row, pose.Col
+	dst.Direction = pose.Direction
 	return dst, nil
 }
 
@@ -116,6 +117,7 @@ func EnsureKeyframe(dir *Direction, partID int, timeMs uint32) (kf *Keyframe, cr
 	kf.X, kf.Y, kf.Z = seed.X, seed.Y, seed.Z
 	kf.RotationDeg = seed.RotationDeg
 	kf.Row, kf.Col = seed.Row, seed.Col
+	kf.Direction = seed.Direction
 	return kf, true
 }
 
@@ -149,6 +151,7 @@ type ResolvedTransform struct {
 	X, Y, Z     float32
 	RotationDeg float32
 	Row, Col    int // Sheet kind only; step function, not interpolated
+	Direction   int // NestedAni per-keyframe direction; stepped like Row/Col
 }
 
 // ValueAt returns a part's interpolated transform at timeMs in this
@@ -194,6 +197,7 @@ func (d *Direction) ValueAt(partID int, timeMs uint32) ResolvedTransform {
 				RotationDeg: lerp(a.RotationDeg, b.RotationDeg, t),
 				Row:         a.Row,
 				Col:         a.Col,
+				Direction:   a.Direction,
 			}
 		}
 	}
@@ -201,7 +205,7 @@ func (d *Direction) ValueAt(partID int, timeMs uint32) ResolvedTransform {
 }
 
 func kfToResolved(kf *Keyframe) ResolvedTransform {
-	return ResolvedTransform{X: kf.X, Y: kf.Y, Z: kf.Z, RotationDeg: kf.RotationDeg, Row: kf.Row, Col: kf.Col}
+	return ResolvedTransform{X: kf.X, Y: kf.Y, Z: kf.Z, RotationDeg: kf.RotationDeg, Row: kf.Row, Col: kf.Col, Direction: kf.Direction}
 }
 
 func lerp(a, b, t float32) float32 {
