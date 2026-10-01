@@ -218,3 +218,38 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate
 	form.Resize(fyne.NewSize(450, 440))
 	form.Show()
 }
+
+// ShowRenamePartDialog asks for a new name for a part, prefilled with the
+// current one. onRename returns an error to refuse the name (empty, or
+// taken); the dialog then shows it and reopens with what was typed, so the
+// artist can correct it rather than start over.
+func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name string) error) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetText(current)
+
+	form := dialog.NewForm(
+		"Rename Part",
+		"Rename", "Cancel",
+		[]*widget.FormItem{
+			{Text: "Name", Widget: nameEntry},
+		},
+		func(confirmed bool) {
+			if !confirmed || onRename == nil {
+				return
+			}
+			if err := onRename(nameEntry.Text); err != nil {
+				typed := nameEntry.Text
+				errDlg := dialog.NewError(err, win)
+				errDlg.SetOnClosed(func() { ShowRenamePartDialog(win, typed, onRename) })
+				errDlg.Show()
+			}
+		},
+		win,
+	)
+	form.Resize(fyne.NewSize(400, 160))
+	form.Show()
+	// Focused with the text selected, so typing replaces "sprite_1"
+	// outright and Enter confirms.
+	win.Canvas().Focus(nameEntry)
+	nameEntry.TypedShortcut(&fyne.ShortcutSelectAll{})
+}
