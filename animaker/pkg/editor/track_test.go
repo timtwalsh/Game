@@ -212,3 +212,35 @@ func TestSetActiveDirectionKeepsPartSelection(t *testing.T) {
 		t.Errorf("KeyframeIndex = %d after a direction change, want -1", p.Selection.KeyframeIndex)
 	}
 }
+
+// Deleting a part above the selected one shifts the selected part's index
+// down; the selection must follow it rather than land on its neighbour.
+func TestDeletePartKeepsSelectionOnTheSamePart(t *testing.T) {
+	p := NewProject("t")
+	for _, n := range []string{"head", "arm", "legs"} {
+		AddPart(p.CurrentTrack, NewSheetPart(n, "", "sheet"))
+	}
+
+	p.Selection.PartIndex, p.Selection.KeyframeIndex = 2, 0 // legs
+	if err := p.DeletePart(0); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.SelectedPart(); got == nil || got.Name != "legs" {
+		t.Errorf("after deleting head, selection is %v, want legs", got)
+	}
+
+	if err := p.DeletePart(1); err != nil { // legs itself
+		t.Fatal(err)
+	}
+	if p.Selection.PartIndex != -1 || p.Selection.KeyframeIndex != -1 {
+		t.Errorf("deleting the selected part left selection %+v", *p.Selection)
+	}
+
+	p.Selection.PartIndex = 0 // arm
+	if err := p.DeletePart(5); err == nil {
+		t.Error("deleting an out-of-range part didn't error")
+	}
+	if p.Selection.PartIndex != 0 {
+		t.Errorf("a failed delete moved the selection to %d", p.Selection.PartIndex)
+	}
+}

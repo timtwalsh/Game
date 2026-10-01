@@ -225,7 +225,7 @@ func (t *Track) ReferencedSheetNames() []string {
 		}
 	}
 	for _, pd := range t.Props {
-		if pd.Default != "" {
+		if pd.Default != "" && !pd.IsAnimProp() {
 			seen[pd.Default] = true
 		}
 	}
@@ -235,6 +235,30 @@ func (t *Track) ReferencedSheetNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ReferencedAnimPaths lists every nested .anif the track names - nested
+// parts' own paths and animation props' defaults - without duplicates.
+func (t *Track) ReferencedAnimPaths() []string {
+	seen := map[string]bool{}
+	var paths []string
+	add := func(p string) {
+		if p != "" && !seen[AnimKey(p)] {
+			seen[AnimKey(p)] = true
+			paths = append(paths, p)
+		}
+	}
+	for _, p := range t.Parts {
+		if p.Kind == PartKindNestedAni {
+			add(p.NestedAniPath)
+		}
+	}
+	for _, pd := range t.Props {
+		if pd.IsAnimProp() {
+			add(pd.Default)
+		}
+	}
+	return paths
 }
 
 // SortedDirectionKeys returns direction keys in ascending numeric order.

@@ -3,6 +3,7 @@ package ui
 import (
 	"animaker/pkg/editor"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -46,16 +47,20 @@ type PropertiesPanel struct {
 	OnTileDropped     func(sheetName string, row, col int, absPos fyne.Position)
 	OnTileTapped      func(row, col int)
 	OnImport          func()
+	OnImportAnim      func()
 	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
 	OnAddProp         func()
 	OnPartChanged     func()
-	OnPartRemoved     func(idx int)
+	// OnPartDelete asks app.go to delete a part; it confirms first.
+	OnPartDelete func(idx int)
 	OnKeyframeChanged func()
 	OnKeyframeRetimed func() // the selected keyframe's time was typed in
 	OnPropsChanged    func()
 	// OnLoadPreviewSheet asks app.go (which owns the window, for the file
 	// dialog) to load an image as a preview-only option for a prop.
 	OnLoadPreviewSheet func(propName string)
+	// OnRemoveSheet asks app.go to remove an imported sheet; it confirms.
+	OnRemoveSheet func(sheetName string)
 }
 
 func NewPropertiesPanel(project *editor.Project) *PropertiesPanel {
@@ -74,6 +79,11 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 	importBtn := widget.NewButton("Import Sprite Sheet...", func() {
 		if pp.OnImport != nil {
 			pp.OnImport()
+		}
+	})
+	importAnimBtn := widget.NewButton("Import Animation...", func() {
+		if pp.OnImportAnim != nil {
+			pp.OnImportAnim()
 		}
 	})
 	addPartBtn := widget.NewButton("+ Add Part", func() {
@@ -103,7 +113,8 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 	// splits. The props schema, edited far less often, sits below it.
 	pp.rigBox = container.NewVBox(
 		newSectionHeader("PARTS"),
-		container.NewHBox(importBtn, addPartBtn),
+		container.NewGridWithColumns(2, importBtn, importAnimBtn),
+		addPartBtn,
 		pp.partListBox,
 		pp.partLinkBox,
 		widget.NewSeparator(),
@@ -152,7 +163,19 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 		"Click a tile to re-cell the selected keyframe.")
 	hint.Wrapping = fyne.TextWrapWord
 
-	header := container.NewVBox(pp.paletteSelect, pp.paletteLabel)
+	// Removes the sheet on show from the track - e.g. one imported by
+	// mistake, which otherwise stays recorded in the .anif for good.
+	removeBtn := widget.NewButton("Remove", func() {
+		if pp.OnRemoveSheet != nil && pp.project.PaletteSheet != "" {
+			pp.OnRemoveSheet(pp.project.PaletteSheet)
+		}
+	})
+	removeBtn.Importance = widget.DangerImportance
+
+	header := container.NewVBox(
+		container.NewBorder(nil, nil, nil, removeBtn, pp.paletteSelect),
+		pp.paletteLabel,
+	)
 	return container.NewBorder(header, hint, nil, nil, container.NewScroll(pp.sheetGrid))
 }
 
@@ -168,7 +191,10 @@ func (pp *PropertiesPanel) refreshPalette() {
 	if pp.project.PaletteSheet == "" && len(names) > 0 {
 		pp.project.PaletteSheet = names[0]
 	}
-	if pp.project.PaletteSheet != "" && pp.paletteSelect.Selected != pp.project.PaletteSheet {
+	// Set directly, not with SetSelected, which would re-fire OnChanged.
+	// Covers the palette's sheet being removed, too: Selected must not keep
+	// naming a sheet that's no longer an option.
+	if pp.paletteSelect.Selected != pp.project.PaletteSheet {
 		pp.paletteSelect.Selected = pp.project.PaletteSheet
 	}
 	pp.paletteSelect.Refresh()
@@ -295,17 +321,8 @@ func (pp *PropertiesPanel) refreshPartList() {
 			btn.Importance = widget.HighImportance
 		}
 		delBtn := widget.NewButton("Delete", func() {
-			pp.project.RecordUndo()
-			// Removes the part from the rig and its keyframes from every
-			// direction, not just the one on screen.
-			editor.RemovePart(track, idx)
-			if sel != nil && sel.PartIndex == idx {
-				sel.PartIndex = -1
-				sel.KeyframeIndex = -1
-			}
-			pp.Refresh()
-			if pp.OnPartRemoved != nil {
-				pp.OnPartRemoved(idx)
+			if pp.OnPartDelete != nil {
+				pp.OnPartDelete(idx)
 			}
 		})
 		delBtn.Importance = widget.DangerImportance
@@ -363,14 +380,17 @@ func (pp *PropertiesPanel) refreshPartLink() {
 	}
 
 	if part.Kind == editor.PartKindNestedAni {
-		pp.partLinkBox.Add(widget.NewLabel("Nested: " + part.NestedAniPath))
+		pp.buildNestedLink(part)
 		pp.partLinkBox.Refresh()
 		return
 	}
 
+	// Only sheet-valued props: an .anif prop can't give a sheet part a cell.
 	propOptions := []string{"(none - fixed sheet)"}
 	for _, pd := range pp.project.CurrentTrack.Props {
-		propOptions = append(propOptions, pd.Name)
+		if !pd.IsAnimProp() {
+			propOptions = append(propOptions, pd.Name)
+		}
 	}
 	propSelect := widget.NewSelect(propOptions, nil)
 	if part.GoverningProp == "" {
@@ -424,6 +444,69 @@ func (pp *PropertiesPanel) refreshPartLink() {
 		pp.partLinkBox.Add(widget.NewLabel("No sheets imported yet — use Import Sprite Sheet."))
 	}
 	pp.partLinkBox.Refresh()
+}
+
+// buildNestedLink is the nested-part counterpart of the sheet link: which
+// animation-valued prop (if any) chooses the animation, else which loaded
+// animation it plays. Changing either is undoable.
+func (pp *PropertiesPanel) buildNestedLink(part *editor.Part) {
+	const none = "(none - fixed animation)"
+	propOptions := []string{none}
+	for _, pd := range pp.project.CurrentTrack.Props {
+		if pd.IsAnimProp() {
+			propOptions = append(propOptions, pd.Name)
+		}
+	}
+	propSelect := widget.NewSelect(propOptions, nil)
+	if part.GoverningProp == "" {
+		propSelect.SetSelected(none)
+	} else {
+		propSelect.SetSelected(part.GoverningProp)
+	}
+
+	paths := pp.project.LoadedAnimPaths()
+	if part.NestedAniPath != "" && pp.project.LoadedAnims[editor.AnimKey(part.NestedAniPath)] == nil {
+		paths = append([]string{part.NestedAniPath}, paths...) // keep showing an unloaded binding
+	}
+	labels := AnimLabels(paths)
+	animSelect := widget.NewSelect(labels, nil)
+	animSelect.PlaceHolder = "(no animation)"
+	if part.NestedAniPath != "" {
+		animSelect.SetSelected(labelFor(labels, paths, part.NestedAniPath))
+	}
+	if part.GoverningProp != "" {
+		animSelect.Disable()
+	}
+
+	changed := func() {
+		pp.project.Dirty = true
+		if pp.OnPartChanged != nil {
+			pp.OnPartChanged()
+		}
+	}
+	// Assigned after the SetSelected calls above, which would re-fire them.
+	propSelect.OnChanged = func(v string) {
+		pp.project.RecordUndo()
+		if v == none {
+			part.GoverningProp = ""
+			animSelect.Enable()
+		} else {
+			part.GoverningProp = v
+			animSelect.Disable()
+		}
+		changed()
+	}
+	animSelect.OnChanged = func(label string) {
+		pp.project.RecordUndo()
+		part.NestedAniPath = valueFor(labels, paths, label)
+		changed()
+	}
+
+	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Prop:"), nil, propSelect))
+	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Animation:"), nil, animSelect))
+	if len(pp.project.LoadedAnims) == 0 {
+		pp.partLinkBox.Add(widget.NewLabel("No animations imported yet - use Import Animation."))
+	}
 }
 
 // sheetPickerOptions lists the loaded sheets, keeping current if it names a
@@ -682,7 +765,11 @@ func (pp *PropertiesPanel) refreshSchema() {
 	pp.schemaBox.RemoveAll()
 	for i, prop := range pp.project.CurrentTrack.Props {
 		idx := i
-		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, prop.Default))
+		def := prop.Default
+		if prop.IsAnimProp() {
+			def = filepath.Base(def)
+		}
+		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, def))
 		delBtn := widget.NewButton("x", func() {
 			pp.project.RecordUndo()
 			editor.RemoveProp(pp.project.CurrentTrack, idx)
@@ -717,14 +804,21 @@ func (pp *PropertiesPanel) refreshPreview() {
 			current = v
 		}
 		// A pick-list, for the same reason as the part's sheet picker: a
-		// value naming no loaded sheet makes linked parts draw nothing.
-		sel := widget.NewSelect(sheetPickerOptions(pp.project.PreviewOptionNames(), current), nil)
+		// value naming nothing loaded makes linked parts draw nothing. An
+		// animation prop lists loaded animations instead of sheets.
+		values := sheetPickerOptions(pp.project.PreviewOptionNames(), current)
+		labels := values
+		if prop.IsAnimProp() {
+			values = sheetPickerOptions(pp.project.LoadedAnimPaths(), current)
+			labels = AnimLabels(values)
+		}
+		sel := widget.NewSelect(labels, nil)
 		if current != "" {
-			sel.SetSelected(current)
+			sel.SetSelected(labelFor(labels, values, current))
 		}
 		// Assigned after SetSelected so seeding doesn't fire it.
-		sel.OnChanged = func(v string) {
-			pp.project.PreviewProps[name] = v
+		sel.OnChanged = func(label string) {
+			pp.project.PreviewProps[name] = valueFor(labels, values, label)
 			pp.refreshSheetGrid()
 			if pp.OnPartChanged != nil {
 				pp.OnPartChanged()

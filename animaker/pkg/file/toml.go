@@ -124,7 +124,11 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 	}
 
 	for _, prop := range t.Props {
-		tt.Props = append(tt.Props, tomlPropDef{Name: prop.Name, Default: prop.Default})
+		def := prop.Default
+		if prop.IsAnimProp() {
+			def = relAnimPath(path, def)
+		}
+		tt.Props = append(tt.Props, tomlPropDef{Name: prop.Name, Default: def})
 	}
 
 	for _, ref := range sheets {
@@ -142,7 +146,7 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 			Kind:          partKindToString(part.Kind),
 			GoverningProp: part.GoverningProp,
 			FixedSheet:    part.FixedSheet,
-			NestedAniPath: part.NestedAniPath,
+			NestedAniPath: relAnimPath(path, part.NestedAniPath),
 		}
 		if len(part.NestedBindings) > 0 {
 			tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
@@ -206,7 +210,11 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 		t.RefBoxHeight = editor.DefaultRefBoxHeight
 	}
 	for _, p := range tt.Props {
-		t.Props = append(t.Props, editor.PropDef{Name: p.Name, Default: p.Default})
+		def := p.Default
+		if editor.IsAnimValue(def) {
+			def = absAnimPath(path, def)
+		}
+		t.Props = append(t.Props, editor.PropDef{Name: p.Name, Default: def})
 	}
 
 	knownPart := make(map[int]bool, len(tt.Parts))
@@ -217,7 +225,7 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 			Kind:          partKindFromString(tp.Kind),
 			GoverningProp: tp.GoverningProp,
 			FixedSheet:    tp.FixedSheet,
-			NestedAniPath: tp.NestedAniPath,
+			NestedAniPath: absAnimPath(path, tp.NestedAniPath),
 		}
 		if len(tp.NestedBindings) > 0 {
 			part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
@@ -256,6 +264,32 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	}
 
 	return t, refs, nil
+}
+
+// relAnimPath writes a nested .anif path relative to the .anif containing
+// it, so a folder of tracks can be moved as a whole. In memory such paths
+// are absolute (absAnimPath), which is what Project.LoadedAnims is keyed by.
+func relAnimPath(anifPath, p string) string {
+	if p == "" {
+		return ""
+	}
+	if rel, err := filepath.Rel(filepath.Dir(anifPath), p); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(p)
+}
+
+// absAnimPath resolves a nested .anif path read from a file against that
+// file's folder.
+func absAnimPath(anifPath, p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.FromSlash(p)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(filepath.Dir(anifPath), p)
+	}
+	return editor.AnimKey(p)
 }
 
 // ---- Save/Load SpriteSheetTemplate (.sprsh) ----

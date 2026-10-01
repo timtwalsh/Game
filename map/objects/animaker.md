@@ -318,6 +318,87 @@ feedback after using the previous version:
     - `LoadTrack` now returns `(track, refs, err)`; `SaveTrack` takes the
       refs.
 
+17. **Delete a part from the timeline** (2026-10-01). Reported: no way to
+    delete a layer from the timeline. Each row now has a red x at the
+    left of its name (`rowDeleteButton`, a drawn glyph since a
+    widget.Button is taller than a row; a sibling of the name, not
+    nested in it, so it can't compete with click/double-click). It and
+    the part list's Delete both go through `app.confirmDeletePart`,
+    which confirms (the delete spans every direction) and is undoable.
+    Found along the way: the part list's Delete left the selection
+    index unchanged when deleting a part *above* the selected one, so
+    the selection silently moved to the neighbouring part.
+    `Project.DeletePart` now shifts it.
+
+18. **Session logs, and a playback race fixed** (2026-10-01). Reported: the
+    editor crashed with no trace. `build_local.ps1` starts it with
+    `Start-Process`, so Go's crash dump went to a console window that
+    closed with the process, and Go crashes skip Windows error reporting.
+    - `pkg/applog`: each run writes `bin/logs/animaker-<time>.log` (20
+      kept). It gets the standard logger (where Fyne reports its own
+      errors), every error the editor shows (`app.showError`, which all
+      error dialogs now use), and the runtime's crash output. On Windows
+      that's done by pointing the process's stderr handle at the file:
+      `debug.SetCrashOutput` alone records a fatal error's stack but not
+      its message line. A clean shutdown appends a marker; if the last
+      log lacks it, the next launch says the editor crashed and where the
+      log is. Tested by re-running the test binary as a child that really
+      panics / hits a concurrent map write.
+    - **Likely cause of the crash:** `playbackLoop` advanced the project
+      and redrew from its own goroutine while the UI goroutine edited the
+      same keyframe maps — an uncatchable "concurrent map iteration and
+      map write". Each tick now runs inside `fyne.Do`. Unconfirmed as the
+      cause, since the crash left no log; the logs will say next time.
+    - Follow-up: a second editor opened while the first was still open
+      reported the first as crashed (its log isn't finished). Each log's
+      first line now carries `pid=`; an unfinished log counts as a crash
+      only if that process is gone (`applog.crashed`).
+
+19. **Remove an imported sheet** (2026-10-01). Reported: an accidentally
+    imported `flame.png` was stuck in the `.anif` — every loaded sheet
+    is written to `[[sheets]]` on save, and nothing could unload one.
+    The palette's sheet picker has a **Remove** button
+    (`Project.RemoveSheet`, confirmed by `app.confirmRemoveSheet`). It
+    only unloads the sheet, so the next save drops it from `[[sheets]]`;
+    files on disk are untouched. It refuses while a part's fixed sheet or
+    a prop's default names it (`Track.SheetUsers`,
+    `SheetInUseError`), since those would otherwise draw nothing, and it
+    clears preview overrides naming it. Not undoable (sheets aren't in
+    the track snapshot), which is why it confirms; re-import restores it.
+
+20. **Nested animations: import, props, live playback** (2026-10-01).
+    Reported: couldn't add `torch.anif` to `walk_torch.anif` as a prop.
+    Nested parts existed only behind "+ Add Part" with a typed path,
+    never got a keyframe (so never showed), drew as a 24px placeholder,
+    and props could only hold sheets. The user asked for nesting to work
+    like importing a sheet, with the prop opt-in there or later.
+    - **Import Animation** (`ui.ShowImportAnimDialog`,
+      `app.onImportAnim`): loads the `.anif` via `file.LoadNestedAnim`
+      (its own sheets, recursive nesting, cycle-safe via the `loaded`
+      map) into `Project.LoadedAnims` keyed by `editor.AnimKey`
+      (absolute path), adds a part keyed at the playhead at the origin,
+      and optionally declares an `.anif`-valued prop. Naming an existing
+      `.anif` prop only adds an option. Refuses nesting the track in
+      itself.
+    - **Props hold `.anif` paths** for nested parts (`IsAnimValue` - the
+      value decides the kind, no format change). Sheet parts' prop
+      picker lists only sheet props; nested parts get Prop / Animation
+      pickers (`buildNestedLink`). Add Prop and Preview Overrides offer
+      loaded animations; "Load file..." on an `.anif` prop loads one.
+    - **Live playback**: `Project.FlattenNested` resolves a nested part
+      to sheet sprites through any nesting (depth-capped at 4), with
+      `childDirection` / `childProps` applying `NestedBindings`. It runs
+      on `Playback.NestedClockMs`, which advances while playing but never
+      wraps with the parent; Seek/Stop/direction switch reset it. `Play`
+      now starts for a still parent that contains a nested animation.
+      The canvas draws the sprites and sizes/hit-tests the part by
+      `NestedExtent` (every keyframed pose), so it doesn't resize as the
+      torch plays.
+    - **Files**: nested paths and `.anif` prop defaults are absolute in
+      memory, relative to the `.anif` on disk (`relAnimPath` /
+      `absAnimPath`); opening a track loads its nested animations.
+    - Still not shown: nested **rotation**, like every part's.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to

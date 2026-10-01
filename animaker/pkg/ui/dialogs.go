@@ -188,7 +188,12 @@ func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
 // track. The default is a pick-list of imported sheets, not free text: a
 // default naming no loaded sheet makes every part linked to the prop draw
 // nothing, which is exactly how typing "body" here made a sprite vanish.
-func ShowAddPropDialog(win fyne.Window, sheetNames []string, onCreate func(name, defaultSheet string)) {
+//
+// labels/values are the default's options, in parallel: loaded sheets
+// (label = value = sheet name) and loaded nested animations (label =
+// "torch.anif", value = its path). The value type decides the prop's kind:
+// a sheet prop governs sheet parts, an .anif prop governs nested parts.
+func ShowAddPropDialog(win fyne.Window, labels, values []string, onCreate func(name, defaultValue string)) {
 	nameEntry := newEntry()
 	nameEntry.SetPlaceHolder("hair, arms, legs, ...")
 	nameEntry.Validator = func(s string) error {
@@ -197,13 +202,13 @@ func ShowAddPropDialog(win fyne.Window, sheetNames []string, onCreate func(name,
 		}
 		return nil
 	}
-	defaultSelect := widget.NewSelect(sheetNames, nil)
-	defaultSelect.PlaceHolder = "(import a sheet first)"
-	if len(sheetNames) > 0 {
-		defaultSelect.SetSelected(sheetNames[0])
+	defaultSelect := widget.NewSelect(labels, nil)
+	defaultSelect.PlaceHolder = "(import a sheet or animation first)"
+	if len(labels) > 0 {
+		defaultSelect.SetSelected(labels[0])
 	}
-	hint := widget.NewLabel("A prop is a swappable art slot. Its value is a sheet; " +
-		"parts linked to it draw from whichever sheet it's set to.")
+	hint := widget.NewLabel("A prop is a swappable art slot. Its value is a sheet (for sheet " +
+		"parts) or an .anif (for nested animation parts); linked parts use whichever it's set to.")
 	hint.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
@@ -211,12 +216,12 @@ func ShowAddPropDialog(win fyne.Window, sheetNames []string, onCreate func(name,
 		"Add", "Cancel",
 		[]*widget.FormItem{
 			{Text: "Name", Widget: nameEntry},
-			{Text: "Default Sheet", Widget: defaultSelect},
+			{Text: "Default", Widget: defaultSelect},
 			{Text: "", Widget: hint},
 		},
 		func(confirmed bool) {
 			if confirmed && onCreate != nil {
-				onCreate(strings.TrimSpace(nameEntry.Text), defaultSelect.Selected)
+				onCreate(strings.TrimSpace(nameEntry.Text), valueFor(labels, values, defaultSelect.Selected))
 			}
 		},
 		win,
@@ -230,7 +235,7 @@ func ShowAddPropDialog(win fyne.Window, sheetNames []string, onCreate func(name,
 // governing-prop dropdown; sheetNames lists the currently loaded sheets, so
 // the fixed sheet is picked from what exists rather than typed from memory
 // (a typo there produces a part that silently draws nothing).
-func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
+func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animPaths []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
 	nameEntry := newEntry()
 	nameEntry.SetPlaceHolder("Body, Hair, Arm_Left, ...")
 
@@ -247,15 +252,20 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate
 		fixedSheetSelect.SetSelected(sheetNames[0])
 	}
 
-	nestedPathEntry := newEntry()
-	nestedPathEntry.SetPlaceHolder("base_wood_torch.anif")
+	// A pick-list of imported animations rather than a typed path, which
+	// was easy to get wrong and gave no hint which files were available.
+	nestedSelect := widget.NewSelect(animLabels, nil)
+	nestedSelect.PlaceHolder = "(use Import Animation first)"
+	if len(animLabels) == 1 {
+		nestedSelect.SetSelected(animLabels[0])
+	}
 
 	items := []*widget.FormItem{
 		{Text: "Name", Widget: nameEntry},
 		{Text: "Kind", Widget: kindSelect},
 		{Text: "Governing Prop", Widget: propSelect},
 		{Text: "Fixed Sheet", Widget: fixedSheetSelect},
-		{Text: "Nested .anif Path", Widget: nestedPathEntry},
+		{Text: "Nested Animation", Widget: nestedSelect},
 	}
 	if len(sheetNames) == 0 {
 		items = append(items, &widget.FormItem{
@@ -280,7 +290,7 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames []string, onCreate
 			if governingProp == propOptions[0] {
 				governingProp = ""
 			}
-			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, nestedPathEntry.Text)
+			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, valueFor(animLabels, animPaths, nestedSelect.Selected))
 		},
 		win,
 	)

@@ -1,7 +1,7 @@
 # ANIFile Animation Maker — Technical Specification (v2: Rigged/Parts Model)
 
 **Version**: 2.0 (supersedes v1 in full — this is not an extension of the old design, it's a replacement)
-**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`, then revised twice more the same day from hands-on use: Directions changed from free-form strings to plain ints; the UI was reworked into a level-editor interaction (drag tiles onto a canvas) and then further into a fully interactive canvas (click/drag placed parts) with a real scrubbable timeline — see `map/objects/animaker.md` for the UI history in detail. Revised again 2026-09-19 from hands-on use: the `CanvasWidth`/`CanvasHeight` "working area" became a `RefBoxWidth`/`RefBoxHeight` placement guide over an unbounded space, new tracks seed directions 0-3, the timeline gained a scrubbable range that extends past the last keyframe, and — the one structural change to the data model since v2 was written — Parts moved from inside each Direction up to the Track, so the rig is shared and a Direction holds only keyframes (all reflected below). Known, deliberate implementation gaps (nested-animation preview rendering, visual rotation in the canvas, no drag-to-retime on the timeline) are tracked there, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
+**Status**: Implemented 2026-09-18 in `animaker/pkg/editor`/`pkg/ui`, then revised twice more the same day from hands-on use: Directions changed from free-form strings to plain ints; the UI was reworked into a level-editor interaction (drag tiles onto a canvas) and then further into a fully interactive canvas (click/drag placed parts) with a real scrubbable timeline — see `map/objects/animaker.md` for the UI history in detail. Revised again 2026-09-19 from hands-on use: the `CanvasWidth`/`CanvasHeight` "working area" became a `RefBoxWidth`/`RefBoxHeight` placement guide over an unbounded space, new tracks seed directions 0-3, the timeline gained a scrubbable range that extends past the last keyframe, and — the one structural change to the data model since v2 was written — Parts moved from inside each Direction up to the Track, so the rig is shared and a Direction holds only keyframes (all reflected below). Known, deliberate implementation gaps (visual rotation in the canvas; nested-animation preview rendering was one until 2026-10-01, see below) are tracked there, not here. The [Open questions](#open-questions--genuinely-unresolved) section below is still genuinely unresolved in code, exactly as written. The [History](#history-what-v1-was) section describes the v1 flipbook model this replaced.
 **Language**: Go
 **GUI Framework**: Fyne
 **File format**: TOML (consistent with the rest of `animaker/pkg/file`)
@@ -109,6 +109,8 @@ type PropBinding struct {
 }
 ```
 
+**In the editor** (2026-10-01): a nested `.anif` is added with **Import Animation**, the counterpart of importing a sprite sheet. It loads the file (and its own sheets, and anything it nests in turn), adds a part playing it at the origin keyed at the playhead, and offers the same "Swappable (a prop)" opt-in as a sheet import; a part's Prop / Animation pickers change either later. The canvas plays the nested animation live, on its own clock that keeps running while playing and doesn't wrap with the parent (scrubbing sets it to the scrubbed time). Unbound, a nested animation's direction turns with the parent's, falling back to its first direction if it lacks that one. Nested paths are stored relative to the containing `.anif`.
+
 Example: placing a torch in `human_torch_run.anif`, the artist can bind the torch's `direction` to pass through from `human_torch_run`'s own active direction (torch turns with the character), or pin it to a static value (torch always renders the same way regardless of facing) — same mechanism for any prop the nested asset happens to expose, direction included.
 
 ---
@@ -145,7 +147,7 @@ type PropDef struct {
 }
 ```
 
-**A prop's value is always the name of a sheet to use.** There is no separate "variant index" vs. "hotswap name" distinction — one mechanism covers both a small dev-curated set of arm styles and a community library of thousands of hairstyles.
+**A prop's value is the name of a sheet to use** — or, for a prop governing [nested-animation parts](#nested-animation-part), the path of an `.anif` to play (decided 2026-10-01: e.g. a `held_item` prop swapping `torch.anif` for `lantern.anif`). The value itself says which (an `.anif` path vs. a sheet name), so there is no separate prop type in the file; a sheet prop can only govern sheet parts and an `.anif` prop only nested parts. There is no separate "variant index" vs. "hotswap name" distinction — one mechanism covers both a small dev-curated set of arm styles and a community library of thousands of hairstyles.
 
 **One prop can govern multiple Parts** — e.g. `arms` governs both `Arm_Left` and `Arm_Right`. See [Open questions](#open-questions--genuinely-unresolved) for how a single prop value resolves to two different physical sheets.
 

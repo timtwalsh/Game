@@ -4,6 +4,7 @@ import (
 	"animaker/pkg/editor"
 	"fmt"
 	"image/color"
+	"path/filepath"
 	"sort"
 
 	"fyne.io/fyne/v2"
@@ -87,7 +88,7 @@ func (cw *CanvasWidget) ToggleGrid() {
 const (
 	canvasMarginPx   = 24 // anim px of breathing room around the content
 	canvasQuantizePx = 32 // view extent rounds outward to this, so small moves don't resize
-	nestedBoxPx      = 24 // placeholder box size for a NestedAni part, in anim px
+	nestedBoxPx      = 24 // placeholder box for a NestedAni part whose animation isn't loaded, in anim px
 )
 
 // refBox returns the track's character-sized reference box dimensions.
@@ -100,9 +101,15 @@ func (cw *CanvasWidget) refBox() (w, h float32) {
 }
 
 // partExtentAnim is a part's drawn size and pivot in animation pixels,
-// which is a property of its sheet and so the same for all its keyframes.
+// the same for all its keyframes. For a sheet part that's its cell; for a
+// nested part it's the box covering every pose of the animation it plays
+// (Project.NestedExtent), "pivoted" at the nested animation's own origin -
+// so the canvas sizes to it and doesn't resize as it plays.
 func (cw *CanvasWidget) partExtentAnim(part *editor.Part) (w, h, pivotX, pivotY float32) {
 	if part.Kind == editor.PartKindNestedAni {
+		if minX, minY, maxX, maxY, ok := cw.project.NestedExtent(part); ok {
+			return maxX - minX, maxY - minY, -minX, -minY
+		}
 		return nestedBoxPx, nestedBoxPx, nestedBoxPx / 2, nestedBoxPx / 2
 	}
 	sheet := cw.project.ResolveActiveSheet(part)
@@ -230,6 +237,10 @@ type resolvedDraw struct {
 	part    *editor.Part
 	tr      editor.ResolvedTransform
 	sheet   *editor.SpriteSheetTemplate
+	// sprites is a nested part's animation, flattened for this frame and
+	// positioned relative to the part (nil for sheet parts, or a nested
+	// part whose animation isn't loaded).
+	sprites []editor.FlatSprite
 	rect    fyne.Position // top-left
 	size    fyne.Size
 }
@@ -257,6 +268,9 @@ func (cw *CanvasWidget) resolvedDraws() []resolvedDraw {
 			sheet = cw.project.ResolveActiveSheet(part)
 		}
 		d := resolvedDraw{partIdx: i, part: part, tr: dir.ValueAt(part.ID, elapsed), sheet: sheet}
+		if part.Kind == editor.PartKindNestedAni {
+			d.sprites = cw.project.FlattenNested(part)
+		}
 		d.rect, d.size = cw.screenRectFor(d)
 		draws = append(draws, d)
 	}
@@ -421,19 +435,7 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 
 func (r *canvasRenderer) drawPart(d resolvedDraw, selected bool) []fyne.CanvasObject {
 	if d.part.Kind == editor.PartKindNestedAni {
-		box := canvas.NewRectangle(color.RGBA{R: 0, G: 0, B: 0, A: 0})
-		box.StrokeColor = ColorOriginCrosshair
-		box.StrokeWidth = 1
-		box.Resize(d.size)
-		box.Move(d.rect)
-		label := canvas.NewText(fmt.Sprintf("%s -> %s", d.part.Name, d.part.NestedAniPath), ColorOriginCrosshair)
-		label.TextSize = 9
-		label.Move(fyne.NewPos(d.rect.X, d.rect.Y+d.size.Height+2))
-		objs := []fyne.CanvasObject{box, label}
-		if selected {
-			objs = append(objs, selectionOutline(d.rect, d.size))
-		}
-		return objs
+		return r.drawNested(d, selected)
 	}
 
 	if d.sheet == nil || d.sheet.Image == nil {
@@ -450,6 +452,48 @@ func (r *canvasRenderer) drawPart(d resolvedDraw, selected bool) []fyne.CanvasOb
 	img.Resize(d.size)
 	img.Move(d.rect)
 	objs := []fyne.CanvasObject{img}
+	if selected {
+		objs = append(objs, selectionOutline(d.rect, d.size))
+	}
+	return objs
+}
+
+// drawNested draws a nested part's animation, live: every sprite of the
+// flattened frame, offset by the part's own position. One whose animation
+// isn't loaded is drawn as a labelled placeholder box instead of nothing,
+// so it can still be seen, selected and moved.
+func (r *canvasRenderer) drawNested(d resolvedDraw, selected bool) []fyne.CanvasObject {
+	cw := r.widget
+	var objs []fyne.CanvasObject
+	if len(d.sprites) == 0 {
+		box := canvas.NewRectangle(color.RGBA{R: 0, G: 0, B: 0, A: 0})
+		box.StrokeColor = ColorOriginCrosshair
+		box.StrokeWidth = 1
+		box.Resize(d.size)
+		box.Move(d.rect)
+		name := filepath.Base(cw.project.ResolveNestedAnimPath(d.part))
+		label := canvas.NewText(fmt.Sprintf("%s: %s not loaded", d.part.Name, name), ColorOriginCrosshair)
+		label.TextSize = 9
+		label.Move(fyne.NewPos(d.rect.X, d.rect.Y+d.size.Height+2))
+		objs = append(objs, box, label)
+	}
+
+	origin := cw.originScreen()
+	for _, s := range d.sprites {
+		cellImg, err := s.Sheet.CellImage(s.Row, s.Col)
+		if err != nil {
+			continue
+		}
+		img := canvas.NewImageFromImage(cellImg)
+		img.ScaleMode = canvas.ImageScalePixels
+		img.FillMode = canvas.ImageFillOriginal
+		img.Resize(fyne.NewSize(float32(s.Sheet.CellW)*cw.zoom, float32(s.Sheet.CellH)*cw.zoom))
+		img.Move(fyne.NewPos(
+			origin.X+(d.tr.X+s.X-s.Sheet.PivotX)*cw.zoom,
+			origin.Y+(d.tr.Y+s.Y-s.Sheet.PivotY)*cw.zoom,
+		))
+		objs = append(objs, img)
+	}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"animaker/pkg/applog"
 	"animaker/pkg/editor"
 	"animaker/pkg/file"
 	"animaker/pkg/ui"
@@ -24,6 +25,10 @@ type Application struct {
 	Window  fyne.Window
 	Project *editor.Project
 
+	// PreviousCrashLog is the last session's log if it crashed; shown once
+	// at startup (reportPreviousCrash).
+	PreviousCrashLog string
+
 	canvasWidget *ui.CanvasWidget
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
@@ -41,6 +46,31 @@ type Application struct {
 }
 
 // New creates a new Application instance.
+// showError logs err to the session log and shows it to the artist. Use
+// it instead of dialog.ShowError so every error the editor reports is in
+// the log too, next to whatever led up to it.
+func (a *Application) showError(err error) {
+	applog.Errorf("%v", err)
+	dialog.ShowError(err, a.Window)
+}
+
+// reportPreviousCrash tells the artist, once, that the last session ended
+// in a crash and where its log is, so it can be sent along with the bug
+// report instead of being lost.
+func (a *Application) reportPreviousCrash() {
+	if a.PreviousCrashLog == "" {
+		return
+	}
+	msg := widget.NewLabel("The editor closed unexpectedly last time. What it was doing, " +
+		"and the crash details, were saved to this log file:")
+	msg.Wrapping = fyne.TextWrapWord
+	path := widget.NewEntry()
+	path.SetText(a.PreviousCrashLog)
+	d := dialog.NewCustom("Previous Session Crashed", "OK", container.NewVBox(msg, path), a.Window)
+	d.Resize(fyne.NewSize(560, 200))
+	d.Show()
+}
+
 func New(fyneApp fyne.App) *Application {
 	return &Application{
 		FyneApp:      fyneApp,
@@ -73,6 +103,7 @@ func (a *Application) Run() {
 		a.onSaveTrack,
 		a.onSaveAsTrack,
 		a.onImportSpriteSheet,
+		a.onImportAnim,
 		a.onUndo,
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
@@ -86,6 +117,7 @@ func (a *Application) Run() {
 	a.Window.SetOnClosed(a.onClose)
 
 	go a.playbackLoop()
+	a.reportPreviousCrash()
 
 	a.Window.ShowAndRun()
 }
@@ -149,6 +181,53 @@ func (a *Application) offerTimingCopy(key int) {
 		a.Project.Dirty = true
 		a.refreshAll()
 	})
+}
+
+// confirmRemoveSheet removes an imported sheet from the track after asking.
+// A sheet still in use is refused up front with what uses it, rather than
+// after a confirm the artist can't act on.
+func (a *Application) confirmRemoveSheet(name string) {
+	if users := a.Project.CurrentTrack.SheetUsers(name); len(users) > 0 {
+		a.showError(&editor.SheetInUseError{Sheet: name, Users: users})
+		return
+	}
+	msg := fmt.Sprintf("Remove the sheet %q from this track?\n\n"+
+		"Nothing uses it. Its image and .sprsh files on disk are not deleted - "+
+		"import it again to bring it back.", name)
+	dialog.ShowConfirm("Remove Sprite Sheet", msg, func(ok bool) {
+		if !ok {
+			return
+		}
+		if err := a.Project.RemoveSheet(name); err != nil {
+			a.showError(err)
+			return
+		}
+		a.refreshAll()
+	}, a.Window)
+}
+
+// confirmDeletePart is what both the timeline's x and the part list's
+// Delete call. Deleting removes the part's keyframes in every direction,
+// not just the one on screen, so it asks first; it's also undoable.
+func (a *Application) confirmDeletePart(idx int) {
+	parts := a.Project.CurrentTrack.Parts
+	if idx < 0 || idx >= len(parts) {
+		return
+	}
+	name := parts[idx].Name
+	msg := fmt.Sprintf("Delete %q?\n\nThis removes the part and its keyframes in every direction. "+
+		"You can undo it with Ctrl+Z.", name)
+	dialog.ShowConfirm("Delete Part", msg, func(ok bool) {
+		if !ok {
+			return
+		}
+		a.Project.RecordUndo()
+		if err := a.Project.DeletePart(idx); err != nil {
+			a.showError(err)
+			return
+		}
+		a.refreshAll()
+	}, a.Window)
 }
 
 // directionAndPart resolves a part index (into the track's shared part
@@ -220,6 +299,7 @@ func (a *Application) wireCallbacks() {
 		}
 		a.refreshAll()
 	}
+	a.timeline.OnPartDelete = a.confirmDeletePart
 	a.timeline.OnPartSelected = func(partIdx int) {
 		a.properties.SelectPart(partIdx)
 		a.refreshAll()
@@ -329,17 +409,13 @@ func (a *Application) wireCallbacks() {
 
 	// -- Properties --
 	a.properties.OnImport = a.onImportSpriteSheet
+	a.properties.OnImportAnim = a.onImportAnim
 	a.properties.OnAddPart = a.onAddPart
 	a.properties.OnAddProp = a.onAddProp
 	a.properties.OnLoadPreviewSheet = a.onLoadPreviewSheet
+	a.properties.OnRemoveSheet = a.confirmRemoveSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
-	a.properties.OnPartRemoved = func(idx int) {
-		if a.Project.Selection.PartIndex == idx {
-			a.Project.Selection.PartIndex = -1
-			a.Project.Selection.KeyframeIndex = -1
-		}
-		a.refreshAll()
-	}
+	a.properties.OnPartDelete = a.confirmDeletePart
 	a.properties.OnKeyframeRetimed = func() { a.refreshAll() }
 	a.properties.OnKeyframeChanged = func() {
 		a.canvasWidget.Refresh()
@@ -469,7 +545,7 @@ func (a *Application) onOpenTrack() {
 
 		track, refs, err := file.LoadTrack(filePath)
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to load track: %w", err), a.Window)
+			a.showError(fmt.Errorf("failed to load track: %w", err))
 			return
 		}
 
@@ -477,6 +553,7 @@ func (a *Application) onOpenTrack() {
 		// them now - previously nothing did, and a reopened track drew
 		// nothing at all. Sheets already loaded this session are kept.
 		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
+		problems = append(problems, file.LoadNestedAnimsFor(track, a.Project.LoadedAnims)...)
 		for name, s := range sheets {
 			a.Project.LoadedSheets[name] = s
 		}
@@ -552,7 +629,7 @@ func (a *Application) sheetRefs() []file.SheetRef {
 func (a *Application) saveToPath(path string) {
 	a.Project.CurrentTrack.Metadata.UpdatedAt = time.Now()
 	if err := file.SaveTrack(a.Project.CurrentTrack, path, a.sheetRefs()); err != nil {
-		dialog.ShowError(fmt.Errorf("failed to save: %w", err), a.Window)
+		a.showError(fmt.Errorf("failed to save: %w", err))
 		return
 	}
 	a.Project.SavePath = path
@@ -566,6 +643,7 @@ func (a *Application) reportUnloadedSheets(missing, problems []string) {
 	if len(missing) == 0 && len(problems) == 0 {
 		return
 	}
+	applog.Errorf("track opened with unloaded sheets: missing %v, problems %v", missing, problems)
 	var b strings.Builder
 	if len(missing) > 0 {
 		fmt.Fprintf(&b, "Couldn't find these sprite sheets: %s.\n\n", strings.Join(missing, ", "))
@@ -581,7 +659,7 @@ func (a *Application) reportUnloadedSheets(missing, problems []string) {
 	}
 	msg := widget.NewLabel(b.String())
 	msg.Wrapping = fyne.TextWrapWord
-	d := dialog.NewCustom("Missing Sprite Sheets", "OK", msg, a.Window)
+	d := dialog.NewCustom("Missing Art", "OK", msg, a.Window)
 	d.Resize(fyne.NewSize(520, 300))
 	d.Show()
 }
@@ -597,7 +675,7 @@ func (a *Application) onImportSpriteSheet() {
 	ui.ShowImportSheetDialog(a.Window, func(imp ui.SheetImport) {
 		img, err := file.LoadImage(imp.FilePath)
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to load image: %w", err), a.Window)
+			a.showError(fmt.Errorf("failed to load image: %w", err))
 			return
 		}
 
@@ -607,7 +685,7 @@ func (a *Application) onImportSpriteSheet() {
 
 		sprshPath := strings.TrimSuffix(imp.FilePath, filepath.Ext(imp.FilePath)) + ".sprsh"
 		if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
-			dialog.ShowError(fmt.Errorf("failed to save sheet template: %w", err), a.Window)
+			a.showError(fmt.Errorf("failed to save sheet template: %w", err))
 		} else {
 			tmpl.SprshPath = sprshPath
 		}
@@ -637,6 +715,10 @@ func (a *Application) onImportSpriteSheet() {
 // "show this as sprite_red.png instead" — without importing it into the
 // track. Project.LoadPreviewSheet slices it on the prop's existing grid.
 func (a *Application) onLoadPreviewSheet(propName string) {
+	if pd := a.Project.CurrentTrack.FindProp(propName); pd != nil && pd.IsAnimProp() {
+		a.loadPreviewAnim(propName)
+		return
+	}
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
@@ -646,11 +728,11 @@ func (a *Application) onLoadPreviewSheet(propName string) {
 
 		img, err := file.LoadImage(filePath)
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to load image: %w", err), a.Window)
+			a.showError(fmt.Errorf("failed to load image: %w", err))
 			return
 		}
 		if _, err := a.Project.LoadPreviewSheet(propName, filePath, img); err != nil {
-			dialog.ShowError(err, a.Window)
+			a.showError(err)
 			return
 		}
 		a.refreshAll()
@@ -658,6 +740,97 @@ func (a *Application) onLoadPreviewSheet(propName string) {
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
 	fd.Resize(fyne.NewSize(600, 400))
 	fd.Show()
+}
+
+// loadPreviewAnim is onLoadPreviewSheet for an animation prop: load any
+// .anif and preview the prop as it, without changing the track.
+func (a *Application) loadPreviewAnim(propName string) {
+	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil || reader == nil {
+			return
+		}
+		path := reader.URI().Path()
+		reader.Close()
+		anim, problems := file.LoadNestedAnim(path, a.Project.LoadedAnims)
+		a.reportAnimProblems(problems)
+		if anim == nil {
+			return
+		}
+		a.Project.PreviewProps[propName] = anim.Path
+		a.refreshAll()
+	}, a.Window)
+	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
+	fd.Resize(fyne.NewSize(600, 400))
+	fd.Show()
+}
+
+// onImportAnim nests another .anif in this track: the animation
+// counterpart of importing a sprite sheet. It's added as a part at the
+// origin, keyed at the playhead, ready to be dragged into place - unless
+// it's being added as another option for an existing prop, which (as with
+// sheets) just makes it available to swap to.
+func (a *Application) onImportAnim() {
+	ui.ShowImportAnimDialog(a.Window, func(path, propName string) {
+		track := a.Project.CurrentTrack
+		key := editor.AnimKey(path)
+		if a.Project.SavePath != "" && key == editor.AnimKey(a.Project.SavePath) {
+			a.showError(fmt.Errorf("a track can't contain itself"))
+			return
+		}
+		var existing *editor.PropDef
+		if propName != "" {
+			if existing = track.FindProp(propName); existing != nil && !existing.IsAnimProp() {
+				a.showError(fmt.Errorf("prop %q holds sprite sheets, not animations - choose another name", propName))
+				return
+			}
+		}
+
+		anim, problems := file.LoadNestedAnim(path, a.Project.LoadedAnims)
+		if anim == nil {
+			a.reportAnimProblems(problems)
+			return
+		}
+
+		if existing != nil {
+			// Nothing in the track changes: the animation is just loaded,
+			// so it can be picked as the prop's preview value.
+			a.refreshAll()
+			a.reportAnimProblems(problems)
+			dialog.ShowInformation("Animation Imported", fmt.Sprintf(
+				"%s was added as another option for prop %q. Pick it under Preview Overrides to see it.",
+				anim.DisplayName(), propName), a.Window)
+			return
+		}
+		a.Project.RecordUndo()
+		if propName != "" {
+			editor.EnsureProp(track, propName, anim.Path)
+		}
+
+		base := strings.TrimSuffix(anim.DisplayName(), filepath.Ext(anim.DisplayName()))
+		if propName != "" {
+			base = propName
+		}
+		part := editor.NewNestedAniPart(editor.UniquePartName(track, base), anim.Path)
+		part.GoverningProp = propName
+		editor.AddPart(track, part)
+		if dir := a.Project.ActiveDirection(); dir != nil {
+			kf := editor.AddKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
+			kf.Z = float32(len(track.Parts)) // in front, like a dropped tile
+		}
+		a.properties.SelectPart(len(track.Parts) - 1)
+		a.Project.Dirty = true
+		a.refreshAll()
+		a.reportAnimProblems(problems)
+	})
+}
+
+// reportAnimProblems logs and shows anything that went wrong loading a
+// nested animation (a missing file, or a sheet it needs).
+func (a *Application) reportAnimProblems(problems []string) {
+	if len(problems) == 0 {
+		return
+	}
+	a.showError(fmt.Errorf("some of the nested animation couldn't be loaded:\n%s", strings.Join(problems, "\n")))
 }
 
 // addPart adds a part to the track's rig - so it exists in every
@@ -687,9 +860,14 @@ func (a *Application) onAddDirection() {
 }
 
 func (a *Application) onAddProp() {
-	ui.ShowAddPropDialog(a.Window, a.Project.LoadedSheetNames(), func(name, def string) {
+	values := a.Project.LoadedSheetNames()
+	labels := append([]string{}, values...)
+	animPaths := a.Project.LoadedAnimPaths()
+	values = append(values, animPaths...)
+	labels = append(labels, ui.AnimLabels(animPaths)...)
+	ui.ShowAddPropDialog(a.Window, labels, values, func(name, def string) {
 		if a.Project.CurrentTrack.FindProp(name) != nil {
-			dialog.ShowError(fmt.Errorf("there's already a prop called %q", name), a.Window)
+			a.showError(fmt.Errorf("there's already a prop called %q", name))
 			return
 		}
 		a.Project.RecordUndo()
@@ -703,7 +881,8 @@ func (a *Application) onAddPart() {
 	for _, p := range a.Project.CurrentTrack.Props {
 		propNames = append(propNames, p.Name)
 	}
-	ui.ShowAddPartDialog(a.Window, propNames, a.Project.LoadedSheetNames(), func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
+	animPaths := a.Project.LoadedAnimPaths()
+	ui.ShowAddPartDialog(a.Window, propNames, a.Project.LoadedSheetNames(), ui.AnimLabels(animPaths), animPaths, func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
 		// Selected straight away, so the left palette switches to its sheet
 		// and the artist can drag a tile without a second click.
 		if kind == editor.PartKindNestedAni {
@@ -747,11 +926,20 @@ func (a *Application) playbackLoop() {
 			deltaMs := uint32(now.Sub(lastTick).Milliseconds())
 			lastTick = now
 
-			if a.Project.Playback.IsPlaying {
-				a.Project.AdvancePlayback(deltaMs)
-				a.canvasWidget.Refresh()
-				a.timeline.Refresh()
-			}
+			// All of it on Fyne's main goroutine. This loop runs on its own
+			// goroutine, and used to advance the project and redraw from
+			// here - so the timeline could be drawing (iterating a part's
+			// keyframes) while the UI goroutine was editing them. That is a
+			// Go fatal error ("concurrent map iteration and map write"):
+			// an instant, uncatchable crash. Fyne 2.6 requires UI work on
+			// the main goroutine anyway.
+			fyne.Do(func() {
+				if a.Project.Playback.IsPlaying {
+					a.Project.AdvancePlayback(deltaMs)
+					a.canvasWidget.Refresh()
+					a.timeline.Refresh()
+				}
+			})
 		case <-a.playbackDone:
 			return
 		}

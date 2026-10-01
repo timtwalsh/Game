@@ -98,4 +98,7 @@ var (
 	ColorSectionHeader  = color.RGBA{R: 180, G: 200, B: 255, A: 255}
 	ColorSpritePickerBg = color.RGBA{R: 35, G: 35, B: 42, A: 255}
 	ColorSpriteSelected = color.RGBA{R: 100, G: 160, B: 255, A: 180}
+
+	// ColorDelete marks destructive controls, e.g. a timeline row's x.
+	ColorDelete = color.RGBA{R: 230, G: 90, B: 90, A: 255}
 )
