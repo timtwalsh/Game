@@ -207,6 +207,29 @@ feedback after using the previous version:
     every middle keyframe. Fixed; the regression test was confirmed to
     fail against the old code.
 
+11. **The selection decides what a palette drop does** (2026-10-01),
+    partly reversing entry 9. Reported: on direction 0, drop cell (0,0),
+    scrub to ~200ms, drop cell (0,1) — it "creates a new timeline for
+    that sprite, but it should just insert it onto the timeline of the
+    previous sprite". Entry 9 had made every drop a new part, which
+    fixed rig-building but broke frame-by-frame swaps. Both are wanted,
+    and the user chose the selection as the deciding signal:
+    - **a part is selected** and draws from the dropped sheet -> the
+      cell becomes its keyframe at the playhead, at the drop point
+      (`editor.EnsureKeyframe`, so an existing keyframe at that time is
+      re-celled/moved rather than duplicated, and a new one keeps the
+      interpolated Z/rotation);
+    - **nothing is selected**, or the selected part draws from a
+      different sheet (a part can only show cells of its own sheet) ->
+      new part, exactly as entry 9.
+    Deselect by clicking empty canvas (already worked) or **Esc** (new).
+    The rule lives in `editor.Project.DropTile` so it is unit-tested
+    (`drop_test.go`); `app.onTileDropped` only does coordinate
+    conversion, undo, and selection. No "hold" keyframe is needed to keep
+    the old cell up until the new one: Row/Col already step. X/Y still
+    lerp between the two keyframes, so a frame dropped at a different
+    spot slides there over the gap.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -294,8 +317,9 @@ feedback after using the previous version:
     absolute screen position the drag ended at (`OnTileDropped`). Has no
     knowledge of the canvas — `app.go`'s `onTileDropped` is what checks
     the drop landed inside the canvas and does the coordinate conversion.
-    This is the *only* way a new part gets its first keyframe/art; the
-    canvas's own drag only repositions what's already there.
+    With nothing selected this is the only way a new part gets its first
+    keyframe/art; with a part selected it keys that part instead (entry
+    11). The canvas's own drag only repositions what's already there.
   - `properties.go` — **as of 2026-09-19, builds two separate panels**,
     not one (see [Why this shape](#why-this-shape) for the GraalShop
     reference this layout is borrowed from):
