@@ -3,7 +3,6 @@ package editor
 import (
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -115,20 +114,26 @@ func (p *Project) FlattenNested(part *Part) []FlatSprite {
 	for _, pd := range p.CurrentTrack.Props {
 		parentProps[pd.Name] = p.propValue(pd)
 	}
-	sprites := p.flatten(anim, p.Playback.ActiveDirection, parentProps, part.NestedBindings, p.NestedClockMs(), 1)
+	var tr ResolvedTransform
+	if dir := p.ActiveDirection(); dir != nil {
+		tr = dir.ValueAt(part.ID, p.Playback.ElapsedMs)
+	}
+	want := part.NestedDirectionAt(p.Playback.ActiveDirection, tr)
+	sprites := p.flatten(anim, want, parentProps, part.NestedBindings, p.NestedClockMs(), 1)
 	sort.SliceStable(sprites, func(i, j int) bool { return sprites[i].Z < sprites[j].Z })
 	return sprites
 }
 
-// flatten draws one nested animation. parentDir/parentProps are what its
-// bindings can pass through from.
-func (p *Project) flatten(anim *NestedAnim, parentDir int, parentProps map[string]string,
+// flatten draws one nested animation in the direction its part asked for
+// (want; see Part.NestedDirectionAt). parentProps are what its bindings can
+// pass through from.
+func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]string,
 	bindings map[string]PropBinding, clockMs uint32, depth int) []FlatSprite {
 	if depth > maxNestDepth {
 		return nil
 	}
 	t := anim.Track
-	dirKey, ok := childDirection(t, parentDir, parentProps, bindings)
+	dirKey, ok := pickDirection(t, want)
 	if !ok {
 		return nil
 	}
@@ -172,7 +177,8 @@ func (p *Project) flatten(anim *NestedAnim, parentDir int, parentProps map[strin
 			if child == nil {
 				continue
 			}
-			for _, s := range p.flatten(child, dirKey, props, part.NestedBindings, clockMs, depth+1) {
+			childWant := part.NestedDirectionAt(dirKey, tr)
+			for _, s := range p.flatten(child, childWant, props, part.NestedBindings, clockMs, depth+1) {
 				s.X += tr.X
 				s.Y += tr.Y
 				// Kept within this part's slot in the draw order: a nested
@@ -185,24 +191,9 @@ func (p *Project) flatten(anim *NestedAnim, parentDir int, parentProps map[strin
 	return out
 }
 
-// childDirection picks which of a nested track's directions plays. A
-// "direction" binding pins it (StaticValue) or mirrors a parent prop
-// (PassthroughFrom); unbound, it turns with the parent. If the nested track
-// lacks that direction it falls back to its first one.
-func childDirection(t *Track, parentDir int, parentProps map[string]string, bindings map[string]PropBinding) (int, bool) {
-	want := parentDir
-	if b, ok := bindings["direction"]; ok {
-		v := ""
-		switch {
-		case b.StaticValue != "":
-			v = b.StaticValue
-		case b.PassthroughFrom != "" && b.PassthroughFrom != "direction":
-			v = parentProps[b.PassthroughFrom]
-		}
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			want = n
-		}
-	}
+// pickDirection is the direction of t that plays when want is asked for:
+// want itself, or t's first direction if t doesn't have it.
+func pickDirection(t *Track, want int) (int, bool) {
 	if _, ok := t.Directions[want]; ok {
 		return want, true
 	}
@@ -247,36 +238,50 @@ func (p *Project) NestedExtent(part *Part) (minX, minY, maxX, maxY float32, ok b
 	for _, pd := range p.CurrentTrack.Props {
 		parentProps[pd.Name] = p.propValue(pd)
 	}
-	dirKey, found := childDirection(anim.Track, p.Playback.ActiveDirection, parentProps, part.NestedBindings)
-	if !found {
-		return 0, 0, 0, 0, false
-	}
-	dir := anim.Track.Directions[dirKey]
-	// Sampling every keyframe time of every part covers each keyframed pose;
-	// in-between positions are lerps of those, so they're inside the box.
-	times := map[uint32]bool{0: true}
-	for _, kfs := range dir.Keyframes {
-		for _, kf := range kfs {
-			times[kf.TimeMs] = true
+	// Every direction the part can show here: one, unless it changes per
+	// keyframe, in which case the box covers each of them.
+	wants := map[int]bool{}
+	if parentDir := p.ActiveDirection(); part.DirectionMode == NestedDirPerKeyframe && parentDir != nil {
+		for _, kf := range parentDir.KeyframesFor(part.ID) {
+			wants[kf.Direction] = true
 		}
 	}
-	total := dir.TotalDurationMs()
+	if len(wants) == 0 {
+		wants[part.NestedDirectionAt(p.Playback.ActiveDirection, ResolvedTransform{})] = true
+	}
+
 	first := true
-	for tm := range times {
-		// flatten loops at the total, so the last keyframe itself is
-		// sampled just before it wraps.
-		if total > 0 && tm >= total {
-			tm = total - 1
+	for want := range wants {
+		dirKey, found := pickDirection(anim.Track, want)
+		if !found {
+			continue
 		}
-		for _, s := range p.flatten(anim, p.Playback.ActiveDirection, parentProps, part.NestedBindings, tm, 1) {
-			x0, y0 := s.X-s.Sheet.PivotX, s.Y-s.Sheet.PivotY
-			x1, y1 := x0+float32(s.Sheet.CellW), y0+float32(s.Sheet.CellH)
-			if first {
-				minX, minY, maxX, maxY, first = x0, y0, x1, y1, false
-				continue
+		dir := anim.Track.Directions[dirKey]
+		// Sampling every keyframe time of every part covers each keyframed
+		// pose; in-between positions are lerps of those, so they're inside.
+		times := map[uint32]bool{0: true}
+		for _, kfs := range dir.Keyframes {
+			for _, kf := range kfs {
+				times[kf.TimeMs] = true
 			}
-			minX, minY = minF32(minX, x0), minF32(minY, y0)
-			maxX, maxY = maxF32(maxX, x1), maxF32(maxY, y1)
+		}
+		total := dir.TotalDurationMs()
+		for tm := range times {
+			// flatten loops at the total, so the last keyframe itself is
+			// sampled just before it wraps.
+			if total > 0 && tm >= total {
+				tm = total - 1
+			}
+			for _, s := range p.flatten(anim, want, parentProps, part.NestedBindings, tm, 1) {
+				x0, y0 := s.X-s.Sheet.PivotX, s.Y-s.Sheet.PivotY
+				x1, y1 := x0+float32(s.Sheet.CellW), y0+float32(s.Sheet.CellH)
+				if first {
+					minX, minY, maxX, maxY, first = x0, y0, x1, y1, false
+					continue
+				}
+				minX, minY = minF32(minX, x0), minF32(minY, y0)
+				maxX, maxY = maxF32(maxX, x1), maxF32(maxY, y1)
+			}
 		}
 	}
 	return minX, minY, maxX, maxY, !first
@@ -294,4 +299,31 @@ func maxF32(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+// SetNestedDirectionMode changes how a nested part picks its animation's
+// direction, carrying over what it currently shows so nothing visibly
+// jumps: switching to per-keyframe gives every keyframe (in every parent
+// direction) the direction it was already playing, and switching to static
+// starts from the direction showing at the playhead.
+func (p *Project) SetNestedDirectionMode(part *Part, mode NestedDirMode) {
+	if part.DirectionMode == mode {
+		return
+	}
+	switch mode {
+	case NestedDirPerKeyframe:
+		for parentDir, d := range p.CurrentTrack.Directions {
+			for _, kf := range d.KeyframesFor(part.ID) {
+				kf.Direction = part.NestedDirectionAt(parentDir, kfToResolved(kf))
+			}
+		}
+	case NestedDirStatic:
+		var tr ResolvedTransform
+		if d := p.ActiveDirection(); d != nil {
+			tr = d.ValueAt(part.ID, p.Playback.ElapsedMs)
+		}
+		part.StaticDirection = part.NestedDirectionAt(p.Playback.ActiveDirection, tr)
+	}
+	part.DirectionMode = mode
+	p.Dirty = true
 }

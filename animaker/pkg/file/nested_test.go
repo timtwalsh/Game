@@ -84,3 +84,78 @@ func TestSelfNestingAnimationLoadsOnce(t *testing.T) {
 		t.Errorf("%d animations loaded, want 1", len(anims))
 	}
 }
+
+// Requested: a nested part's direction can be static, inherited, or set per
+// keyframe - all three must survive save and load.
+func TestNestedDirectionModesRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	track := editor.NewTrack("walk_torch")
+	static := editor.AddPart(track, editor.NewNestedAniPart("torch_static", filepath.Join(dir, "torch.anif")))
+	static.DirectionMode, static.StaticDirection = editor.NestedDirStatic, 3
+	perKf := editor.AddPart(track, editor.NewNestedAniPart("torch_turning", filepath.Join(dir, "torch.anif")))
+	perKf.DirectionMode = editor.NestedDirPerKeyframe
+	editor.AddKeyframe(track.Directions[0], perKf.ID, 0).Direction = 1
+	editor.AddKeyframe(track.Directions[0], perKf.ID, 200).Direction = 2
+	inherit := editor.AddPart(track, editor.NewNestedAniPart("torch_follow", filepath.Join(dir, "torch.anif")))
+	_ = inherit
+
+	path := filepath.Join(dir, "walk_torch.anif")
+	if err := SaveTrack(track, path, nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := LoadTrack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if p := loaded.Parts[0]; p.DirectionMode != editor.NestedDirStatic || p.StaticDirection != 3 {
+		t.Errorf("static part = mode %v dir %d, want static 3", p.DirectionMode, p.StaticDirection)
+	}
+	p := loaded.Parts[1]
+	if p.DirectionMode != editor.NestedDirPerKeyframe {
+		t.Errorf("per-keyframe part mode = %v", p.DirectionMode)
+	}
+	kfs := loaded.Directions[0].KeyframesFor(p.ID)
+	if len(kfs) != 2 || kfs[0].Direction != 1 || kfs[1].Direction != 2 {
+		t.Errorf("per-keyframe directions didn't round-trip: %+v %+v", *kfs[0], *kfs[1])
+	}
+	if p := loaded.Parts[2]; p.DirectionMode != editor.NestedDirInherit {
+		t.Errorf("inherit part mode = %v", p.DirectionMode)
+	}
+}
+
+// Files saved before direction modes pinned a direction with a "direction"
+// binding; that becomes static.
+func TestLegacyStaticDirectionBindingMigrates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.anif")
+	legacy := `[metadata]
+name = "old"
+version = "1.0"
+
+[[parts]]
+id = 1
+name = "torch_1"
+kind = "nested_ani"
+nested_ani_path = "torch.anif"
+
+[parts.nested_bindings.direction]
+static_value = "2"
+
+[directions.0]
+`
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := LoadTrack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := loaded.Parts[0]
+	if p.DirectionMode != editor.NestedDirStatic || p.StaticDirection != 2 {
+		t.Errorf("migrated to mode %v dir %d, want static 2", p.DirectionMode, p.StaticDirection)
+	}
+	if len(p.NestedBindings) != 0 {
+		t.Errorf("legacy binding kept: %+v", p.NestedBindings)
+	}
+}

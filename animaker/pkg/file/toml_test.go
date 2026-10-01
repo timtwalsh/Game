@@ -112,8 +112,13 @@ func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	if data, _ := os.ReadFile(path); !strings.Contains(string(data), `nested_ani_path = "base_wood_torch.anif"`) {
 		t.Errorf("nested path not written relative to the .anif:\n%s", data)
 	}
-	if b := lTorch.NestedBindings["direction"]; b.PassthroughFrom != "direction" {
-		t.Errorf("Torch direction binding round-tripped wrong: %+v", b)
+	// The old "direction" passthrough binding is converted on load into the
+	// part's direction mode (inherit), and no longer kept as a binding.
+	if _, still := lTorch.NestedBindings["direction"]; still {
+		t.Errorf("legacy direction binding kept: %+v", lTorch.NestedBindings)
+	}
+	if lTorch.DirectionMode != editor.NestedDirInherit {
+		t.Errorf("Torch direction mode = %v, want inherit", lTorch.DirectionMode)
 	}
 	if b := lTorch.NestedBindings["torch_sheet"]; b.StaticValue != "rusty" {
 		t.Errorf("Torch torch_sheet binding round-tripped wrong: %+v", b)

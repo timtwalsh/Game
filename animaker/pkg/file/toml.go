@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -55,6 +56,10 @@ type tomlPart struct {
 	FixedSheet     string                     `toml:"fixed_sheet,omitempty"`
 	NestedAniPath  string                     `toml:"nested_ani_path,omitempty"`
 	NestedBindings map[string]tomlPropBinding `toml:"nested_bindings,omitempty"`
+	// How a nested part picks its animation's direction: "static" or
+	// "keyframe"; omitted means inherit from the parent.
+	DirectionMode   string `toml:"direction_mode,omitempty"`
+	StaticDirection int    `toml:"static_direction,omitempty"`
 }
 
 type tomlPropBinding struct {
@@ -71,6 +76,7 @@ type tomlKeyframe struct {
 	RotationDeg float32 `toml:"rotation_deg"`
 	Row         int     `toml:"row,omitempty"`
 	Col         int     `toml:"col,omitempty"`
+	Direction   int     `toml:"direction,omitempty"` // nested part, per-keyframe direction mode
 }
 
 type tomlSheetRef struct {
@@ -148,6 +154,10 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 			FixedSheet:    part.FixedSheet,
 			NestedAniPath: relAnimPath(path, part.NestedAniPath),
 		}
+		if part.Kind == editor.PartKindNestedAni && part.DirectionMode != editor.NestedDirInherit {
+			tp.DirectionMode = part.DirectionMode.String()
+			tp.StaticDirection = part.StaticDirection
+		}
 		if len(part.NestedBindings) > 0 {
 			tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
 			for k, v := range part.NestedBindings {
@@ -166,6 +176,7 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 				td.Keyframes = append(td.Keyframes, tomlKeyframe{
 					PartID: part.ID, TimeMs: kf.TimeMs, X: kf.X, Y: kf.Y, Z: kf.Z,
 					RotationDeg: kf.RotationDeg, Row: kf.Row, Col: kf.Col,
+					Direction: kf.Direction,
 				})
 			}
 		}
@@ -226,6 +237,9 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 			GoverningProp: tp.GoverningProp,
 			FixedSheet:    tp.FixedSheet,
 			NestedAniPath: absAnimPath(path, tp.NestedAniPath),
+
+			DirectionMode:   editor.ParseNestedDirMode(tp.DirectionMode),
+			StaticDirection: tp.StaticDirection,
 		}
 		if len(tp.NestedBindings) > 0 {
 			part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
@@ -233,6 +247,7 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 				part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
 			}
 		}
+		migrateDirectionBinding(part)
 		if knownPart[part.ID] {
 			return nil, nil, fmt.Errorf("duplicate part id %d (%q)", part.ID, part.Name)
 		}
@@ -254,6 +269,7 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 				ID: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
 				X: tkf.X, Y: tkf.Y, Z: tkf.Z,
 				RotationDeg: tkf.RotationDeg, Row: tkf.Row, Col: tkf.Col,
+				Direction: tkf.Direction,
 			})
 		}
 		t.Directions[dirKey] = dir
@@ -264,6 +280,28 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	}
 
 	return t, refs, nil
+}
+
+// migrateDirectionBinding converts the old way of setting a nested part's
+// direction - a "direction" entry in its bindings - into DirectionMode.
+// A static value becomes NestedDirStatic; a passthrough becomes inherit
+// (the only passthrough the old free-text UI could meaningfully express).
+// The binding is then dropped, so there's one place the direction is set.
+func migrateDirectionBinding(part *editor.Part) {
+	b, ok := part.NestedBindings["direction"]
+	if !ok || part.Kind != editor.PartKindNestedAni {
+		return
+	}
+	delete(part.NestedBindings, "direction")
+	if len(part.NestedBindings) == 0 {
+		part.NestedBindings = nil
+	}
+	if part.DirectionMode != editor.NestedDirInherit {
+		return // the new field was already set; it wins
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(b.StaticValue)); err == nil && b.PassthroughFrom == "" {
+		part.DirectionMode, part.StaticDirection = editor.NestedDirStatic, n
+	}
 }
 
 // relAnimPath writes a nested .anif path relative to the .anif containing

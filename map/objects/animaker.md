@@ -399,6 +399,45 @@ feedback after using the previous version:
       `absAnimPath`); opening a track loads its nested animations.
     - Still not shown: nested **rotation**, like every part's.
 
+21. **Select to edit** (2026-10-01). Two requests:
+    - The position panel (X/Y/Z/Rotation, nudge pad) is **always shown
+      for a selected part**. It used to need a selected keyframe, and
+      selecting a part never selects one, so clicking a part showed a
+      hint instead. Without a keyframe at the playhead the fields show
+      the part's interpolated pose there, and the first edit or nudge
+      adds a keyframe at the playhead (undoable) - the same auto-keying
+      as a canvas drag. Refreshing the panel doesn't change the
+      selection.
+    - Parts were to be "lockable, or only interactable when selected";
+      the latter was chosen: a **canvas drag only moves the selected
+      part** (`CanvasWidget.dragTarget`). A click still selects the
+      topmost part; dragging an unselected part does nothing. Because
+      the selection decides rather than Z order, a part covered by
+      another can be dragged once selected from the list or timeline.
+
+22. **Nested direction: inherit, static, or per keyframe** (2026-10-01).
+    Requested as three choices. Direction had been a generic
+    `NestedBindings["direction"]` typed into free-text fields, which
+    covered static/inherit awkwardly and per-keyframe not at all.
+    - `Part.DirectionMode` (`NestedDirInherit` default, `NestedDirStatic`
+      + `StaticDirection`, `NestedDirPerKeyframe`) and
+      `Keyframe.Direction`, stepped through `ResolvedTransform.Direction`
+      like Row/Col. `Part.NestedDirectionAt` gives the direction to ask
+      the nested track for; `flatten` takes that (`pickDirection` falls
+      back to the track's first direction). Nested-in-nested parts use
+      their own mode relative to their parent's direction.
+    - `Project.SetNestedDirectionMode` seeds the new mode from what's
+      showing, so switching never visibly jumps.
+    - `NestedExtent` unions every direction a per-keyframe part uses.
+    - File: part `direction_mode` / `static_direction`, keyframe
+      `direction`. `migrateDirectionBinding` turns an old static
+      `direction` binding into static mode (a passthrough into inherit)
+      and drops it; the bindings editor no longer lists `direction`.
+    - UI: Direction picker (+ "Plays:" for static) in the nested part's
+      link section; a per-keyframe Direction picker in the position
+      panel, which edits/creates the keyframe at the playhead like the
+      other fields.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to

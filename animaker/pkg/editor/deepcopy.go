@@ -41,6 +41,9 @@ func (p *Part) deepCopy() *Part {
 		GoverningProp: p.GoverningProp,
 		FixedSheet:    p.FixedSheet,
 		NestedAniPath: p.NestedAniPath,
+
+		DirectionMode:   p.DirectionMode,
+		StaticDirection: p.StaticDirection,
 	}
 	if p.NestedBindings != nil {
 		dst.NestedBindings = make(map[string]PropBinding, len(p.NestedBindings))
