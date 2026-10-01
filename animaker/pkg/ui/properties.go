@@ -136,7 +136,8 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 		pp.refreshSheetGrid()
 	}
 
-	hint := widget.NewLabel("Drag a tile onto the canvas to add it as a new part. " +
+	hint := widget.NewLabel("Drag a tile onto the canvas: with a part selected it keys that part " +
+		"at the playhead; with nothing selected (Esc) it adds a new part. " +
 		"Click a tile to re-cell the selected keyframe.")
 	hint.Wrapping = fyne.TextWrapWord
 

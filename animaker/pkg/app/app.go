@@ -300,18 +300,21 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnTileTapped = a.onTileTapped
 }
 
-// onTileDropped is the core "level editor" interaction: dragging a cell
-// out of the palette onto the canvas adds it to the rig as a NEW part,
-// placed where it landed and showing the dragged cell. Dragging always
-// creates rather than modifying, exactly as dragging from a tile palette
-// does in a level editor, which is what makes it possible to build a rig
-// of several pieces visible at once — the previous behaviour bound every
-// drop to the selected part, so a second drag only ever added another
-// keyframe to the one part and a part shows one cell at a time.
+// onTileDropped handles a cell dragged out of the palette onto the canvas.
+// With a part selected, the cell becomes that part's next frame: a
+// keyframe at the playhead, at the drop point. With nothing selected it is
+// added to the rig as a new part, which is how a rig of several pieces
+// visible at once gets built. editor.Project.DropTile owns that rule.
 //
-// The two other jobs get their own gestures: drag a part already on the
-// canvas to move it, and click a palette tile to re-cell the selected
-// keyframe (onTileTapped).
+// Both behaviours were reported as wanted at different times: first
+// "I should be able to have all of the parts on a sheet simultaneously"
+// (drops used to always key the selected part), then dragging the next
+// frame of a sprite at 200ms "should just insert it onto the timeline of
+// the previous sprite" (drops had become always-new-part). Letting the
+// selection decide serves both; clicking empty canvas or Esc deselects.
+//
+// Dragging a part already on the canvas moves it, and clicking a palette
+// tile re-cells the selected keyframe (onTileTapped).
 //
 // Drops outside the canvas's bounds are ignored.
 func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.Position) {
@@ -319,8 +322,7 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	// returns - including the rejection paths below.
 	defer a.canvasWidget.SetViewFrozen(false)
 
-	dir := a.Project.ActiveDirection()
-	if dir == nil || sheetName == "" {
+	if a.Project.ActiveDirection() == nil || sheetName == "" {
 		return
 	}
 
@@ -333,20 +335,11 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	x, y := a.canvasWidget.LocalToAnimXY(local)
 
 	a.Project.RecordUndo()
-	part := editor.AddPart(a.Project.CurrentTrack,
-		editor.NewSheetPart(editor.UniquePartName(a.Project.CurrentTrack, sheetName), "", sheetName))
-
-	// Keyed at the playhead, so dropping while parked at 0ms builds up the
-	// rig's first pose and dropping later in the timeline starts that
-	// part's animation where the artist is actually working.
-	kf := editor.AddKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
-	kf.Row, kf.Col = row, col
-	kf.X, kf.Y = x, y
-	// Stack new parts in front of what's already there, so a piece dropped
-	// later isn't hidden behind one dropped earlier.
-	kf.Z = float32(len(a.Project.CurrentTrack.Parts))
-
-	a.properties.SelectPart(len(a.Project.CurrentTrack.Parts) - 1)
+	partIdx, kf := a.Project.DropTile(sheetName, row, col, x, y)
+	if kf == nil {
+		return
+	}
+	a.properties.SelectPart(partIdx)
 	a.Project.Selection.KeyframeIndex = kf.ID
 	a.Project.Dirty = true
 	a.refreshAll()
@@ -383,6 +376,15 @@ func (a *Application) registerShortcuts() {
 	})
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift}, func(_ fyne.Shortcut) {
 		a.onRedo()
+	})
+	// Esc deselects, so the next palette drop creates a new part instead
+	// of keying the selected one (see onTileDropped). Only reaches here
+	// when no text entry has focus, so it won't fight typing in a field.
+	canvas.SetOnTypedKey(func(e *fyne.KeyEvent) {
+		if e.Name == fyne.KeyEscape && a.Project.Selection.PartIndex >= 0 {
+			a.properties.SelectPart(-1)
+			a.refreshAll()
+		}
 	})
 }
 
