@@ -1,6 +1,10 @@
 package editor
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // NewSheetPart creates a Part that shows a cell from an active sheet. The
 // ID is assigned by AddPart, not here.
@@ -38,6 +42,34 @@ func UniquePartName(t *Track, base string) string {
 			return name
 		}
 	}
+}
+
+// ErrPartNameEmpty / ErrPartNameTaken are RenamePart's refusals.
+var (
+	ErrPartNameEmpty = errors.New("part name can't be empty")
+	ErrPartNameTaken = errors.New("another part already has that name")
+)
+
+// RenamePart renames the part at idx, trimming surrounding whitespace. It
+// refuses an empty name or one another part already uses: identity is the
+// ID, so the data would survive either, but the part list and timeline are
+// labelled by name and two rows called "arm" can't be told apart (see
+// UniquePartName). Renaming a part to its own current name is allowed.
+func RenamePart(t *Track, idx int, name string) error {
+	if idx < 0 || idx >= len(t.Parts) {
+		return fmt.Errorf("invalid part index: %d", idx)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ErrPartNameEmpty
+	}
+	for i, p := range t.Parts {
+		if i != idx && p.Name == name {
+			return ErrPartNameTaken
+		}
+	}
+	t.Parts[idx].Name = name
+	return nil
 }
 
 // AddPart adds a part to the track's rig, assigning it a fresh ID. The part

@@ -112,6 +112,13 @@ type scrubArea struct {
 	OnRetime           func(partIdx int, kf *editor.Keyframe, newTimeMs uint32)
 	OnRetimeEnd        func()
 	OnWheel            func(e *fyne.ScrollEvent)
+	OnPartSelected     func(partIdx int)
+	OnPartRename       func(partIdx int)
+
+	// rowLabels are kept across renderer rebuilds rather than recreated on
+	// every refresh (which playback does each tick), so Fyne isn't left
+	// caching a renderer for a fresh throwaway widget per row per frame.
+	rowLabels []*partLabel
 }
 
 func newScrubArea(project *editor.Project) *scrubArea {
@@ -274,6 +281,73 @@ func (s *scrubArea) hitTestMarker(pos fyne.Position) (partIdx, kfIdx int, ok boo
 	return 0, 0, false
 }
 
+// rowLabel returns the reusable label widget for a timeline row.
+func (s *scrubArea) rowLabel(rowIdx int) *partLabel {
+	for len(s.rowLabels) <= rowIdx {
+		idx := len(s.rowLabels)
+		s.rowLabels = append(s.rowLabels, newPartLabel(
+			func() {
+				if s.OnPartSelected != nil {
+					s.OnPartSelected(idx)
+				}
+			},
+			func() {
+				if s.OnPartRename != nil {
+					s.OnPartRename(idx)
+				}
+			}))
+	}
+	return s.rowLabels[rowIdx]
+}
+
+// partLabel is a part's name in the timeline's label column. Click selects
+// the part; double-click renames it. It's its own widget, rather than the
+// scrubArea handling double-taps, because Fyne holds back a widget's every
+// single tap while it waits to see whether a second one follows — which
+// would make clicking to scrub the timeline feel laggy. Here only clicks on
+// the name, where nothing else happens, pay that delay.
+type partLabel struct {
+	widget.BaseWidget
+	text        *canvas.Text
+	onTap       func()
+	onDoubleTap func()
+}
+
+var _ fyne.Tappable = (*partLabel)(nil)
+var _ fyne.DoubleTappable = (*partLabel)(nil)
+
+func newPartLabel(onTap, onDoubleTap func()) *partLabel {
+	l := &partLabel{onTap: onTap, onDoubleTap: onDoubleTap}
+	l.text = canvas.NewText("", ColorSectionHeader)
+	l.text.TextSize = 11
+	l.ExtendBaseWidget(l)
+	return l
+}
+
+func (l *partLabel) setName(name string) {
+	if l.text.Text != name {
+		l.text.Text = name
+		l.text.Refresh()
+	}
+}
+
+func (l *partLabel) Tapped(*fyne.PointEvent)       { l.onTap() }
+func (l *partLabel) DoubleTapped(*fyne.PointEvent) { l.onDoubleTap() }
+
+func (l *partLabel) CreateRenderer() fyne.WidgetRenderer {
+	return &partLabelRenderer{label: l}
+}
+
+type partLabelRenderer struct{ label *partLabel }
+
+func (r *partLabelRenderer) Layout(size fyne.Size) {
+	r.label.text.Move(fyne.NewPos(4, size.Height/2-8))
+}
+func (r *partLabelRenderer) MinSize() fyne.Size           { return r.label.text.MinSize() }
+func (r *partLabelRenderer) Refresh()                     { r.label.text.Refresh() }
+func (r *partLabelRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.label.text} }
+func (r *partLabelRenderer) Destroy()                     {}
+
 // -- Renderer --
 
 type scrubAreaRenderer struct {
@@ -342,9 +416,10 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 		rowBg.Move(fyne.NewPos(0, rowY))
 		objs = append(objs, rowBg)
 
-		label := canvas.NewText(part.Name, ColorSectionHeader)
-		label.TextSize = 11
-		label.Move(fyne.NewPos(4, rowY+timelineRowHeight/2-8))
+		label := s.rowLabel(rowIdx)
+		label.setName(part.Name)
+		label.Resize(fyne.NewSize(timelineLabelWidth, timelineRowHeight-2))
+		label.Move(fyne.NewPos(0, rowY))
 		objs = append(objs, label)
 
 		for ki, kf := range dir.KeyframesFor(part.ID) {
@@ -399,6 +474,8 @@ type TimelineWidget struct {
 	OnKeyframeRetimed     func(partIdx int, kf *editor.Keyframe, newTimeMs uint32)
 	OnKeyframeRetimeEnd   func()
 	OnScrub               func(timeMs uint32)
+	OnPartSelected        func(partIdx int)
+	OnPartRename          func(partIdx int)
 	OnPlay                func()
 	OnStop                func()
 }
@@ -440,6 +517,16 @@ func (tw *TimelineWidget) Build() fyne.CanvasObject {
 		}
 	}
 	tw.scrub.OnWheel = tw.onWheel
+	tw.scrub.OnPartSelected = func(partIdx int) {
+		if tw.OnPartSelected != nil {
+			tw.OnPartSelected(partIdx)
+		}
+	}
+	tw.scrub.OnPartRename = func(partIdx int) {
+		if tw.OnPartRename != nil {
+			tw.OnPartRename(partIdx)
+		}
+	}
 
 	playBtn := widget.NewButton("Play", func() {
 		if tw.OnPlay != nil {

@@ -64,3 +64,28 @@ func TestPaletteSheetTemplateIndependentOfSelection(t *testing.T) {
 		t.Errorf("palette resolved %v with nothing selected, want the sheet itself", got)
 	}
 }
+
+func TestRenamePart(t *testing.T) {
+	track := NewTrack("t")
+	AddPart(track, NewSheetPart("sprite_1", "", "sprite"))
+	AddPart(track, NewSheetPart("sprite_2", "", "sprite"))
+
+	if err := RenamePart(track, 0, "  head  "); err != nil {
+		t.Fatalf("rename to head: %v", err)
+	}
+	if got := track.Parts[0].Name; got != "head" {
+		t.Errorf("name = %q, want %q (trimmed)", got, "head")
+	}
+	if err := RenamePart(track, 1, "head"); err != ErrPartNameTaken {
+		t.Errorf("rename onto a taken name: err = %v, want ErrPartNameTaken", err)
+	}
+	if err := RenamePart(track, 1, "   "); err != ErrPartNameEmpty {
+		t.Errorf("rename to blank: err = %v, want ErrPartNameEmpty", err)
+	}
+	if got := track.Parts[1].Name; got != "sprite_2" {
+		t.Errorf("refused rename changed the name to %q", got)
+	}
+	if err := RenamePart(track, 0, "head"); err != nil {
+		t.Errorf("rename to its own name: %v", err)
+	}
+}

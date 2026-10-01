@@ -230,6 +230,18 @@ feedback after using the previous version:
     lerp between the two keyframes, so a frame dropped at a different
     spot slides there over the gap.
 
+12. **Rename a part by double-clicking its timeline name** (2026-10-01),
+    requested so a rig built from drops (`sprite_1`, `sprite_2`...) can
+    become "head", "left_arm", "legs". There was no rename anywhere
+    before. The name column is now one `partLabel` widget per row: click
+    selects the part, double-click opens a prefilled rename dialog. It's
+    a separate widget rather than `scrubArea` implementing
+    `DoubleTappable` because Fyne delays every single tap on a
+    double-tappable widget, which would make click-to-scrub laggy.
+    `editor.RenamePart` trims and refuses empty or duplicate names (rows
+    are labelled by name); a refusal shows the error and reopens the
+    dialog with what was typed. Undoable.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
