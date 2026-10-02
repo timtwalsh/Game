@@ -158,3 +158,21 @@ func TestTimelineRowHasDeleteBesideName(t *testing.T) {
 		t.Errorf("tapping row 1's x asked to delete %d, want 1", deleted)
 	}
 }
+
+// Switching project shows the new project's loop and speed, not the old.
+func TestTimelineShowsNewProjectsPlaybackSettings(t *testing.T) {
+	test.NewTempApp(t)
+	tw := NewTimelineWidget(editor.NewProject("a"))
+	w := test.NewWindow(tw.Build())
+	t.Cleanup(w.Close)
+
+	p := editor.NewProject("b")
+	p.Playback.LoopEnabled, p.Playback.SpeedFactor = false, 2
+	tw.SetProject(p)
+	if tw.loopCheck.Checked || tw.speed.Selected != "200%" {
+		t.Errorf("loop=%v speed=%q, want off and 200%%", tw.loopCheck.Checked, tw.speed.Selected)
+	}
+	if p.Playback.LoopEnabled || p.Playback.SpeedFactor != 2 {
+		t.Error("syncing the widgets changed the project's settings")
+	}
+}

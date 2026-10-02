@@ -528,6 +528,8 @@ type TimelineWidget struct {
 	scroll    *container.Scroll
 	info      *widget.Label
 	zoomLabel *widget.Label
+	loopCheck *widget.Check
+	speed     *widget.Select
 
 	OnKeyframeSelected    func(partIdx, kfIdx int)
 	OnKeyframeDeleted     func(partIdx, kfIdx int)
@@ -548,9 +550,28 @@ func NewTimelineWidget(project *editor.Project) *TimelineWidget {
 	return &TimelineWidget{project: project}
 }
 
+// SetProject switches to another project and shows its loop and speed
+// settings, which otherwise kept showing the previous project's.
 func (tw *TimelineWidget) SetProject(project *editor.Project) {
 	tw.project = project
 	tw.scrub.project = project
+	if tw.loopCheck != nil {
+		tw.loopCheck.SetChecked(project.Playback.LoopEnabled)
+	}
+	if tw.speed != nil {
+		tw.speed.SetSelected(speedLabel(project.Playback.SpeedFactor))
+	}
+}
+
+var speedFactors = map[string]float32{"50%": 0.5, "100%": 1.0, "200%": 2.0}
+
+func speedLabel(f float32) string {
+	for l, v := range speedFactors {
+		if v == f {
+			return l
+		}
+	}
+	return "100%"
 }
 
 func (tw *TimelineWidget) Build() fyne.CanvasObject {
@@ -641,16 +662,12 @@ func (tw *TimelineWidget) Build() fyne.CanvasObject {
 	loopCheck.Checked = tw.project.Playback.LoopEnabled
 
 	speedSelect := widget.NewSelect([]string{"50%", "100%", "200%"}, func(v string) {
-		switch v {
-		case "50%":
-			tw.project.Playback.SpeedFactor = 0.5
-		case "100%":
-			tw.project.Playback.SpeedFactor = 1.0
-		case "200%":
-			tw.project.Playback.SpeedFactor = 2.0
+		if f, ok := speedFactors[v]; ok {
+			tw.project.Playback.SpeedFactor = f
 		}
 	})
-	speedSelect.SetSelected("100%")
+	speedSelect.SetSelected(speedLabel(tw.project.Playback.SpeedFactor))
+	tw.loopCheck, tw.speed = loopCheck, speedSelect
 
 	tw.zoomLabel = widget.NewLabel("")
 	zoomOut := widget.NewButton("-", func() { tw.zoomAtPlayhead(tw.scrub.msPerPixel * timelineZoomStep) })

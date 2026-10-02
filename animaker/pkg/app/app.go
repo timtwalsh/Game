@@ -594,7 +594,11 @@ func (a *Application) onNewTrack() {
 
 func (a *Application) newTrack() {
 	ui.ShowNewTrackDialog(a.Window, func(name string) {
+		// Loop and speed are the artist's playback preferences, not part
+		// of a track, so they carry over to the new one.
+		prev := a.Project.Playback
 		a.Project = editor.NewProject(name)
+		a.Project.Playback.LoopEnabled, a.Project.Playback.SpeedFactor = prev.LoopEnabled, prev.SpeedFactor
 		a.canvasWidget.SetProject(a.Project)
 		a.timeline.SetProject(a.Project)
 		a.properties.SetProject(a.Project)
@@ -625,8 +629,10 @@ func (a *Application) openTrack() {
 		// them now - previously nothing did, and a reopened track drew
 		// nothing at all. Sheets already loaded this session are kept.
 		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
-		problems = append(problems, file.LoadNestedAnimsFor(track, a.Project.LoadedAnims)...)
-		missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
+		// Nested animations are always re-read, never taken from what
+		// was loaded before, so an .anif edited since shows as it is now.
+		anims := map[string]*editor.NestedAnim{}
+		problems = append(problems, file.LoadNestedAnimsFor(track, anims)...)
 		for name, s := range sheets {
 			a.Project.LoadedSheets[name] = s
 		}
@@ -639,16 +645,8 @@ func (a *Application) openTrack() {
 			}
 		}
 
-		a.Project.CurrentTrack = track
-		a.Project.SavePath = filePath
-		a.Project.Dirty = false
-		a.Project.UndoStack.Clear()
-		keys := track.SortedDirectionKeys()
-		if len(keys) > 0 {
-			a.Project.Playback.ActiveDirection = keys[0]
-		}
-		a.Project.Playback.ElapsedMs = 0
-		a.Project.Selection = &editor.Selection{PartIndex: -1, KeyframeIndex: -1}
+		a.Project.OpenTrack(track, filePath, anims)
+		missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
 
 		a.canvasWidget.SetProject(a.Project)
 		a.timeline.SetProject(a.Project)

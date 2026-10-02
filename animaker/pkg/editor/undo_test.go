@@ -78,3 +78,37 @@ func TestNewChangeClearsRedo(t *testing.T) {
 		t.Errorf("undo gave %q, want start", got)
 	}
 }
+
+// Opening a track leaves nothing of the previous one behind.
+func TestOpenTrackResetsTheSession(t *testing.T) {
+	p := NewProject("old")
+	AddProp(p.CurrentTrack, "hair", "hair_a")
+	p.PreviewProps["hair"] = "hair_b"
+	p.PreviewSheets["hair_b"] = &SpriteSheetTemplate{Name: "hair_b"}
+	p.LoadedSheets["body"] = &SpriteSheetTemplate{Name: "body"}
+	edit(p, "old2")
+	p.Selection.PartIndex = 3
+	p.Playback.IsPlaying, p.Playback.ElapsedMs, p.Playback.NestedClockMs = true, 500, 900
+
+	track := NewTrack("new")
+	RemoveDirection(track, 0) // first direction is now 1
+	anims := map[string]*NestedAnim{}
+	p.OpenTrack(track, "new.anif", anims)
+
+	switch {
+	case p.CurrentTrack != track, p.SavePath != "new.anif", p.Dirty:
+		t.Error("track/path/dirty not set")
+	case len(p.PreviewProps) != 0, len(p.PreviewSheets) != 0:
+		t.Error("previous track's preview overrides carried over")
+	case p.UndoStack.CanUndo():
+		t.Error("previous track's undo history carried over")
+	case p.Selection.PartIndex != -1:
+		t.Error("selection carried over")
+	case p.Playback.IsPlaying, p.Playback.ElapsedMs != 0, p.Playback.NestedClockMs != 0:
+		t.Error("playback not reset")
+	case p.Playback.ActiveDirection != 1:
+		t.Errorf("active direction %d, want the track's first (1)", p.Playback.ActiveDirection)
+	case p.LoadedSheets["body"] == nil:
+		t.Error("imported sheets should stay loaded")
+	}
+}

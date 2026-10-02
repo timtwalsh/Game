@@ -215,6 +215,26 @@ func (p *Project) DeletePart(idx int) error {
 	return nil
 }
 
+// OpenTrack makes track, just loaded from path, the one being edited, with
+// anims (freshly loaded, so edits made to a nested .anif since it was last
+// opened show up) as the nested animations. Everything that belonged to
+// the previous track goes: its undo history, selection, playhead and
+// preview overrides - a preview set on the old track's "hair" would
+// otherwise carry over to the new track's "hair". Imported sheets stay
+// loaded, as they're shared art the next track may well use.
+func (p *Project) OpenTrack(track *Track, path string, anims map[string]*NestedAnim) {
+	p.CurrentTrack = track
+	p.SavePath = path
+	p.Dirty = false
+	p.UndoStack.Clear()
+	p.LoadedAnims = anims
+	p.PreviewProps = map[string]string{}
+	p.PreviewSheets = map[string]*SpriteSheetTemplate{}
+	p.Selection = &Selection{PartIndex: -1, KeyframeIndex: -1}
+	p.Stop()
+	p.Playback.ActiveDirection = firstDirectionKey(track)
+}
+
 // -- Undo/redo --
 
 func (p *Project) TakeSnapshot() *ProjectSnapshot {
