@@ -23,21 +23,3 @@ func LoadImage(filePath string) (image.Image, error) {
 
 	return img, nil
 }
-
-// ExtractSubImage extracts a rectangular region from an image.
-func ExtractSubImage(img image.Image, rect image.Rectangle) image.Image {
-	if sub, ok := img.(interface {
-		SubImage(r image.Rectangle) image.Image
-	}); ok {
-		return sub.SubImage(rect)
-	}
-
-	// Fallback: manual copy
-	dst := image.NewRGBA(rect)
-	for y := rect.Min.Y; y < rect.Max.Y; y++ {
-		for x := rect.Min.X; x < rect.Max.X; x++ {
-			dst.Set(x, y, img.At(x, y))
-		}
-	}
-	return dst
-}

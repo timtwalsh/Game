@@ -1,9 +1,6 @@
 package editor
 
-import (
-	"sort"
-	"time"
-)
+import "sort"
 
 // Track is one named motion (e.g. "human_walk") and corresponds to exactly
 // one .anif file. There is no wrapping "character" asset — see
@@ -35,10 +32,8 @@ type Track struct {
 }
 
 type TrackMetadata struct {
-	Name      string
-	Version   string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Name    string
+	Version string
 }
 
 // PropDef declares a customization slot. A prop's value is always the name
@@ -232,13 +227,12 @@ var DefaultDirectionKeys = []int{0, 1, 2, 3} // 0=up, 1=right, 2=down, 3=left
 
 // NewTrack creates a track with the four default directions and no parts.
 func NewTrack(name string) *Track {
-	now := time.Now()
 	dirs := make(map[int]*Direction, len(DefaultDirectionKeys))
 	for _, k := range DefaultDirectionKeys {
 		dirs[k] = NewDirection()
 	}
 	return &Track{
-		Metadata:     TrackMetadata{Name: name, Version: "1.0", CreatedAt: now, UpdatedAt: now},
+		Metadata:     TrackMetadata{Name: name, Version: "1.0"},
 		Props:        []PropDef{},
 		RefBoxWidth:  DefaultRefBoxWidth,
 		RefBoxHeight: DefaultRefBoxHeight,

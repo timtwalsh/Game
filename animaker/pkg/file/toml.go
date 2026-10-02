@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -191,7 +192,33 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 	if err := toml.NewEncoder(buf).Encode(tt); err != nil {
 		return fmt.Errorf("failed to encode track: %w", err)
 	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	return writeFileAtomic(path, buf.Bytes())
+}
+
+// writeFileAtomic replaces path with data all at once: it writes a temp
+// file beside it and renames that over the original, so a crash or full
+// disk mid-save leaves the old file intact instead of a truncated one.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once renamed
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // LoadTrack reads a track from a .anif TOML file, plus where it says its
@@ -280,6 +307,7 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 				Direction: tkf.Direction,
 			})
 		}
+		normalizeLoadedKeyframes(dir)
 		t.Directions[dirKey] = dir
 	}
 
@@ -288,6 +316,30 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	}
 
 	return t, refs, nil
+}
+
+// normalizeLoadedKeyframes sorts each part's keyframes by time, which
+// everything that reads them assumes (interpolation, retiming, the
+// timeline), and keeps one keyframe per time - the last one in the file -
+// since two at one instant make "the keyframe at the playhead" ambiguous.
+// The editor always saves them that way; this covers a file edited or
+// merged by hand.
+func normalizeLoadedKeyframes(dir *editor.Direction) {
+	for id, kfs := range dir.Keyframes {
+		sort.SliceStable(kfs, func(i, j int) bool { return kfs[i].TimeMs < kfs[j].TimeMs })
+		out := kfs[:0]
+		for _, kf := range kfs {
+			if n := len(out); n > 0 && out[n-1].TimeMs == kf.TimeMs {
+				out[n-1] = kf
+				continue
+			}
+			out = append(out, kf)
+		}
+		for i, kf := range out {
+			kf.ID = i
+		}
+		dir.Keyframes[id] = out
+	}
 }
 
 // migrateDirectionBinding converts the old way of setting a nested part's
@@ -348,6 +400,9 @@ func SaveSheetTemplate(s *editor.SpriteSheetTemplate, sprshPath string) error {
 	if rel, err := filepath.Rel(filepath.Dir(sprshPath), s.FilePath); err == nil {
 		imgPath = rel
 	}
+	// Forward slashes on disk, like every path in an .anif, so a template
+	// saved on Windows still opens elsewhere.
+	imgPath = filepath.ToSlash(imgPath)
 
 	ts := tomlSheetTemplate{
 		Name: s.Name, FilePath: imgPath,
@@ -359,7 +414,7 @@ func SaveSheetTemplate(s *editor.SpriteSheetTemplate, sprshPath string) error {
 	if err := toml.NewEncoder(buf).Encode(ts); err != nil {
 		return fmt.Errorf("failed to encode sheet template: %w", err)
 	}
-	return os.WriteFile(sprshPath, buf.Bytes(), 0644)
+	return writeFileAtomic(sprshPath, buf.Bytes())
 }
 
 // LoadSheetTemplate reads a .sprsh file and loads its referenced image.
@@ -369,7 +424,7 @@ func LoadSheetTemplate(sprshPath string) (*editor.SpriteSheetTemplate, error) {
 		return nil, fmt.Errorf("failed to decode sheet template: %w", err)
 	}
 
-	imgPath := ts.FilePath
+	imgPath := filepath.FromSlash(ts.FilePath)
 	if !filepath.IsAbs(imgPath) {
 		imgPath = filepath.Join(filepath.Dir(sprshPath), imgPath)
 	}

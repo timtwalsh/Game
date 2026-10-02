@@ -705,7 +705,6 @@ func (a *Application) sheetRefs() []file.SheetRef {
 
 // saveToPath saves the track and reports whether it worked.
 func (a *Application) saveToPath(path string) bool {
-	a.Project.CurrentTrack.Metadata.UpdatedAt = time.Now()
 	if err := file.SaveTrack(a.Project.CurrentTrack, path, a.sheetRefs()); err != nil {
 		a.showError(fmt.Errorf("failed to save: %w", err))
 		return false
