@@ -959,20 +959,29 @@ func (a *Application) onAddProp() {
 }
 
 func (a *Application) onAddPart() {
-	var propNames []string
-	for _, p := range a.Project.CurrentTrack.Props {
-		propNames = append(propNames, p.Name)
+	track := a.Project.CurrentTrack
+	c := ui.AddPartChoices{Sheets: a.Project.LoadedSheetNames(), AnimPaths: a.Project.LoadedAnimPaths()}
+	c.AnimLabels = ui.AnimLabels(c.AnimPaths)
+	for _, p := range track.Props {
+		if p.IsAnimProp() {
+			c.AnimProps = append(c.AnimProps, p.Name)
+		} else {
+			c.SheetProps = append(c.SheetProps, p.Name)
+		}
 	}
-	animPaths := a.Project.LoadedAnimPaths()
-	ui.ShowAddPartDialog(a.Window, propNames, a.Project.LoadedSheetNames(), ui.AnimLabels(animPaths), animPaths, func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
+	validateName := func(name string) error {
+		_, err := editor.ValidatePartName(track, name, -1)
+		return err
+	}
+	ui.ShowAddPartDialog(a.Window, c, validateName, func(part *editor.Part) error {
+		if err := editor.CheckNewPart(track, part); err != nil {
+			return err
+		}
 		// Selected straight away, so the left palette switches to its sheet
 		// and the artist can drag a tile without a second click.
-		if kind == editor.PartKindNestedAni {
-			a.addPart(editor.NewNestedAniPart(name, nestedPath))
-		} else {
-			a.addPart(editor.NewSheetPart(name, governingProp, fixedSheet))
-		}
+		a.addPart(part)
 		a.refreshAll()
+		return nil
 	})
 }
 

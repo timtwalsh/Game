@@ -50,23 +50,34 @@ var (
 	ErrPartNameTaken = errors.New("another part already has that name")
 )
 
-// RenamePart renames the part at idx, trimming surrounding whitespace. It
-// refuses an empty name or one another part already uses: identity is the
-// ID, so the data would survive either, but the part list and timeline are
-// labelled by name and two rows called "arm" can't be told apart (see
-// UniquePartName). Renaming a part to its own current name is allowed.
+// ValidatePartName trims name and checks it could name a part: not empty,
+// and not used by another part (the part at exceptIdx, the one being
+// renamed, may keep its own name; pass -1 for a new part). Identity is
+// the ID, so the data would survive a clash, but the part list and the
+// timeline are labelled by name and two rows called "arm" can't be told
+// apart (see UniquePartName).
+func ValidatePartName(t *Track, name string, exceptIdx int) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", ErrPartNameEmpty
+	}
+	for i, p := range t.Parts {
+		if i != exceptIdx && p.Name == name {
+			return "", ErrPartNameTaken
+		}
+	}
+	return name, nil
+}
+
+// RenamePart renames the part at idx, refusing a name ValidatePartName
+// rejects. Renaming a part to its own current name is allowed.
 func RenamePart(t *Track, idx int, name string) error {
 	if idx < 0 || idx >= len(t.Parts) {
 		return fmt.Errorf("invalid part index: %d", idx)
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ErrPartNameEmpty
-	}
-	for i, p := range t.Parts {
-		if i != idx && p.Name == name {
-			return ErrPartNameTaken
-		}
+	name, err := ValidatePartName(t, name, idx)
+	if err != nil {
+		return err
 	}
 	t.Parts[idx].Name = name
 	return nil
@@ -146,6 +157,41 @@ func (t *Track) FindProp(name string) *PropDef {
 		if t.Props[i].Name == name {
 			return &t.Props[i]
 		}
+	}
+	return nil
+}
+
+// CheckNewPart reports why part can't be added to t as it stands: its name
+// (see ValidatePartName - the trimmed name is written back), or what it
+// would draw. A sheet part needs a sheet prop or a fixed sheet, and a
+// nested part an animation prop or an animation; a part governed by a
+// prop of the other kind would never draw, since a sheet part can't show
+// an .anif and a nested part can't play a sheet.
+func CheckNewPart(t *Track, part *Part) error {
+	name, err := ValidatePartName(t, part.Name, -1)
+	if err != nil {
+		return err
+	}
+	part.Name = name
+	nested := part.Kind == PartKindNestedAni
+	if part.GoverningProp != "" {
+		pd := t.FindProp(part.GoverningProp)
+		if pd == nil {
+			return fmt.Errorf("there's no prop called %q", part.GoverningProp)
+		}
+		if pd.IsAnimProp() != nested {
+			if nested {
+				return fmt.Errorf("prop %q holds sprite sheets; a nested animation part needs a prop holding animations", pd.Name)
+			}
+			return fmt.Errorf("prop %q holds animations; a sheet part needs a prop holding sprite sheets", pd.Name)
+		}
+		return nil
+	}
+	if nested && part.NestedAniPath == "" {
+		return errors.New("pick the animation it plays (Import Animation first), or a prop that chooses one")
+	}
+	if !nested && part.FixedSheet == "" {
+		return errors.New("pick the sheet it draws from (Import Sprite Sheet first), or a prop that chooses one")
 	}
 	return nil
 }

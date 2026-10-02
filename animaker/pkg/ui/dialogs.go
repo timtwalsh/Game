@@ -230,35 +230,56 @@ func ShowAddPropDialog(win fyne.Window, labels, values []string, onCreate func(n
 	form.Show()
 }
 
-// ShowAddPartDialog displays a dialog for adding a part to the active
-// direction. propNames lists the track's declared props, for the
-// governing-prop dropdown; sheetNames lists the currently loaded sheets, so
-// the fixed sheet is picked from what exists rather than typed from memory
-// (a typo there produces a part that silently draws nothing).
-func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animPaths []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
+// AddPartChoices is what the Add Part dialog offers: the track's props by
+// kind (a sheet part can only be governed by a sheet prop, a nested part
+// only by an animation prop), the loaded sheets, and the loaded animations
+// (labels and paths in parallel).
+type AddPartChoices struct {
+	SheetProps, AnimProps []string
+	Sheets                []string
+	AnimLabels, AnimPaths []string
+}
+
+// ShowAddPartDialog displays a dialog for adding a part to the rig.
+// Everything but the name is a pick-list of what exists, so a typo can't
+// produce a part that silently draws nothing. validateName vets the name
+// as it's typed (Add stays disabled until it passes); onCreate gets the
+// new part and may refuse it, which reopens the dialog with the error.
+func ShowAddPartDialog(win fyne.Window, c AddPartChoices, validateName func(string) error, onCreate func(*editor.Part) error) {
 	nameEntry := newEntry()
 	nameEntry.SetPlaceHolder("Body, Hair, Arm_Left, ...")
+	nameEntry.Validator = validateName
 
-	kindSelect := widget.NewSelect([]string{"sheet", "nested_ani"}, nil)
-	kindSelect.SetSelected("sheet")
-
-	propOptions := append([]string{"(none - fixed sheet)"}, propNames...)
-	propSelect := widget.NewSelect(propOptions, nil)
-	propSelect.SetSelected(propOptions[0])
-
-	fixedSheetSelect := widget.NewSelect(sheetNames, nil)
+	const noProp = "(none)"
+	propSelect := widget.NewSelect(nil, nil)
+	fixedSheetSelect := widget.NewSelect(c.Sheets, nil)
 	fixedSheetSelect.PlaceHolder = "(pick a loaded sheet)"
-	if len(sheetNames) == 1 {
-		fixedSheetSelect.SetSelected(sheetNames[0])
+	if len(c.Sheets) == 1 {
+		fixedSheetSelect.SetSelected(c.Sheets[0])
 	}
-
 	// A pick-list of imported animations rather than a typed path, which
 	// was easy to get wrong and gave no hint which files were available.
-	nestedSelect := widget.NewSelect(animLabels, nil)
+	nestedSelect := widget.NewSelect(c.AnimLabels, nil)
 	nestedSelect.PlaceHolder = "(use Import Animation first)"
-	if len(animLabels) == 1 {
-		nestedSelect.SetSelected(animLabels[0])
+	if len(c.AnimLabels) == 1 {
+		nestedSelect.SetSelected(c.AnimLabels[0])
 	}
+
+	// The prop list and which art picker applies follow the kind.
+	kindSelect := widget.NewSelect([]string{"sheet", "nested_ani"}, func(kind string) {
+		props := c.SheetProps
+		if kind == "nested_ani" {
+			props = c.AnimProps
+			fixedSheetSelect.Disable()
+			nestedSelect.Enable()
+		} else {
+			fixedSheetSelect.Enable()
+			nestedSelect.Disable()
+		}
+		propSelect.Options = append([]string{noProp}, props...)
+		propSelect.SetSelected(noProp)
+	})
+	kindSelect.SetSelected("sheet")
 
 	items := []*widget.FormItem{
 		{Text: "Name", Widget: nameEntry},
@@ -267,7 +288,7 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animP
 		{Text: "Fixed Sheet", Widget: fixedSheetSelect},
 		{Text: "Nested Animation", Widget: nestedSelect},
 	}
-	if len(sheetNames) == 0 {
+	if len(c.Sheets) == 0 {
 		items = append(items, &widget.FormItem{
 			Text:   "",
 			Widget: widget.NewLabel("No sheets imported yet — use Import Sprite Sheet first."),
@@ -279,18 +300,23 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animP
 		"Add", "Cancel",
 		items,
 		func(confirmed bool) {
-			if !confirmed || onCreate == nil || nameEntry.Text == "" {
+			if !confirmed || onCreate == nil {
 				return
 			}
-			kind := editor.PartKindSheet
+			var part *editor.Part
 			if kindSelect.Selected == "nested_ani" {
-				kind = editor.PartKindNestedAni
+				part = editor.NewNestedAniPart(nameEntry.Text, valueFor(c.AnimLabels, c.AnimPaths, nestedSelect.Selected))
+			} else {
+				part = editor.NewSheetPart(nameEntry.Text, "", fixedSheetSelect.Selected)
 			}
-			governingProp := propSelect.Selected
-			if governingProp == propOptions[0] {
-				governingProp = ""
+			if propSelect.Selected != noProp {
+				part.GoverningProp = propSelect.Selected
 			}
-			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, valueFor(animLabels, animPaths, nestedSelect.Selected))
+			if err := onCreate(part); err != nil {
+				errDlg := dialog.NewError(err, win)
+				errDlg.SetOnClosed(func() { ShowAddPartDialog(win, c, validateName, onCreate) })
+				errDlg.Show()
+			}
 		},
 		win,
 	)
