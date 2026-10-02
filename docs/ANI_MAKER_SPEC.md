@@ -321,8 +321,12 @@ Dropped from v1, confirmed during design discussion, not carried into v2:
 These came up during design and were **not** settled. Don't treat any of the following as decided:
 
 1. **How does one prop resolve to multiple physical sheets?** `arms` governs both `Arm_Left` and `Arm_Right`, but a single prop value ("chainmail") can't literally name two different images. Working assumption floated but never confirmed: derive each Part's actual sheet name by combining the prop value with the Part's own name (e.g. `"chainmail" + "Arm_Left"` → sheet `"chainmail_arm_left"`). Needs an explicit decision before implementation.
-2. **"Bent state" for weapons** (a sword's damaged-appearance variant) — raised as needing either a second, orthogonal prop-like input on the same Part (weapon *and* a damage flag both affecting which sheet/cell shows), or some other mechanism. Not resolved.
-3. **Hit-spark/event system revival** — see [Explicitly out of scope](#explicitly-out-of-scope--deferred). Needs actual design once combat is in scope, not just a flag.
+A: I think this is managed by the artist, if they had arm_left and arm_right those would be seperate spritesheets, if chainmail included the arms then there wouldn't be props for arm_left or arm_right, the artist would just use those slices for the arms.
+3. **"Bent state" for weapons** (a sword's damaged-appearance variant) — raised as needing either a second, orthogonal prop-like input on the same Part (weapon *and* a damage flag both affecting which sheet/cell shows), or some other mechanism. Not resolved.
+A: I think this is managed by the artist with specific animations, "bent state" was just a throwaway, if an artist wanted a damaged_sword_swing.anif, they would make it.
+
+4. **Hit-spark/event system revival** — see [Explicitly out of scope](#explicitly-out-of-scope--deferred). Needs actual design once combat is in scope, not just a flag.
+I think spark/visuals are managed by the artist, there is probably space to figure out what a hit/event looks like in the engine, if a hit resulted in a spark then I think the engine would spawn walk_spark.anif particles or similar off the top of my head.
 
 ---
 
