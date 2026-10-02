@@ -34,32 +34,34 @@ func (us *UndoStack) Push(snapshot *ProjectSnapshot) {
 	}
 }
 
-// Undo restores the previous state. Returns nil if nothing to undo.
-func (us *UndoStack) Undo() *ProjectSnapshot {
+// Undo steps back one change. Snapshots on the stack are each taken just
+// *before* a change (Project.RecordUndo), so the one on top is the state to
+// return to; current - the live state, which nothing on the stack holds yet
+// - goes onto the redo stack so Redo can bring it back. Returns nil if
+// there is nothing to undo.
+//
+// The returned snapshot has left the stack, so the caller may install its
+// Track as the live one: nothing in the history shares it.
+func (us *UndoStack) Undo(current *ProjectSnapshot) *ProjectSnapshot {
 	if len(us.past) == 0 {
 		return nil
 	}
-
 	state := us.past[len(us.past)-1]
 	us.past = us.past[:len(us.past)-1]
-	us.future = append(us.future, state)
-
-	if len(us.past) > 0 {
-		return us.past[len(us.past)-1]
-	}
+	us.future = append(us.future, current)
 	return state
 }
 
-// Redo restores the next state. Returns nil if nothing to redo.
-func (us *UndoStack) Redo() *ProjectSnapshot {
+// Redo is Undo in reverse: current goes back onto the undo stack and the
+// most recently undone state is returned. Returns nil if there is nothing
+// to redo.
+func (us *UndoStack) Redo(current *ProjectSnapshot) *ProjectSnapshot {
 	if len(us.future) == 0 {
 		return nil
 	}
-
 	state := us.future[len(us.future)-1]
 	us.future = us.future[:len(us.future)-1]
-	us.past = append(us.past, state)
-
+	us.past = append(us.past, current)
 	return state
 }
 

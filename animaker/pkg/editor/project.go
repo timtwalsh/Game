@@ -235,8 +235,11 @@ func (p *Project) RecordUndo() {
 	p.Dirty = true
 }
 
+// Undo and Redo hand the stack a deep copy of the live track, so the track
+// being edited never also sits in the history - otherwise the next edit
+// after an undo would rewrite the state a redo later restores.
 func (p *Project) Undo() bool {
-	snap := p.UndoStack.Undo()
+	snap := p.UndoStack.Undo(p.TakeSnapshot())
 	if snap == nil {
 		return false
 	}
@@ -245,7 +248,7 @@ func (p *Project) Undo() bool {
 }
 
 func (p *Project) Redo() bool {
-	snap := p.UndoStack.Redo()
+	snap := p.UndoStack.Redo(p.TakeSnapshot())
 	if snap == nil {
 		return false
 	}
