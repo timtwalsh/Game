@@ -43,19 +43,21 @@ type PropertiesPanel struct {
 	// OnTileDropped is forwarded from the active part's SheetGridWidget —
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
-	OnTileDragStart   func()
-	OnTileDropped     func(sheetName string, row, col int, absPos fyne.Position)
-	OnTileTapped      func(row, col int)
-	OnImport          func()
-	OnImportAnim      func()
-	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
-	OnAddProp         func()
-	OnPartChanged     func()
+	OnTileDragStart func()
+	OnTileDropped   func(sheetName string, row, col int, absPos fyne.Position)
+	OnTileTapped    func(row, col int)
+	OnImport        func()
+	OnImportAnim    func()
+	OnAddPart       func() // app.go owns the dialog (needs the current prop list)
+	OnAddProp       func()
+	OnPartChanged   func()
 	// OnPartDelete asks app.go to delete a part; it confirms first.
-	OnPartDelete func(idx int)
+	OnPartDelete      func(idx int)
 	OnKeyframeChanged func()
 	OnKeyframeRetimed func() // the selected keyframe's time was typed in
 	OnPropsChanged    func()
+	// OnError shows an error to the artist (app.go owns the window).
+	OnError func(err error)
 	// OnLoadPreviewSheet asks app.go (which owns the window, for the file
 	// dialog) to load an image as a preview-only option for a prop.
 	OnLoadPreviewSheet func(propName string)
@@ -920,9 +922,12 @@ func (pp *PropertiesPanel) refreshSchema() {
 		}
 		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, def))
 		delBtn := widget.NewButton("x", func() {
-			pp.project.RecordUndo()
-			editor.RemoveProp(pp.project.CurrentTrack, idx)
-			pp.project.Dirty = true
+			if err := pp.project.RemoveProp(idx); err != nil {
+				if pp.OnError != nil {
+					pp.OnError(err)
+				}
+				return
+			}
 			if pp.OnPropsChanged != nil {
 				pp.OnPropsChanged()
 			}

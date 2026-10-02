@@ -63,3 +63,58 @@ func (p *Project) RemoveSheet(name string) error {
 	p.Dirty = true
 	return nil
 }
+
+// PropUsers describes everything in the track that depends on the named
+// prop: parts it governs, and nested parts passing it through to their
+// animation. Empty means removing the prop changes nothing that draws.
+func (t *Track) PropUsers(name string) []string {
+	var users []string
+	for _, p := range t.Parts {
+		if p.GoverningProp == name {
+			users = append(users, fmt.Sprintf("part %q", p.Name))
+			continue
+		}
+		for child, b := range p.NestedBindings {
+			if b.PassthroughFrom == name {
+				users = append(users, fmt.Sprintf("part %q (passes it to %q)", p.Name, child))
+				break
+			}
+		}
+	}
+	return users
+}
+
+// PropInUseError is RemoveProp's refusal while something still depends on
+// the prop.
+type PropInUseError struct {
+	Prop  string
+	Users []string
+}
+
+func (e *PropInUseError) Error() string {
+	return fmt.Sprintf("prop %q is still used by %s. Unlink those parts from it, or delete them, "+
+		"then remove it.", e.Prop, strings.Join(e.Users, ", "))
+}
+
+// RemoveProp removes the prop at idx from the track, recording an undo
+// step. Like RemoveSheet it refuses (PropInUseError) while anything uses
+// the prop: removing it then would leave those parts linked to a prop that
+// no longer exists, silently drawing nothing. Its preview override goes
+// with it, so a later prop of the same name doesn't inherit it.
+func (p *Project) RemoveProp(idx int) error {
+	props := p.CurrentTrack.Props
+	if idx < 0 || idx >= len(props) {
+		return fmt.Errorf("invalid prop index: %d", idx)
+	}
+	name := props[idx].Name
+	if users := p.CurrentTrack.PropUsers(name); len(users) > 0 {
+		return &PropInUseError{Prop: name, Users: users}
+	}
+	p.RecordUndo()
+	if err := RemoveProp(p.CurrentTrack, idx); err != nil {
+		return err
+	}
+	delete(p.PreviewProps, name)
+	p.Dirty = true
+	return nil
+}

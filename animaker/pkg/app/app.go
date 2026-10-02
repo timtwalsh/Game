@@ -422,6 +422,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnLoadPreviewSheet = a.onLoadPreviewSheet
 	a.properties.OnRemoveSheet = a.confirmRemoveSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
+	a.properties.OnError = a.showError
 	a.properties.OnPartDelete = a.confirmDeletePart
 	a.properties.OnKeyframeRetimed = func() { a.refreshAll() }
 	a.properties.OnKeyframeChanged = func() {
