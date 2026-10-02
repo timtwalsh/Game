@@ -293,7 +293,7 @@ func (a *Application) wireCallbacks() {
 
 	// -- Timeline --
 	a.timeline.OnScrub = func(ms uint32) {
-		a.Project.Seek(ms)
+		a.Project.Scrub(ms)
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeSelected = func(partIdx, kfIdx int) {

@@ -354,6 +354,7 @@ const scrubStepMs = 50
 
 func (p *Project) StepForward() {
 	p.Playback.IsPlaying = false
+	p.Selection.KeyframeIndex = -1 // a step is a scrub (see Scrub)
 	dir := p.ActiveDirection()
 	limit := uint32(0)
 	if dir != nil {
@@ -367,6 +368,7 @@ func (p *Project) StepForward() {
 
 func (p *Project) StepBackward() {
 	p.Playback.IsPlaying = false
+	p.Selection.KeyframeIndex = -1 // a step is a scrub (see Scrub)
 	if p.Playback.ElapsedMs < scrubStepMs {
 		dir := p.ActiveDirection()
 		if dir != nil {
@@ -393,6 +395,18 @@ func (p *Project) SetActiveDirection(key int) {
 	// so index N is the same part in every facing and switching direction
 	// just changes which keyframes you're editing. Only the keyframe
 	// selection is dropped, since keyframes are per-direction.
+	p.Selection.KeyframeIndex = -1
+}
+
+// Scrub is the artist moving the playhead (dragging or clicking the
+// timeline): a Seek that also drops the keyframe selection, so the
+// Selected Keyframe fields go back to editing what the canvas shows at
+// the new time - the keyframe there, or a new one on the first edit -
+// rather than a keyframe left behind somewhere else. The part stays
+// selected. Seeks that follow a keyframe (clicking its marker, retiming,
+// duplicating) call Seek and keep it.
+func (p *Project) Scrub(timeMs uint32) {
+	p.Seek(timeMs)
 	p.Selection.KeyframeIndex = -1
 }
 
