@@ -53,3 +53,26 @@ func TestRemoveUnusedProp(t *testing.T) {
 		t.Error("removal isn't undoable")
 	}
 }
+
+// A nested part's fixed binding names a sheet: it's needed to draw, and
+// removing it is refused like any other use.
+func TestFixedBindingCountsAsSheetUse(t *testing.T) {
+	tr := NewTrack("guard")
+	torch := AddPart(tr, NewNestedAniPart("Torch", "torch.anif"))
+	torch.NestedBindings["torch_base"] = PropBinding{StaticValue: "torchbase_metal"}
+	torch.NestedBindings["flame"] = PropBinding{StaticValue: "blue_flame.anif"}
+
+	if got := tr.ReferencedSheetNames(); len(got) != 1 || got[0] != "torchbase_metal" {
+		t.Errorf("ReferencedSheetNames = %v", got)
+	}
+	if got := tr.SheetUsers("torchbase_metal"); len(got) != 1 {
+		t.Errorf("SheetUsers = %v, want the torch part", got)
+	}
+	found := false
+	for _, a := range tr.ReferencedAnimPaths() {
+		found = found || a == "blue_flame.anif"
+	}
+	if !found {
+		t.Errorf("ReferencedAnimPaths = %v, lacks the fixed .anif value", tr.ReferencedAnimPaths())
+	}
+}

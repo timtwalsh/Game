@@ -161,7 +161,11 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 		if len(part.NestedBindings) > 0 {
 			tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
 			for k, v := range part.NestedBindings {
-				tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+				static := v.StaticValue
+				if editor.IsAnimValue(static) {
+					static = relAnimPath(path, static)
+				}
+				tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: static}
 			}
 		}
 		tt.Parts = append(tt.Parts, tp)
@@ -244,7 +248,11 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 		if len(tp.NestedBindings) > 0 {
 			part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
 			for k, v := range tp.NestedBindings {
-				part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+				static := v.StaticValue
+				if editor.IsAnimValue(static) {
+					static = absAnimPath(path, static)
+				}
+				part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: static}
 			}
 		}
 		migrateDirectionBinding(part)

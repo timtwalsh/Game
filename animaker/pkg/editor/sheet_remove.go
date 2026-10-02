@@ -6,13 +6,20 @@ import (
 )
 
 // SheetUsers describes everything in the track that draws from the named
-// sheet: parts with it as their fixed sheet, and props with it as their
-// default. Empty means nothing would lose its art if the sheet went away.
+// sheet: parts with it as their fixed sheet, nested parts pinning one of
+// their animation's props to it, and props with it as their default.
+// Empty means nothing would lose its art if the sheet went away.
 func (t *Track) SheetUsers(name string) []string {
 	var users []string
 	for _, p := range t.Parts {
 		if p.Kind == PartKindSheet && p.FixedSheet == name {
 			users = append(users, fmt.Sprintf("part %q", p.Name))
+		}
+		for _, v := range p.staticBindingValues() {
+			if v == name {
+				users = append(users, fmt.Sprintf("part %q (a fixed binding)", p.Name))
+				break
+			}
 		}
 	}
 	for _, pd := range t.Props {

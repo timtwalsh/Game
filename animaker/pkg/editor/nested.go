@@ -327,3 +327,16 @@ func (p *Project) SetNestedDirectionMode(part *Part, mode NestedDirMode) {
 	part.DirectionMode = mode
 	p.Dirty = true
 }
+
+// SheetFromNested reports whether a loaded nested animation has a sheet
+// called name. A nested part's fixed binding can name one of its own
+// animation's sheets, so a track that names such a sheet isn't missing it
+// even though nothing near the track declares it.
+func (p *Project) SheetFromNested(name string) bool {
+	for _, a := range p.LoadedAnims {
+		if a.Sheets[name] != nil {
+			return true
+		}
+	}
+	return false
+}

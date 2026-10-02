@@ -7,6 +7,7 @@ import (
 	"animaker/pkg/ui"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -625,6 +626,7 @@ func (a *Application) openTrack() {
 		// nothing at all. Sheets already loaded this session are kept.
 		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
 		problems = append(problems, file.LoadNestedAnimsFor(track, a.Project.LoadedAnims)...)
+		missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
 		for name, s := range sheets {
 			a.Project.LoadedSheets[name] = s
 		}

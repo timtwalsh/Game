@@ -275,13 +275,19 @@ func (t *Track) nextPartID() int {
 }
 
 // ReferencedSheetNames lists every sheet the track names — parts' fixed
-// sheets and props' defaults — sorted and without duplicates. These are
-// the sheets it needs loaded to draw as authored.
+// sheets, props' defaults and nested parts' fixed binding values — sorted
+// and without duplicates. These are the sheets it needs loaded to draw as
+// authored.
 func (t *Track) ReferencedSheetNames() []string {
 	seen := map[string]bool{}
 	for _, p := range t.Parts {
 		if p.Kind == PartKindSheet && p.FixedSheet != "" {
 			seen[p.FixedSheet] = true
+		}
+		for _, v := range p.staticBindingValues() {
+			if !IsAnimValue(v) {
+				seen[v] = true
+			}
 		}
 	}
 	for _, pd := range t.Props {
@@ -297,8 +303,30 @@ func (t *Track) ReferencedSheetNames() []string {
 	return names
 }
 
+// staticBindingValues lists the values a nested part's bindings pin, in
+// sorted binding order: each is a sheet name, or an .anif path for a
+// nested prop that holds animations.
+func (p *Part) staticBindingValues() []string {
+	if p.Kind != PartKindNestedAni {
+		return nil
+	}
+	keys := make([]string, 0, len(p.NestedBindings))
+	for k := range p.NestedBindings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var vals []string
+	for _, k := range keys {
+		if b := p.NestedBindings[k]; b.PassthroughFrom == "" && b.StaticValue != "" {
+			vals = append(vals, b.StaticValue)
+		}
+	}
+	return vals
+}
+
 // ReferencedAnimPaths lists every nested .anif the track names - nested
-// parts' own paths and animation props' defaults - without duplicates.
+// parts' own paths, animation props' defaults and fixed binding values -
+// without duplicates.
 func (t *Track) ReferencedAnimPaths() []string {
 	seen := map[string]bool{}
 	var paths []string
@@ -311,6 +339,11 @@ func (t *Track) ReferencedAnimPaths() []string {
 	for _, p := range t.Parts {
 		if p.Kind == PartKindNestedAni {
 			add(p.NestedAniPath)
+		}
+		for _, v := range p.staticBindingValues() {
+			if IsAnimValue(v) {
+				add(v)
+			}
 		}
 	}
 	for _, pd := range t.Props {
