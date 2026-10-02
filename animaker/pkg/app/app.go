@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
@@ -114,7 +115,13 @@ func (a *Application) Run() {
 	a.registerShortcuts()
 
 	a.Window.SetContent(mainLayout)
+	// Closing with unsaved changes asks first. Window.Close, which the
+	// prompt calls once it's answered, doesn't come back through here.
+	a.Window.SetCloseIntercept(func() {
+		a.confirmDiscard(a.Window.Close)
+	})
 	a.Window.SetOnClosed(a.onClose)
+	a.updateTitle()
 
 	go a.playbackLoop()
 	a.reportPreviousCrash()
@@ -523,7 +530,67 @@ func (a *Application) registerShortcuts() {
 
 // -- Menu handlers --
 
+// confirmDiscard runs then straight away when there are no unsaved changes;
+// otherwise it asks whether to save them first, discard them, or cancel
+// (in which case then never runs). Closing the window, New Track and Open
+// all go through it, so none of them can silently throw away work.
+func (a *Application) confirmDiscard(then func()) {
+	if !a.Project.Dirty {
+		then()
+		return
+	}
+	msg := widget.NewLabel(fmt.Sprintf("%q has unsaved changes. Save them first?",
+		a.Project.CurrentTrack.Metadata.Name))
+	msg.Wrapping = fyne.TextWrapWord
+	var d *dialog.CustomDialog
+	save := widget.NewButton("Save", func() {
+		d.Hide()
+		a.saveThen(then)
+	})
+	save.Importance = widget.HighImportance
+	discard := widget.NewButton("Don't Save", func() {
+		d.Hide()
+		then()
+	})
+	discard.Importance = widget.DangerImportance
+	cancel := widget.NewButton("Cancel", func() { d.Hide() })
+	d = dialog.NewCustomWithoutButtons("Unsaved Changes",
+		container.NewVBox(msg, container.NewHBox(layout.NewSpacer(), cancel, discard, save)), a.Window)
+	d.Resize(fyne.NewSize(440, 160))
+	d.Show()
+}
+
+// saveThen saves (asking where, for a track never saved) and runs then only
+// if the save went through - a cancelled Save As or a failed write leaves
+// the unsaved work where it is.
+func (a *Application) saveThen(then func()) {
+	if a.Project.SavePath != "" {
+		if a.saveToPath(a.Project.SavePath) {
+			then()
+		}
+		return
+	}
+	a.showSaveAs(then)
+}
+
+// updateTitle shows the track's name in the window title, with a leading
+// "*" while it has unsaved changes.
+func (a *Application) updateTitle() {
+	if a.Window == nil {
+		return
+	}
+	mark := ""
+	if a.Project.Dirty {
+		mark = "*"
+	}
+	a.Window.SetTitle("ANIFile Animation Maker — " + mark + a.Project.CurrentTrack.Metadata.Name)
+}
+
 func (a *Application) onNewTrack() {
+	a.confirmDiscard(a.newTrack)
+}
+
+func (a *Application) newTrack() {
 	ui.ShowNewTrackDialog(a.Window, func(name string) {
 		a.Project = editor.NewProject(name)
 		a.canvasWidget.SetProject(a.Project)
@@ -531,11 +598,14 @@ func (a *Application) onNewTrack() {
 		a.properties.SetProject(a.Project)
 		a.refreshDirectionSelect()
 		a.refreshAll()
-		a.Window.SetTitle("ANIFile Animation Maker — " + name)
 	})
 }
 
 func (a *Application) onOpenTrack() {
+	a.confirmDiscard(a.openTrack)
+}
+
+func (a *Application) openTrack() {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
@@ -582,7 +652,6 @@ func (a *Application) onOpenTrack() {
 		a.properties.SetProject(a.Project)
 		a.refreshDirectionSelect()
 		a.refreshAll()
-		a.Window.SetTitle("ANIFile Animation Maker — " + track.Metadata.Name)
 		a.reportUnloadedSheets(missing, problems)
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
@@ -599,13 +668,20 @@ func (a *Application) onSaveTrack() {
 }
 
 func (a *Application) onSaveAsTrack() {
+	a.showSaveAs(func() {})
+}
+
+// showSaveAs asks where to save, saves there, and runs then if it saved.
+func (a *Application) showSaveAs(then func()) {
 	fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 		if err != nil || writer == nil {
 			return
 		}
 		filePath := writer.URI().Path()
 		writer.Close()
-		a.saveToPath(filePath)
+		if a.saveToPath(filePath) {
+			then()
+		}
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
 	fd.SetFileName(a.Project.CurrentTrack.Metadata.Name + ".anif")
@@ -626,15 +702,17 @@ func (a *Application) sheetRefs() []file.SheetRef {
 	return refs
 }
 
-func (a *Application) saveToPath(path string) {
+// saveToPath saves the track and reports whether it worked.
+func (a *Application) saveToPath(path string) bool {
 	a.Project.CurrentTrack.Metadata.UpdatedAt = time.Now()
 	if err := file.SaveTrack(a.Project.CurrentTrack, path, a.sheetRefs()); err != nil {
 		a.showError(fmt.Errorf("failed to save: %w", err))
-		return
+		return false
 	}
 	a.Project.SavePath = path
 	a.Project.Dirty = false
-	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentTrack.Metadata.Name)
+	a.updateTitle()
+	return true
 }
 
 // reportUnloadedSheets tells the artist which sheets a just-opened track
@@ -681,6 +759,7 @@ func (a *Application) onImportSpriteSheet() {
 
 		tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
 		a.Project.LoadedSheets[imp.Name] = tmpl
+		a.Project.Dirty = true // the .anif records its sheets
 		a.Project.PaletteSheet = imp.Name
 
 		sprshPath := strings.TrimSuffix(imp.FilePath, filepath.Ext(imp.FilePath)) + ".sprsh"
@@ -955,6 +1034,7 @@ func (a *Application) refreshAll() {
 	if a.titleLabel != nil {
 		a.titleLabel.SetText(a.Project.CurrentTrack.Metadata.Name)
 	}
+	a.updateTitle()
 }
 
 func (a *Application) onClose() {
