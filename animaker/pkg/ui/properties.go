@@ -432,6 +432,7 @@ func (pp *PropertiesPanel) refreshPartLink() {
 	// Assigned after SetSelected above so seeding the current value doesn't
 	// fire the handler — Fyne's Select re-fires OnChanged on SetSelected.
 	fixedSelect.OnChanged = func(v string) {
+		pp.project.RecordUndo()
 		part.FixedSheet = v
 		pp.project.Dirty = true
 		pp.refreshSheetGrid()
@@ -673,21 +674,38 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		pose = editor.ResolvedTransform{X: kf.X, Y: kf.Y, Z: kf.Z, RotationDeg: kf.RotationDeg,
 			Row: kf.Row, Col: kf.Col, Direction: kf.Direction}
 	}
-	// target is the keyframe an edit applies to, created (undoably) on the
-	// first edit when there isn't one at the playhead.
+	// target is the keyframe an edit applies to, created on the first edit
+	// when there isn't one at the playhead.
 	target := func() *editor.Keyframe {
 		if kf == nil {
-			pp.project.RecordUndo()
 			kf, _ = editor.EnsureKeyframe(dir, part.ID, playhead)
 			pp.project.Selection.KeyframeIndex = kf.ID
 		}
 		return kf
 	}
+	// beginEdit records the undo step for one edit - a button click, a
+	// picker change, or one burst of typing in a field - before it changes
+	// anything, creating the keyframe it applies to if need be.
+	beginEdit := func() *editor.Keyframe {
+		pp.project.RecordUndo()
+		return target()
+	}
+	field := func(v float32, set func(kf *editor.Keyframe, v float32)) *selectAllEntry {
+		var e *selectAllEntry
+		e = numEntry(fmt.Sprintf("%v", v), func(v float32) {
+			if e.startEdit() {
+				beginEdit()
+			}
+			set(target(), v)
+			pp.notifyKeyframeChanged()
+		})
+		return e
+	}
 
-	xEntry := numEntry(fmt.Sprintf("%v", pose.X), func(v float32) { target().X = v; pp.notifyKeyframeChanged() })
-	yEntry := numEntry(fmt.Sprintf("%v", pose.Y), func(v float32) { target().Y = v; pp.notifyKeyframeChanged() })
-	zEntry := numEntry(fmt.Sprintf("%v", pose.Z), func(v float32) { target().Z = v; pp.notifyKeyframeChanged() })
-	rotEntry := numEntry(fmt.Sprintf("%v", pose.RotationDeg), func(v float32) { target().RotationDeg = v; pp.notifyKeyframeChanged() })
+	xEntry := field(pose.X, func(kf *editor.Keyframe, v float32) { kf.X = v })
+	yEntry := field(pose.Y, func(kf *editor.Keyframe, v float32) { kf.Y = v })
+	zEntry := field(pose.Z, func(kf *editor.Keyframe, v float32) { kf.Z = v })
+	rotEntry := field(pose.RotationDeg, func(kf *editor.Keyframe, v float32) { kf.RotationDeg = v })
 
 	grid := container.NewGridWithColumns(2,
 		widget.NewLabel("X"), xEntry,
@@ -713,13 +731,13 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		// Assigned after SetSelected, which would re-fire it.
 		dirSelect.OnChanged = func(label string) {
 			if k, ok := directionKeyFor(keys, labels, label); ok {
-				target().Direction = k
+				beginEdit().Direction = k
 				pp.notifyKeyframeChanged()
 			}
 		}
 		pp.keyframeBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Direction"), nil, dirSelect))
 	}
-	pp.keyframeBox.Add(pp.buildNudgeControls(target))
+	pp.keyframeBox.Add(pp.buildNudgeControls(beginEdit))
 
 	if part.Kind == editor.PartKindNestedAni {
 		pp.keyframeBox.Add(pp.buildNestedBindingsEditor(part))
@@ -799,12 +817,13 @@ const (
 // an in-progress keystroke), a nudge click rebuilds the keyframe section
 // afterward so the entries visibly reflect the new value immediately.
 //
-// target returns the keyframe to nudge, creating it at the playhead on
-// first use (see refreshKeyframe).
-func (pp *PropertiesPanel) buildNudgeControls(target func() *editor.Keyframe) fyne.CanvasObject {
+// beginEdit records an undo step and returns the keyframe to nudge,
+// creating it at the playhead on first use (see refreshKeyframe). Each
+// click is its own undo step.
+func (pp *PropertiesPanel) buildNudgeControls(beginEdit func() *editor.Keyframe) fyne.CanvasObject {
 	nudge := func(apply func(kf *editor.Keyframe)) func() {
 		return func() {
-			apply(target())
+			apply(beginEdit())
 			pp.notifyKeyframeChanged()
 			pp.refreshKeyframe()
 		}
@@ -992,6 +1011,8 @@ func (pp *PropertiesPanel) refreshPreview() {
 
 // -- Helpers --
 
+// numEntry is a field that calls onChange with every value typed into it
+// that parses as a number.
 func numEntry(initial string, onChange func(float32)) *selectAllEntry {
 	e := newEntry()
 	e.SetText(initial)
