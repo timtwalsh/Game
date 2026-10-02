@@ -23,6 +23,8 @@ the matching issues carry the same decision in a comment.
 | [#20](https://github.com/timtwalsh/Game/issues/20) | Low | `map/objects/animaker.md` says nested animations don't render (stale) |
 | [#21](https://github.com/timtwalsh/Game/issues/21) | Low | Small polish items |
 | [#22](https://github.com/timtwalsh/Game/issues/22) | Low | Scrubbing should clear the keyframe selection (decision 4 below) |
+| [#23](https://github.com/timtwalsh/Game/issues/23) | Medium | Nested bindings editor: dropdowns, passthrough or static (decision 8 below) |
+| [#24](https://github.com/timtwalsh/Game/issues/24) | Medium | Prop-schema linter (decision 10 below) |
 
 ## Decisions (answered 2026-10-02)
 
@@ -53,33 +55,21 @@ the matching issues carry the same decision in a comment.
 7. **Nested-animation cache (#17): reload every time.** Opening a track
    reloads its nested `.anif` files from disk.
 
-8. **Nested bindings UI (#21): open. Recommendation: switch to dropdowns
-   now.** This question was unclear, so here it is restated. A nested
-   animation (e.g. `torch.anif`) can have its own props, e.g. a `flame` prop
-   that picks `flame_red` or `flame_blue`. A *binding* is how the parent track
-   sets that prop for the copy it contains: either *passthrough* (copy the
-   value of one of the parent's own props, so the character's `flame_color`
-   drives the torch) or *static* (always `flame_red`). Today both the torch's
-   prop name and the value are typed as free text. A typo quietly does
-   nothing, and the torch falls back to its default. The question was: turn
-   those boxes into dropdowns (the torch's props; then the parent's props, or
-   the loaded sheets), as every other picker in the editor already is, or
-   leave them until spec open question 1 is settled? Dropdowns are a small,
-   self-contained change and are recommended. Say if you'd rather leave them.
+8. **Nested bindings UI: dropdowns; each binding is passthrough or static.**
+   A parent track either passes one of its own props through to the nested
+   animation, or pins a fixed value. For example, `city_guard_torch_walk.anif`
+   pins `torch.torch_base = torchbase_metal`, while `player_torch_walk.anif`
+   declares its own `torch_base` prop and passes it through. The data model
+   already supports exactly this (`PropBinding`), so only the editor UI changes:
+   free text becomes dropdowns. Filed as #23, together with a related gap: a
+   sheet named only by a static binding isn't counted as used.
 
-9. **`Keyframe.ID` (#21): keep it an index, rename it to `Index`.** Stable
-   keyframe IDs aren't worth adding:
-   - Nothing outside the editor refers to keyframes: `.anif` files don't save
-     a keyframe id, only `part_id` + `time_ms`.
-   - A future game-side loader would identify keyframes by part and time.
-   - The likeliest future reference, hit-spark events, is defined in the spec
-     as firing at "a specific timeline instant", which is a time, not a
-     keyframe.
-   - Stable IDs would mean a new saved field plus migration, with no current
-     consumer.
+9. **`Keyframe.ID`: keep it as the keyframe's position; rename it to `Index` (#21).**
+   Stable keyframe IDs aren't worth adding: nothing refers to a keyframe except
+   by part and time, and the field isn't saved, so the rename doesn't change the
+   file format.
 
-   Renaming the field to `Index` makes the code say what it actually is. It
-   doesn't touch the file format, because the field isn't saved.
-
-10. **Spec open questions / prop-schema linter: still open.** No answer yet on
-    whether the linter gets its own issue.
+10. **Prop-schema linter: yes, filed as #24.** One open point: how a "family"
+    of tracks is defined. The recommendation is an explicit glob per family,
+    because splitting on the first `_` breaks names like `city_guard_*`.
+    Spec open questions 1–3 are still unresolved.
