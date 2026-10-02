@@ -1,10 +1,10 @@
-# Animaker review: open questions
+# Animaker review: questions and decisions
 
 A full review of `animaker/` was done on 2026-10-01: every source file in `pkg/editor`,
 `pkg/file`, `pkg/ui`, `pkg/app` and `pkg/applog`, plus `go vet` and `go test`.
-Clear defects were filed as GitHub issues (index below). This file collects the
-**decisions the code can't settle on its own**. Each one is a design choice for
-the owner, not a bug. Answer inline, or delete an entry once it's decided.
+Clear defects were filed as GitHub issues (index below). This file records the
+design decisions the code couldn't settle on its own, as answered by the owner;
+the matching issues carry the same decision in a comment.
 
 ## Issues filed
 
@@ -22,65 +22,64 @@ the owner, not a bug. Answer inline, or delete an entry once it's decided.
 | [#19](https://github.com/timtwalsh/Game/issues/19) | Low | Per-frame rebuild of all canvas/timeline objects (perf, unmeasured) |
 | [#20](https://github.com/timtwalsh/Game/issues/20) | Low | `map/objects/animaker.md` says nested animations don't render (stale) |
 | [#21](https://github.com/timtwalsh/Game/issues/21) | Low | Small polish items |
+| [#22](https://github.com/timtwalsh/Game/issues/22) | Low | Scrubbing should clear the keyframe selection (decision 4 below) |
 
-## Questions
+## Decisions (answered 2026-10-02)
 
-1. **Deleting a prop that parts still use (#13): refuse, or unlink?**
-   Removing a sheet *refuses* and lists what uses it. For props, the
-   alternative is to unlink the parts and keep their `FixedSheet`, which
-   `DropTile` always fills in, so they'd keep drawing the art they show now.
-   Which do you want? Unlinking is friendlier. Refusing matches how sheets work.
+1. **Deleting a prop that parts still use (#13): refuse.** Do it the same way as
+   removing a sheet: refuse the delete and list the parts that use the prop.
+   Also clear the prop's `PreviewProps` entry when the delete goes through.
 
-2. **What should undo cover (#12)?** Today it snapshots only the `Track`.
-   Should editor-session actions that change what gets *saved* also be
-   undoable? The main ones are importing a sheet and removing one: both change
-   the `.anif`'s `[[sheets]]` table, but they live in `Project.LoadedSheets`.
-   And should preview overrides stay out of undo, as they are now?
+2. **Undo scope (#12): track only, for now.** Importing or removing a sheet,
+   and preview overrides, stay out of undo.
 
-3. **Typed-field undo granularity (#12).** Is one undo step per *focus burst*
-   (click into X, type `-12.5`, leave the field = one step) what you want, or
-   per committed value (Enter / leaving the field)?
+3. **Typed-field undo (#12): one step per focus burst.** Click into a field,
+   type, then leave it: that is one undo step, however many keystrokes it took.
 
-4. **Selected keyframe vs playhead.** After you click a keyframe marker and then
-   scrub elsewhere, the Selected Keyframe fields still edit *that* keyframe,
-   while the canvas shows the interpolated pose at the playhead. The panel
-   labels it with "@ Nms", so it's discoverable, but a canvas drag edits the
-   keyframe *at the playhead* instead. Should scrubbing clear the keyframe
-   selection, so the fields always match what the canvas shows? I left this as
-   is, since it may be intentional.
+4. **Selected keyframe vs playhead: clear on scrub.** Scrubbing clears the
+   keyframe selection, so the fields always edit what the canvas shows: the
+   keyframe at the playhead, or a new one if the artist edits a pose that
+   isn't keyed there. Filed as #22.
 
-5. **Crash-log message line on Linux and macOS (#16).** Is Windows the only
-   platform that matters for the editor? If so, the fix is to skip that one
-   assertion on other platforms. If not, stderr should be captured properly on
-   Unix (`dup2` onto fd 2). And should CI run Animaker tests on
-   `windows-latest`, `ubuntu-latest`, or both?
+5. **Platforms (#16): Windows required, Linux nice to have.** Skip the
+   crash-log message-line assertion on non-Windows. CI runs Animaker tests on
+   `windows-latest`; an `ubuntu-latest` run is optional, once the skip is in.
 
-6. **Re-importing an image that already has a `.sprsh` (#15).** Should the
-   import dialog prefill from the existing template and *refuse* to change the
-   grid, given the spec's "new layout = new name, never reorganized in place"?
-   Or should it allow the change with a warning?
+6. **Re-importing an image that has a `.sprsh` (#15): replace after
+   confirmation.** Prefill the dialog from the existing template. If the
+   artist changes it, they must explicitly accept that the existing sheet will
+   be replaced before the import goes ahead.
 
-7. **Nested-animation cache (#17).** Should reopening a track reload nested
-   `.anif` files from disk every time (simplest, always fresh), or only when
-   the file's modification time has changed?
+7. **Nested-animation cache (#17): reload every time.** Opening a track
+   reloads its nested `.anif` files from disk.
 
-8. **Nested bindings UI (#21).** The free-text binding editor predates the
-   pick-list conventions everywhere else. Should it become pick-lists (the
-   nested track's props on the left; the parent's props, or the values the
-   nested prop allows, on the right)? Or is the bindings feature likely to be
-   redesigned along with spec open question 1 (one prop fanning out to
-   several sheets), in which case it's not worth polishing yet?
+8. **Nested bindings UI (#21): open. Recommendation: switch to dropdowns
+   now.** This question was unclear, so here it is restated. A nested
+   animation (e.g. `torch.anif`) can have its own props, e.g. a `flame` prop
+   that picks `flame_red` or `flame_blue`. A *binding* is how the parent track
+   sets that prop for the copy it contains: either *passthrough* (copy the
+   value of one of the parent's own props, so the character's `flame_color`
+   drives the torch) or *static* (always `flame_red`). Today both the torch's
+   prop name and the value are typed as free text. A typo quietly does
+   nothing, and the torch falls back to its default. The question was: turn
+   those boxes into dropdowns (the torch's props; then the parent's props, or
+   the loaded sheets), as every other picker in the editor already is, or
+   leave them until spec open question 1 is settled? Dropdowns are a small,
+   self-contained change and are recommended. Say if you'd rather leave them.
 
-9. **`Keyframe.ID` is just the index.** `normalizeKeyframes` renumbers IDs to
-   slice positions after every sort, and `Selection.KeyframeIndex` is also an
-   index. That works, but the name suggests a stable identity it doesn't have.
-   (Parts *do* have stable IDs.) Is it worth making keyframe IDs stable before
-   anything else (such as a game-side loader or an event system) starts
-   referring to keyframes, or is "index" the intended meaning? If so, consider
-   renaming it.
+9. **`Keyframe.ID` (#21): keep it an index, rename it to `Index`.** Stable
+   keyframe IDs aren't worth adding:
+   - Nothing outside the editor refers to keyframes: `.anif` files don't save
+     a keyframe id, only `part_id` + `time_ms`.
+   - A future game-side loader would identify keyframes by part and time.
+   - The likeliest future reference, hit-spark events, is defined in the spec
+     as firing at "a specific timeline instant", which is a time, not a
+     keyframe.
+   - Stable IDs would mean a new saved field plus migration, with no current
+     consumer.
 
-10. **Spec open questions are untouched.** `docs/ANI_MAKER_SPEC.md` "Open
-    questions" 1–3 (prop → several sheets, a sword's "bent state",
-    hit-spark events) are still unresolved in code, as the spec says. Also
-    still unbuilt: the prop-schema linter the spec calls "load-bearing, not a
-    nice-to-have". Should that linter get its own issue now?
+   Renaming the field to `Index` makes the code say what it actually is. It
+   doesn't touch the file format, because the field isn't saved.
+
+10. **Spec open questions / prop-schema linter: still open.** No answer yet on
+    whether the linter gets its own issue.
