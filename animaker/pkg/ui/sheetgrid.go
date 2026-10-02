@@ -110,6 +110,9 @@ func (g *SheetGridWidget) MinSize() fyne.Size {
 // DragEnd takes no event, so the last-seen absolute position is tracked
 // here on every Dragged call and used when the drag finishes.
 func (g *SheetGridWidget) Dragged(e *fyne.DragEvent) {
+	if !g.hasCells() {
+		return
+	}
 	if !g.dragging {
 		g.dragging = true
 		g.dragRow, g.dragCol = g.cellAt(e.Position)
@@ -122,6 +125,9 @@ func (g *SheetGridWidget) Dragged(e *fyne.DragEvent) {
 
 // DragEnd implements fyne.Draggable.
 func (g *SheetGridWidget) DragEnd() {
+	if !g.dragging {
+		return // the drag never picked a tile up
+	}
 	g.dragging = false
 	if g.OnTileDropped != nil {
 		g.OnTileDropped(g.dragRow, g.dragCol, g.lastAbsPos)
@@ -131,11 +137,18 @@ func (g *SheetGridWidget) DragEnd() {
 // Tapped implements fyne.Tappable. Fyne delivers a tap only when the
 // pointer didn't drag, so this can't fire for a drag gesture.
 func (g *SheetGridWidget) Tapped(e *fyne.PointEvent) {
-	if g.sheet == nil || g.OnTileTapped == nil {
+	if !g.hasCells() || g.OnTileTapped == nil {
 		return
 	}
 	row, col := g.cellAt(e.Position)
 	g.OnTileTapped(row, col)
+}
+
+// hasCells reports whether there's a tile to pick: a sheet whose grid
+// fits at least one cell. Without the check a sheet with no cells (cell
+// size larger than the image) gave cellAt's (-1,-1) to a keyframe.
+func (g *SheetGridWidget) hasCells() bool {
+	return g.sheet != nil && g.sheet.Cols() > 0 && g.sheet.Rows() > 0
 }
 
 var _ fyne.Draggable = (*SheetGridWidget)(nil)

@@ -51,15 +51,23 @@ type SheetImport struct {
 // ShowImportSheetDialog displays a dialog for importing a sprite sheet
 // template: pick a file, then name the sheet, define its fixed cell size
 // and one pivot for the whole sheet, and say whether it's swappable art
-// for a prop.
-func ShowImportSheetDialog(win fyne.Window, onImport func(SheetImport)) {
+// for a prop. prefill returns the settings to start from for an image
+// that already has a template (ok false for a new one), so re-importing a
+// sheet doesn't mean retyping its grid.
+func ShowImportSheetDialog(win fyne.Window, prefill func(imagePath string) (SheetImport, bool), onImport func(SheetImport)) {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
 		}
 		filePath := reader.URI().Path()
 		reader.Close()
-		showSheetGridDialog(win, filePath, onImport)
+		start := SheetImport{CellW: 32, CellH: 32, PivotX: 16, PivotY: 16}
+		if prefill != nil {
+			if p, ok := prefill(filePath); ok {
+				start = p
+			}
+		}
+		showSheetGridDialog(win, filePath, start, onImport)
 	}, win)
 
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
@@ -67,9 +75,12 @@ func ShowImportSheetDialog(win fyne.Window, onImport func(SheetImport)) {
 	fd.Show()
 }
 
-func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetImport)) {
+func showSheetGridDialog(win fyne.Window, filePath string, start SheetImport, onImport func(SheetImport)) {
 	baseName := filepath.Base(filePath)
 	defaultName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	if start.Name != "" {
+		defaultName = start.Name
+	}
 
 	// Required: the form's Import button stays disabled while it's blank.
 	nameEntry := newEntry()
@@ -81,14 +92,12 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetIm
 		return nil
 	}
 
-	cellWEntry := newEntry()
-	cellWEntry.SetText("32")
-	cellHEntry := newEntry()
-	cellHEntry.SetText("32")
-	pivotXEntry := newEntry()
-	pivotXEntry.SetText("16")
-	pivotYEntry := newEntry()
-	pivotYEntry.SetText("16")
+	// Validated, so Import stays disabled on a typo rather than quietly
+	// slicing with a stand-in value.
+	cellWEntry := validatedEntry(strconv.Itoa(start.CellW), positiveInt)
+	cellHEntry := validatedEntry(strconv.Itoa(start.CellH), positiveInt)
+	pivotXEntry := validatedEntry(formatFloat(start.PivotX), number)
+	pivotYEntry := validatedEntry(formatFloat(start.PivotY), number)
 
 	// The prop name defaults to the sheet name, so the common case (this
 	// sheet is the first art for a new slot) is one tick. Naming an
@@ -130,17 +139,11 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetIm
 				return
 			}
 			imp := SheetImport{FilePath: filePath, Name: strings.TrimSpace(nameEntry.Text)}
-			imp.CellW, _ = strconv.Atoi(cellWEntry.Text)
-			imp.CellH, _ = strconv.Atoi(cellHEntry.Text)
-			pivotX, _ := strconv.ParseFloat(pivotXEntry.Text, 32)
-			pivotY, _ := strconv.ParseFloat(pivotYEntry.Text, 32)
+			imp.CellW, _ = strconv.Atoi(strings.TrimSpace(cellWEntry.Text))
+			imp.CellH, _ = strconv.Atoi(strings.TrimSpace(cellHEntry.Text))
+			pivotX, _ := strconv.ParseFloat(strings.TrimSpace(pivotXEntry.Text), 32)
+			pivotY, _ := strconv.ParseFloat(strings.TrimSpace(pivotYEntry.Text), 32)
 			imp.PivotX, imp.PivotY = float32(pivotX), float32(pivotY)
-			if imp.CellW <= 0 {
-				imp.CellW = 32
-			}
-			if imp.CellH <= 0 {
-				imp.CellH = 32
-			}
 			if propCheck.Checked {
 				imp.PropName = strings.TrimSpace(propEntry.Text)
 				if imp.PropName == "" {
@@ -154,6 +157,29 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetIm
 	form.Resize(fyne.NewSize(460, 520))
 	form.Show()
 }
+
+func validatedEntry(text string, validate func(string) error) *selectAllEntry {
+	e := newEntry()
+	e.SetText(text)
+	e.Validator = validate
+	return e
+}
+
+func positiveInt(s string) error {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err != nil || n <= 0 {
+		return errors.New("a whole number above 0")
+	}
+	return nil
+}
+
+func number(s string) error {
+	if _, err := strconv.ParseFloat(strings.TrimSpace(s), 32); err != nil {
+		return errors.New("a number")
+	}
+	return nil
+}
+
+func formatFloat(f float32) string { return strconv.FormatFloat(float64(f), 'f', -1, 32) }
 
 // ShowAddDirectionDialog displays a dialog for adding a new direction.
 // Directions are keyed by int (0=up, 1=right, 2=down, 3=left by the game's

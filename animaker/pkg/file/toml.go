@@ -382,3 +382,25 @@ func LoadSheetTemplate(sprshPath string) (*editor.SpriteSheetTemplate, error) {
 	s.SprshPath = sprshPath
 	return s, nil
 }
+
+// SprshPathFor is where a sheet image's .sprsh lives: beside it, same name.
+func SprshPathFor(imagePath string) string {
+	return strings.TrimSuffix(imagePath, filepath.Ext(imagePath)) + ".sprsh"
+}
+
+// SheetSettings are a .sprsh's grid and pivot, without its image.
+type SheetSettings struct {
+	Name           string
+	CellW, CellH   int
+	PivotX, PivotY float32
+}
+
+// ReadSheetSettings reads a .sprsh's name, grid and pivot without loading
+// the image, e.g. to prefill a re-import of the same image.
+func ReadSheetSettings(sprshPath string) (SheetSettings, error) {
+	var ts tomlSheetTemplate
+	if _, err := toml.DecodeFile(sprshPath, &ts); err != nil {
+		return SheetSettings{}, fmt.Errorf("failed to decode sheet template: %w", err)
+	}
+	return SheetSettings{Name: ts.Name, CellW: ts.CellW, CellH: ts.CellH, PivotX: ts.PivotX, PivotY: ts.PivotY}, nil
+}

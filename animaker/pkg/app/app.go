@@ -753,44 +753,106 @@ func (a *Application) reportUnloadedSheets(missing, problems []string) {
 // complaint when import only filled LoadedSheets and changed nothing on
 // screen.
 func (a *Application) onImportSpriteSheet() {
-	ui.ShowImportSheetDialog(a.Window, func(imp ui.SheetImport) {
+	ui.ShowImportSheetDialog(a.Window, existingSheetSettings, func(imp ui.SheetImport) {
 		img, err := file.LoadImage(imp.FilePath)
 		if err != nil {
 			a.showError(fmt.Errorf("failed to load image: %w", err))
 			return
 		}
-
 		tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
-		a.Project.LoadedSheets[imp.Name] = tmpl
-		a.Project.Dirty = true // the .anif records its sheets
-		a.Project.PaletteSheet = imp.Name
-
-		sprshPath := strings.TrimSuffix(imp.FilePath, filepath.Ext(imp.FilePath)) + ".sprsh"
-		if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
-			a.showError(fmt.Errorf("failed to save sheet template: %w", err))
-		} else {
-			tmpl.SprshPath = sprshPath
+		if tmpl.Cols() == 0 || tmpl.Rows() == 0 {
+			b := img.Bounds()
+			a.showError(fmt.Errorf("a %dx%d cell doesn't fit in this %dx%d image - check Cell Width and Cell Height",
+				imp.CellW, imp.CellH, b.Dx(), b.Dy()))
+			return
 		}
-
-		propNote := ""
-		if imp.PropName != "" {
-			if a.Project.CurrentTrack.FindProp(imp.PropName) == nil {
-				a.Project.RecordUndo()
-				editor.EnsureProp(a.Project.CurrentTrack, imp.PropName, imp.Name)
-				propNote = fmt.Sprintf("\n\nDeclared prop %q with this sheet as its default.", imp.PropName)
-			} else {
-				propNote = fmt.Sprintf("\n\nAdded as another option for prop %q - "+
-					"pick it under Preview Overrides to see it.", imp.PropName)
+		replaces := a.importReplaces(imp)
+		if len(replaces) == 0 {
+			a.importSheet(imp, tmpl)
+			return
+		}
+		msg := widget.NewLabel("This import replaces:\n\n- " + strings.Join(replaces, "\n- ") +
+			"\n\nParts drawing from the old sheet will be re-sliced with the new settings.")
+		msg.Wrapping = fyne.TextWrapWord
+		d := dialog.NewCustomConfirm("Replace Existing Sheet?", "Replace", "Cancel", msg, func(ok bool) {
+			if ok {
+				a.importSheet(imp, tmpl)
 			}
-		}
-
-		a.refreshAll()
-		dialog.ShowInformation("Import Complete",
-			fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.\n\n"+
-				"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.%s",
-				imp.Name, imp.CellW, imp.CellH, tmpl.Cols(), tmpl.Rows(), propNote),
-			a.Window)
+		}, a.Window)
+		d.Resize(fyne.NewSize(520, 280))
+		d.Show()
 	})
+}
+
+// existingSheetSettings prefills the import dialog from the .sprsh an image
+// already has, so re-importing it starts from its saved grid and pivot.
+func existingSheetSettings(imagePath string) (ui.SheetImport, bool) {
+	st, err := file.ReadSheetSettings(file.SprshPathFor(imagePath))
+	if err != nil {
+		return ui.SheetImport{}, false
+	}
+	return ui.SheetImport{Name: st.Name, CellW: st.CellW, CellH: st.CellH, PivotX: st.PivotX, PivotY: st.PivotY}, true
+}
+
+// importReplaces lists what importing imp would overwrite: the image's
+// existing .sprsh if the settings differ from it, and an already-loaded
+// sheet of the same name if it's a different image or grid. Empty means
+// the import changes nothing that exists.
+func (a *Application) importReplaces(imp ui.SheetImport) []string {
+	var out []string
+	sprsh := file.SprshPathFor(imp.FilePath)
+	if old, err := file.ReadSheetSettings(sprsh); err == nil {
+		now := file.SheetSettings{Name: imp.Name, CellW: imp.CellW, CellH: imp.CellH, PivotX: imp.PivotX, PivotY: imp.PivotY}
+		if old != now {
+			out = append(out, fmt.Sprintf("the saved template %s (%q, %dx%d cells, pivot %v,%v)",
+				filepath.Base(sprsh), old.Name, old.CellW, old.CellH, old.PivotX, old.PivotY))
+		}
+	}
+	if old := a.Project.LoadedSheets[imp.Name]; old != nil {
+		if filepath.Clean(old.FilePath) != filepath.Clean(imp.FilePath) || old.CellW != imp.CellW ||
+			old.CellH != imp.CellH || old.PivotX != imp.PivotX || old.PivotY != imp.PivotY {
+			desc := fmt.Sprintf("the loaded sheet %q (%s, %dx%d cells)", imp.Name, filepath.Base(old.FilePath), old.CellW, old.CellH)
+			if users := a.Project.CurrentTrack.SheetUsers(imp.Name); len(users) > 0 {
+				desc += ", used by " + strings.Join(users, ", ")
+			}
+			out = append(out, desc)
+		}
+	}
+	return out
+}
+
+// importSheet loads an accepted import into the project and writes its
+// .sprsh beside the image.
+func (a *Application) importSheet(imp ui.SheetImport, tmpl *editor.SpriteSheetTemplate) {
+	a.Project.LoadedSheets[imp.Name] = tmpl
+	a.Project.Dirty = true // the .anif records its sheets
+	a.Project.PaletteSheet = imp.Name
+
+	sprshPath := file.SprshPathFor(imp.FilePath)
+	if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
+		a.showError(fmt.Errorf("failed to save sheet template: %w", err))
+	} else {
+		tmpl.SprshPath = sprshPath
+	}
+
+	propNote := ""
+	if imp.PropName != "" {
+		if a.Project.CurrentTrack.FindProp(imp.PropName) == nil {
+			a.Project.RecordUndo()
+			editor.EnsureProp(a.Project.CurrentTrack, imp.PropName, imp.Name)
+			propNote = fmt.Sprintf("\n\nDeclared prop %q with this sheet as its default.", imp.PropName)
+		} else {
+			propNote = fmt.Sprintf("\n\nAdded as another option for prop %q - "+
+				"pick it under Preview Overrides to see it.", imp.PropName)
+		}
+	}
+
+	a.refreshAll()
+	dialog.ShowInformation("Import Complete",
+		fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.\n\n"+
+			"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.%s",
+			imp.Name, imp.CellW, imp.CellH, tmpl.Cols(), tmpl.Rows(), propNote),
+		a.Window)
 }
 
 // onLoadPreviewSheet lets the artist try other art on a prop on the fly —
