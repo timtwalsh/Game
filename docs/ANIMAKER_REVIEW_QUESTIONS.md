@@ -8,6 +8,13 @@ the matching issues carry the same decision in a comment.
 
 ## Issues filed
 
+**Status (2026-10-02):** all of these are fixed on branch
+`claude/sweet-feynman-vh08om`, one commit per issue, each ending `Fixes #N`
+so the issue closes when the branch merges. Still open: whether lint
+families should come from a `families.toml` instead of command-line globs
+(decision 10).
+
+
 | # | Severity | Summary |
 |---|---|---|
 | [#10](https://github.com/timtwalsh/Game/issues/10) | High | Undo reverts two actions; Redo loses the latest; history gets corrupted after an undo |
