@@ -3,6 +3,7 @@ package ui
 import (
 	"animaker/pkg/editor"
 	"fmt"
+	"image"
 	"image/color"
 	"path/filepath"
 	"sort"
@@ -146,12 +147,36 @@ func (cw *CanvasWidget) viewBounds() (minX, minY, maxX, maxY float32) {
 	if cw.viewFrozen {
 		return cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY
 	}
+	return cw.boundsFor(cw.partExtents())
+}
+
+// partExtent is partExtentAnim's result for one part.
+type partExtent struct{ w, h, pivotX, pivotY float32 }
+
+// partExtents measures every part once. Measuring a nested part flattens
+// its animation at each of its keyframe times, so this is done once per
+// redraw and shared, not once per part per lookup.
+func (cw *CanvasWidget) partExtents() map[*editor.Part]partExtent {
+	ext := make(map[*editor.Part]partExtent, len(cw.project.CurrentTrack.Parts))
+	for _, part := range cw.project.CurrentTrack.Parts {
+		w, h, px, py := cw.partExtentAnim(part)
+		ext[part] = partExtent{w, h, px, py}
+	}
+	return ext
+}
+
+// boundsFor is viewBounds from already-measured parts.
+func (cw *CanvasWidget) boundsFor(ext map[*editor.Part]partExtent) (minX, minY, maxX, maxY float32) {
+	if cw.viewFrozen {
+		return cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY
+	}
 	refW, refH := cw.refBox()
 	minX, minY, maxX, maxY = 0, 0, refW, refH
 
 	if dir := cw.project.ActiveDirection(); dir != nil {
 		for _, part := range cw.project.CurrentTrack.Parts {
-			w, h, px, py := cw.partExtentAnim(part)
+			e := ext[part]
+			w, h, px, py := e.w, e.h, e.pivotX, e.pivotY
 			for _, kf := range dir.KeyframesFor(part.ID) {
 				x0, y0 := kf.X-px, kf.Y-py
 				minX, minY = minF(minX, x0), minF(minY, y0)
@@ -171,6 +196,10 @@ func (cw *CanvasWidget) viewBounds() (minX, minY, maxX, maxY float32) {
 // current view includes.
 func (cw *CanvasWidget) originScreen() fyne.Position {
 	minX, minY, _, _ := cw.viewBounds()
+	return cw.originFor(minX, minY)
+}
+
+func (cw *CanvasWidget) originFor(minX, minY float32) fyne.Position {
 	return fyne.NewPos(-minX*cw.zoom, -minY*cw.zoom)
 }
 
@@ -250,6 +279,14 @@ type resolvedDraw struct {
 // renderer (drawing) and this widget's own hit-testing, so both always
 // agree on where a part actually is.
 func (cw *CanvasWidget) resolvedDraws() []resolvedDraw {
+	ext := cw.partExtents()
+	minX, minY, _, _ := cw.boundsFor(ext)
+	return cw.resolvedDrawsAt(ext, cw.originFor(minX, minY))
+}
+
+// resolvedDrawsAt is resolvedDraws with the parts already measured and the
+// origin already placed, so a redraw does each once.
+func (cw *CanvasWidget) resolvedDrawsAt(ext map[*editor.Part]partExtent, origin fyne.Position) []resolvedDraw {
 	dir := cw.project.ActiveDirection()
 	if dir == nil {
 		return nil
@@ -271,21 +308,13 @@ func (cw *CanvasWidget) resolvedDraws() []resolvedDraw {
 		if part.Kind == editor.PartKindNestedAni {
 			d.sprites = cw.project.FlattenNested(part)
 		}
-		d.rect, d.size = cw.screenRectFor(d)
+		e := ext[part]
+		d.rect = fyne.NewPos(origin.X+(d.tr.X-e.pivotX)*cw.zoom, origin.Y+(d.tr.Y-e.pivotY)*cw.zoom)
+		d.size = fyne.NewSize(e.w*cw.zoom, e.h*cw.zoom)
 		draws = append(draws, d)
 	}
 	sort.SliceStable(draws, func(i, j int) bool { return draws[i].tr.Z < draws[j].tr.Z })
 	return draws
-}
-
-func (cw *CanvasWidget) screenRectFor(d resolvedDraw) (pos fyne.Position, size fyne.Size) {
-	zoom := cw.zoom
-	origin := cw.originScreen()
-	w, h, px, py := cw.partExtentAnim(d.part)
-	return fyne.NewPos(
-		origin.X+(d.tr.X-px)*zoom,
-		origin.Y+(d.tr.Y-py)*zoom,
-	), fyne.NewSize(w*zoom, h*zoom)
 }
 
 func posInRect(p fyne.Position, rectPos fyne.Position, rectSize fyne.Size) bool {
@@ -377,6 +406,33 @@ func (cw *CanvasWidget) DragEnd() {
 type canvasRenderer struct {
 	widget  *CanvasWidget
 	objects []fyne.CanvasObject
+
+	// images keeps the canvas.Image drawn for each sheet cell from one
+	// redraw to the next (a cell shown twice in a frame gets two), so a
+	// playing animation moves the same objects around rather than creating
+	// new ones every frame. Fyne caches a GPU texture per object for a
+	// minute, so fresh objects each frame meant a texture upload per sprite
+	// per frame and up to a minute of stale ones held at once.
+	images    map[image.Image][]*canvas.Image
+	imageUsed map[image.Image]int
+}
+
+// cellImage returns a canvas.Image showing img, reusing one from an
+// earlier redraw when there is one not yet used in this one.
+func (r *canvasRenderer) cellImage(img image.Image) *canvas.Image {
+	if r.images == nil {
+		r.images = map[image.Image][]*canvas.Image{}
+	}
+	n := r.imageUsed[img]
+	r.imageUsed[img] = n + 1
+	if pool := r.images[img]; n < len(pool) {
+		return pool[n]
+	}
+	ci := canvas.NewImageFromImage(img)
+	ci.ScaleMode = canvas.ImageScalePixels
+	ci.FillMode = canvas.ImageFillOriginal
+	r.images[img] = append(r.images[img], ci)
+	return ci
 }
 
 func (r *canvasRenderer) Layout(size fyne.Size) {}
@@ -399,10 +455,13 @@ func (r *canvasRenderer) Destroy() {}
 
 func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 	cw := r.widget
-	size := cw.MinSize()
+	r.imageUsed = map[image.Image]int{}
+	ext := cw.partExtents()
+	minX, minY, maxX, maxY := cw.boundsFor(ext)
+	size := fyne.NewSize(maxF((maxX-minX)*cw.zoom, 100), maxF((maxY-minY)*cw.zoom, 100))
 	objs := []fyne.CanvasObject{}
 
-	origin := cw.originScreen()
+	origin := cw.originFor(minX, minY)
 
 	bg := canvas.NewRectangle(ColorCanvasBackground)
 	bg.Resize(size)
@@ -443,19 +502,19 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 		return objs
 	}
 
-	draws := cw.resolvedDraws()
+	draws := cw.resolvedDrawsAt(ext, origin)
 	sel := cw.project.Selection
 	for _, d := range draws {
 		selected := sel != nil && sel.PartIndex == d.partIdx
-		objs = append(objs, r.drawPart(d, selected)...)
+		objs = append(objs, r.drawPart(d, origin, selected)...)
 	}
 
 	return objs
 }
 
-func (r *canvasRenderer) drawPart(d resolvedDraw, selected bool) []fyne.CanvasObject {
+func (r *canvasRenderer) drawPart(d resolvedDraw, origin fyne.Position, selected bool) []fyne.CanvasObject {
 	if d.part.Kind == editor.PartKindNestedAni {
-		return r.drawNested(d, selected)
+		return r.drawNested(d, origin, selected)
 	}
 
 	if d.sheet == nil || d.sheet.Image == nil {
@@ -466,9 +525,7 @@ func (r *canvasRenderer) drawPart(d resolvedDraw, selected bool) []fyne.CanvasOb
 		return nil
 	}
 
-	img := canvas.NewImageFromImage(cellImg)
-	img.ScaleMode = canvas.ImageScalePixels
-	img.FillMode = canvas.ImageFillOriginal
+	img := r.cellImage(cellImg)
 	img.Resize(d.size)
 	img.Move(d.rect)
 	objs := []fyne.CanvasObject{img}
@@ -482,7 +539,7 @@ func (r *canvasRenderer) drawPart(d resolvedDraw, selected bool) []fyne.CanvasOb
 // flattened frame, offset by the part's own position. One whose animation
 // isn't loaded is drawn as a labelled placeholder box instead of nothing,
 // so it can still be seen, selected and moved.
-func (r *canvasRenderer) drawNested(d resolvedDraw, selected bool) []fyne.CanvasObject {
+func (r *canvasRenderer) drawNested(d resolvedDraw, origin fyne.Position, selected bool) []fyne.CanvasObject {
 	cw := r.widget
 	var objs []fyne.CanvasObject
 	if len(d.sprites) == 0 {
@@ -498,15 +555,12 @@ func (r *canvasRenderer) drawNested(d resolvedDraw, selected bool) []fyne.Canvas
 		objs = append(objs, box, label)
 	}
 
-	origin := cw.originScreen()
 	for _, s := range d.sprites {
 		cellImg, err := s.Sheet.CellImage(s.Row, s.Col)
 		if err != nil {
 			continue
 		}
-		img := canvas.NewImageFromImage(cellImg)
-		img.ScaleMode = canvas.ImageScalePixels
-		img.FillMode = canvas.ImageFillOriginal
+		img := r.cellImage(cellImg)
 		img.Resize(fyne.NewSize(float32(s.Sheet.CellW)*cw.zoom, float32(s.Sheet.CellH)*cw.zoom))
 		img.Move(fyne.NewPos(
 			origin.X+(d.tr.X+s.X-s.Sheet.PivotX)*cw.zoom,

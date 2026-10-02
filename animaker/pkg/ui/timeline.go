@@ -411,6 +411,11 @@ func (r *partLabelRenderer) Destroy()                     {}
 type scrubAreaRenderer struct {
 	widget  *scrubArea
 	objects []fyne.CanvasObject
+
+	// labels keeps each ruler label's text object across redraws (the
+	// timeline redraws every playback frame), so Fyne isn't handed - and
+	// left caching a texture for - a new one per label per frame.
+	labels map[uint32]*canvas.Text
 }
 
 func (r *scrubAreaRenderer) Layout(size fyne.Size) {}
@@ -454,8 +459,7 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 		top := float32(timelineRulerHeight / 2)
 		if t%labelStep == 0 {
 			top = 0
-			lbl := canvas.NewText(formatTimelineMs(t), ColorSectionHeader)
-			lbl.TextSize = 9
+			lbl := r.label(t)
 			lbl.Move(fyne.NewPos(x+2, 2))
 			objs = append(objs, lbl)
 		}
@@ -508,6 +512,20 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 	objs = append(objs, playhead)
 
 	return objs
+}
+
+// label returns the ruler label for time t, reused from earlier redraws.
+func (r *scrubAreaRenderer) label(t uint32) *canvas.Text {
+	if r.labels == nil {
+		r.labels = map[uint32]*canvas.Text{}
+	}
+	if l := r.labels[t]; l != nil {
+		return l
+	}
+	l := canvas.NewText(formatTimelineMs(t), ColorSectionHeader)
+	l.TextSize = 9
+	r.labels[t] = l
+	return l
 }
 
 // formatTimelineMs labels a ruler tick: whole seconds as "2s" once that's
