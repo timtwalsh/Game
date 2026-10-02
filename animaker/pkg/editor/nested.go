@@ -90,7 +90,23 @@ type FlatSprite struct {
 	Sheet    *SpriteSheetTemplate
 	Row, Col int
 	X, Y     float32 // where the cell's pivot goes
-	Z        float32
+	Z        float32 // the Z of the part this sprite belongs to at the top level
+
+	// zPath is the sprite's Z at each level of nesting, outermost first.
+	// Draw order compares it level by level, so a nested sprite stays in
+	// its part's slot in the parent's order whatever Z values the nested
+	// track uses.
+	zPath []float32
+}
+
+// drawsBefore orders sprites back to front by zPath.
+func drawsBefore(a, b FlatSprite) bool {
+	for i := 0; i < len(a.zPath) && i < len(b.zPath); i++ {
+		if a.zPath[i] != b.zPath[i] {
+			return a.zPath[i] < b.zPath[i]
+		}
+	}
+	return len(a.zPath) < len(b.zPath)
 }
 
 // maxNestDepth bounds recursion, so an animation that (directly or not)
@@ -120,7 +136,7 @@ func (p *Project) FlattenNested(part *Part) []FlatSprite {
 	}
 	want := part.NestedDirectionAt(p.Playback.ActiveDirection, tr)
 	sprites := p.flatten(anim, want, parentProps, part.NestedBindings, p.NestedClockMs(), 1)
-	sort.SliceStable(sprites, func(i, j int) bool { return sprites[i].Z < sprites[j].Z })
+	sort.SliceStable(sprites, func(i, j int) bool { return drawsBefore(sprites[i], sprites[j]) })
 	return sprites
 }
 
@@ -167,7 +183,8 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 			if sheet == nil {
 				continue
 			}
-			out = append(out, FlatSprite{Sheet: sheet, Row: tr.Row, Col: tr.Col, X: tr.X, Y: tr.Y, Z: tr.Z})
+			out = append(out, FlatSprite{Sheet: sheet, Row: tr.Row, Col: tr.Col, X: tr.X, Y: tr.Y, Z: tr.Z,
+				zPath: []float32{tr.Z}})
 		case PartKindNestedAni:
 			path := part.NestedAniPath
 			if part.GoverningProp != "" && IsAnimValue(props[part.GoverningProp]) {
@@ -183,7 +200,8 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 				s.Y += tr.Y
 				// Kept within this part's slot in the draw order: a nested
 				// sprite's own Z only orders it among its siblings.
-				s.Z = tr.Z + s.Z/1000
+				s.Z = tr.Z
+				s.zPath = append([]float32{tr.Z}, s.zPath...)
 				out = append(out, s)
 			}
 		}

@@ -301,7 +301,7 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 				return nil, nil, fmt.Errorf("direction %s has a keyframe for unknown part id %d", dirName, tkf.PartID)
 			}
 			dir.Keyframes[tkf.PartID] = append(dir.Keyframes[tkf.PartID], &editor.Keyframe{
-				ID: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
+				Index: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
 				X: tkf.X, Y: tkf.Y, Z: tkf.Z,
 				RotationDeg: tkf.RotationDeg, Row: tkf.Row, Col: tkf.Col,
 				Direction: tkf.Direction,
@@ -336,7 +336,7 @@ func normalizeLoadedKeyframes(dir *editor.Direction) {
 			out = append(out, kf)
 		}
 		for i, kf := range out {
-			kf.ID = i
+			kf.Index = i
 		}
 		dir.Keyframes[id] = out
 	}

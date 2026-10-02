@@ -681,7 +681,7 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 	target := func() *editor.Keyframe {
 		if kf == nil {
 			kf, _ = editor.EnsureKeyframe(dir, part.ID, playhead)
-			pp.project.Selection.KeyframeIndex = kf.ID
+			pp.project.Selection.KeyframeIndex = kf.Index
 		}
 		return kf
 	}
@@ -778,13 +778,13 @@ func (pp *PropertiesPanel) buildTimeEntry(part *editor.Part, kf *editor.Keyframe
 			}
 		}
 		pp.project.RecordUndo()
-		if err := editor.MoveKeyframe(dir, part.ID, kf.ID, newMs); err != nil {
+		if err := editor.MoveKeyframe(dir, part.ID, kf.Index, newMs); err != nil {
 			status.SetText(err.Error())
 			return
 		}
 		// Moving re-sorts, so re-read the index; and keep the playhead on
 		// the keyframe so the canvas still shows the pose being edited.
-		pp.project.Selection.KeyframeIndex = kf.ID
+		pp.project.Selection.KeyframeIndex = kf.Index
 		pp.project.Seek(kf.TimeMs)
 		pp.project.Dirty = true
 		if pp.OnKeyframeRetimed != nil {

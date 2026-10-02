@@ -205,3 +205,38 @@ func TestSwitchingDirectionModeDoesNotJump(t *testing.T) {
 		t.Errorf("switching to static changed the row %d -> %d", before, got)
 	}
 }
+
+// A nested sprite stays in its part's slot in the draw order however
+// large the nested track's own Z values are. The old encoding (parent Z
+// plus child Z / 1000) let a child Z of 5000 jump a sibling part.
+func TestNestedDrawOrderIgnoresChildZScale(t *testing.T) {
+	torch := torchAnim("torch.anif")
+	for _, kfs := range torch.Track.Directions[0].Keyframes {
+		for _, kf := range kfs {
+			kf.Z = 5000
+		}
+	}
+	holder := NewTrack("holder")
+	tp := AddPart(holder, NewNestedAniPart("torch", torch.Path))
+	AddKeyframe(holder.Directions[0], tp.ID, 0).Z = 1 // behind the hand
+	hand := AddPart(holder, NewSheetPart("hand", "", "skin"))
+	AddKeyframe(holder.Directions[0], hand.ID, 0).Z = 2
+	holderAnim := &NestedAnim{Path: AnimKey("holder.anif"), Track: holder, Sheets: map[string]*SpriteSheetTemplate{
+		"skin": newTestSheet("skin", 32, 32, 16, 16), "fire": newTestSheet("fire", 32, 32, 16, 16),
+	}}
+
+	p := NewProject("walk")
+	p.LoadedAnims[torch.Path] = torch
+	p.LoadedAnims[holderAnim.Path] = holderAnim
+	part := AddPart(p.CurrentTrack, NewNestedAniPart("held", holderAnim.Path))
+	AddKeyframe(p.ActiveDirection(), part.ID, 0)
+
+	sprites := p.FlattenNested(part)
+	if len(sprites) != 2 {
+		t.Fatalf("%d sprites, want flame and hand", len(sprites))
+	}
+	if sprites[0].Sheet.Name != "fire" || sprites[1].Sheet.Name != "skin" {
+		t.Errorf("draw order %s, %s; want the flame (torch at Z 1) behind the hand (Z 2)",
+			sprites[0].Sheet.Name, sprites[1].Sheet.Name)
+	}
+}

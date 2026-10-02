@@ -83,7 +83,7 @@ func DuplicateKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) (*Keyf
 // ErrKeyframeTimeTaken if another keyframe of the same part is already at
 // newTimeMs. The keyframes are re-sorted afterwards, so the moved
 // keyframe's index can change — callers tracking it should hold the
-// *Keyframe and read its ID, not keep using idx.
+// *Keyframe and read its Index, not keep using idx.
 func MoveKeyframe(dir *Direction, partID, idx int, newTimeMs uint32) error {
 	kfs := dir.KeyframesFor(partID)
 	if idx < 0 || idx >= len(kfs) {
@@ -137,12 +137,12 @@ func DuplicateTargetMs(sourceMs, playheadMs uint32) uint32 {
 }
 
 // normalizeKeyframes re-sorts a part's keyframes by time and renumbers
-// their IDs to match, so a Keyframe.ID is always its index in the slice.
+// their Index to match their position in the slice.
 func normalizeKeyframes(dir *Direction, partID int) {
 	kfs := dir.Keyframes[partID]
 	sort.Slice(kfs, func(i, j int) bool { return kfs[i].TimeMs < kfs[j].TimeMs })
 	for i, kf := range kfs {
-		kf.ID = i
+		kf.Index = i
 	}
 }
 

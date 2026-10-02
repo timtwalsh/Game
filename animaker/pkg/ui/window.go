@@ -3,6 +3,7 @@ package ui
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 )
 
 // BuildMainLayout assembles the main window layout, GraalShop-style: a
@@ -46,6 +47,7 @@ func BuildMenuBar(
 	onRedo func(),
 	onToggleGrid func(),
 	onZoom func(float32),
+	onAbout func(),
 ) *fyne.MainMenu {
 	fileMenu := fyne.NewMenu("File",
 		fyne.NewMenuItem("New Track", onNew),
@@ -58,10 +60,13 @@ func BuildMenuBar(
 		fyne.NewMenuItem("Import Animation...", onImportAnim),
 	)
 
-	editMenu := fyne.NewMenu("Edit",
-		fyne.NewMenuItem("Undo", onUndo),
-		fyne.NewMenuItem("Redo", onRedo),
-	)
+	// The shortcuts themselves are registered on the window canvas (see
+	// app.registerShortcuts); setting them here shows them in the menu.
+	undo := fyne.NewMenuItem("Undo", onUndo)
+	undo.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: fyne.KeyModifierControl}
+	redo := fyne.NewMenuItem("Redo", onRedo)
+	redo.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyY, Modifier: fyne.KeyModifierControl}
+	editMenu := fyne.NewMenu("Edit", undo, redo)
 
 	viewMenu := fyne.NewMenu("View",
 		fyne.NewMenuItem("Toggle Grid", onToggleGrid),
@@ -73,9 +78,7 @@ func BuildMenuBar(
 	)
 
 	helpMenu := fyne.NewMenu("Help",
-		fyne.NewMenuItem("About", func() {
-			// TODO: show about dialog
-		}),
+		fyne.NewMenuItem("About", onAbout),
 	)
 
 	return fyne.NewMainMenu(fileMenu, editMenu, viewMenu, helpMenu)

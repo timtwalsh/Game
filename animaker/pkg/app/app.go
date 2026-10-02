@@ -110,6 +110,7 @@ func (a *Application) Run() {
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
 		a.onZoom,
+		a.showAbout,
 	)
 	a.Window.SetMainMenu(menu)
 
@@ -274,7 +275,7 @@ func (a *Application) wireCallbacks() {
 		kf, _ := editor.EnsureKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
 		a.dragKf = kf
 		a.dragOrigX, a.dragOrigY = kf.X, kf.Y
-		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Selection.KeyframeIndex = kf.Index
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
@@ -353,7 +354,7 @@ func (a *Application) wireCallbacks() {
 		}
 		a.Project.RecordUndo()
 		kf, _ := editor.EnsureKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
-		sel.KeyframeIndex = kf.ID
+		sel.KeyframeIndex = kf.Index
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
@@ -377,7 +378,7 @@ func (a *Application) wireCallbacks() {
 		if err != nil {
 			return
 		}
-		sel.KeyframeIndex = dup.ID
+		sel.KeyframeIndex = dup.Index
 		a.Project.Seek(dup.TimeMs)
 		a.Project.Dirty = true
 		a.refreshAll()
@@ -387,7 +388,7 @@ func (a *Application) wireCallbacks() {
 		a.Project.Playback.IsPlaying = false
 		a.Project.RecordUndo()
 		a.properties.SelectPart(partIdx)
-		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Selection.KeyframeIndex = kf.Index
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeRetimed = func(partIdx int, kf *editor.Keyframe, newTimeMs uint32) {
@@ -398,12 +399,12 @@ func (a *Application) wireCallbacks() {
 		// Refused if it would land exactly on another keyframe of this
 		// part; the marker just holds for that one mouse-move, and the
 		// next one carries it past.
-		if editor.MoveKeyframe(dir, part.ID, kf.ID, newTimeMs) != nil {
+		if editor.MoveKeyframe(dir, part.ID, kf.Index, newTimeMs) != nil {
 			return
 		}
 		// Moving can reorder the keyframes, so re-read the index, and keep
 		// the playhead on the keyframe so the canvas shows its pose.
-		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Selection.KeyframeIndex = kf.Index
 		a.Project.Seek(kf.TimeMs)
 		a.Project.Dirty = true
 		a.refreshAll()
@@ -476,13 +477,14 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	}
 	x, y := a.canvasWidget.LocalToAnimXY(local)
 
-	a.Project.RecordUndo()
+	before := a.Project.TakeSnapshot()
 	partIdx, kf := a.Project.DropTile(sheetName, row, col, x, y)
 	if kf == nil {
-		return
+		return // nothing changed, so no undo step (it would also clear redo)
 	}
+	a.Project.UndoStack.Push(before)
 	a.properties.SelectPart(partIdx)
-	a.Project.Selection.KeyframeIndex = kf.ID
+	a.Project.Selection.KeyframeIndex = kf.Index
 	a.Project.Dirty = true
 	a.refreshAll()
 }
@@ -517,6 +519,10 @@ func (a *Application) registerShortcuts() {
 		a.onUndo()
 	})
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift}, func(_ fyne.Shortcut) {
+		a.onRedo()
+	})
+	// Ctrl+Y is redo by Windows convention, alongside Ctrl+Shift+Z.
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyY, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		a.onRedo()
 	})
 	// Esc deselects, so the next palette drop creates a new part instead
@@ -992,7 +998,9 @@ func (a *Application) addPart(part *editor.Part) bool {
 }
 
 func (a *Application) onAddDirection() {
-	ui.ShowAddDirectionDialog(a.Window, func(key int) {
+	track := a.Project.CurrentTrack
+	exists := func(key int) bool { _, ok := track.Directions[key]; return ok }
+	ui.ShowAddDirectionDialog(a.Window, exists, func(key int) {
 		a.Project.RecordUndo()
 		editor.AddDirection(a.Project.CurrentTrack, key)
 		a.refreshDirectionSelect()
@@ -1056,6 +1064,20 @@ func (a *Application) onRedo() {
 		a.refreshDirectionSelect()
 		a.refreshAll()
 	}
+}
+
+// showAbout names the editor and where its session logs are - the file
+// to attach to a bug report.
+func (a *Application) showAbout() {
+	msg := widget.NewLabel("ANIFile Animation Maker - authors rigged, multi-part sprite animations " +
+		"(.anif) and sprite sheet templates (.sprsh). See docs/ANI_MAKER_SPEC.md.\n\n" +
+		"Session logs (attach the latest to a bug report):")
+	msg.Wrapping = fyne.TextWrapWord
+	logs := widget.NewEntry()
+	logs.SetText(applog.DefaultDir())
+	d := dialog.NewCustom("About", "OK", container.NewVBox(msg, logs), a.Window)
+	d.Resize(fyne.NewSize(520, 220))
+	d.Show()
 }
 
 func (a *Application) onZoom(factor float32) {

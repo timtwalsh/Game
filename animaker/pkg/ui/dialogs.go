@@ -19,6 +19,12 @@ func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
 	nameEntry := newEntry()
 	nameEntry.SetText("untitled")
 	nameEntry.SetPlaceHolder("human_walk")
+	nameEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("the track needs a name")
+		}
+		return nil
+	}
 
 	form := dialog.NewForm(
 		"New Track",
@@ -28,7 +34,7 @@ func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
 		},
 		func(confirmed bool) {
 			if confirmed && onCreate != nil {
-				onCreate(nameEntry.Text)
+				onCreate(strings.TrimSpace(nameEntry.Text))
 			}
 		},
 		win,
@@ -182,11 +188,23 @@ func number(s string) error {
 func formatFloat(f float32) string { return strconv.FormatFloat(float64(f), 'f', -1, 32) }
 
 // ShowAddDirectionDialog displays a dialog for adding a new direction.
-// Directions are keyed by int (0=up, 1=right, 2=down, 3=left by the game's
-// own convention, but any int is accepted).
-func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
+// Directions are keyed by a whole number 0 or above (0=up, 1=right, 2=down,
+// 3=left by the game's own convention; more for diagonals or extra
+// facings). exists reports a key the track already has; Add stays
+// disabled for that, or for anything that isn't such a number.
+func ShowAddDirectionDialog(win fyne.Window, exists func(key int) bool, onCreate func(key int)) {
 	keyEntry := newEntry()
 	keyEntry.SetPlaceHolder("0=up, 1=right, 2=down, 3=left, ...")
+	keyEntry.Validator = func(s string) error {
+		k, err := strconv.Atoi(strings.TrimSpace(s))
+		switch {
+		case err != nil || k < 0:
+			return errors.New("a whole number, 0 or above")
+		case exists != nil && exists(k):
+			return fmt.Errorf("direction %d already exists", k)
+		}
+		return nil
+	}
 
 	form := dialog.NewForm(
 		"Add Direction",
@@ -198,7 +216,7 @@ func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
 			if !confirmed || onCreate == nil {
 				return
 			}
-			key, err := strconv.Atoi(keyEntry.Text)
+			key, err := strconv.Atoi(strings.TrimSpace(keyEntry.Text))
 			if err != nil {
 				return
 			}

@@ -330,6 +330,11 @@ func (p *Project) Play() {
 	if dir == nil || (dir.TotalDurationMs() == 0 && !p.hasPosedNested(dir)) {
 		return
 	}
+	// Parked at (or past) the end, which is where a non-looping play
+	// stops: start over, rather than stopping again at once.
+	if total := dir.TotalDurationMs(); total > 0 && p.Playback.ElapsedMs >= total {
+		p.Playback.ElapsedMs = 0
+	}
 	p.Playback.IsPlaying = true
 }
 

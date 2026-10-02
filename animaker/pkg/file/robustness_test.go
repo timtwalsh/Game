@@ -49,8 +49,8 @@ x = 9.0
 		t.Fatalf("keyframes = %+v %+v, want 0ms then 400ms (x=9)", *kfs[0], *kfs[len(kfs)-1])
 	}
 	for i, kf := range kfs {
-		if kf.ID != i {
-			t.Errorf("keyframe %d has ID %d", i, kf.ID)
+		if kf.Index != i {
+			t.Errorf("keyframe %d has ID %d", i, kf.Index)
 		}
 	}
 }

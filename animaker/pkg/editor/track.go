@@ -200,7 +200,11 @@ type PropBinding struct {
 // parts only) is explicitly chosen by the artist per keyframe — never
 // derived from the Track's name, direction, or frame index.
 type Keyframe struct {
-	ID          int
+	// Index is the keyframe's position among its part's keyframes in this
+	// direction, kept up to date as they're re-sorted. It's a position, not
+	// an identity (it isn't saved; nothing refers to a keyframe except by
+	// part and time), so hold the *Keyframe to follow one across a re-sort.
+	Index       int
 	TimeMs      uint32
 	X, Y, Z     float32 // Z is tweened like X/Y, feeds draw-order sort
 	RotationDeg float32

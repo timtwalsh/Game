@@ -122,3 +122,22 @@ func TestScrubClearsKeyframeSelection(t *testing.T) {
 		t.Errorf("playhead %d, want 100", p.Playback.ElapsedMs)
 	}
 }
+
+// With looping off, playback stops at the end; Play then starts over
+// rather than stopping again straight away.
+func TestPlayAtTheEndStartsOver(t *testing.T) {
+	p := NewProject("t")
+	part := AddPart(p.CurrentTrack, NewSheetPart("body", "", "s"))
+	AddKeyframe(p.ActiveDirection(), part.ID, 0)
+	AddKeyframe(p.ActiveDirection(), part.ID, 300)
+	p.Playback.LoopEnabled = false
+	p.Play()
+	p.AdvancePlayback(400)
+	if p.Playback.IsPlaying || p.Playback.ElapsedMs != 300 {
+		t.Fatalf("precondition: playing=%v at %d, want stopped at 300", p.Playback.IsPlaying, p.Playback.ElapsedMs)
+	}
+	p.Play()
+	if !p.Playback.IsPlaying || p.Playback.ElapsedMs != 0 {
+		t.Errorf("Play at the end: playing=%v at %d, want playing from 0", p.Playback.IsPlaying, p.Playback.ElapsedMs)
+	}
+}

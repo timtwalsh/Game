@@ -46,7 +46,7 @@ func TestMoveKeyframeReordersAndTheKeyframeTracksItsNewIndex(t *testing.T) {
 	dir, partID := threeKeyframes()
 	moving := dir.KeyframesFor(partID)[0] // the 0ms keyframe, Row 0
 
-	if err := MoveKeyframe(dir, partID, moving.ID, 300); err != nil {
+	if err := MoveKeyframe(dir, partID, moving.Index, 300); err != nil {
 		t.Fatalf("MoveKeyframe: %v", err)
 	}
 
@@ -59,8 +59,8 @@ func TestMoveKeyframeReordersAndTheKeyframeTracksItsNewIndex(t *testing.T) {
 	}
 	// A retime drag holds the *Keyframe and reads its ID after every move,
 	// so ID must follow the keyframe to its new slot.
-	if moving.ID != 1 || kfs[moving.ID] != moving {
-		t.Errorf("moved keyframe has ID %d; kfs[ID] is not it - selection would point at the wrong keyframe", moving.ID)
+	if moving.Index != 1 || kfs[moving.Index] != moving {
+		t.Errorf("moved keyframe has ID %d; kfs[ID] is not it - selection would point at the wrong keyframe", moving.Index)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestDuplicateKeyframeOntoFreeTimeInsertsACopy(t *testing.T) {
 	if dup.TimeMs != 350 || dup.X != 10 || dup.Row != 1 {
 		t.Errorf("copy = %+v, want the 250ms pose (X 10, Row 1) at 350ms", *dup)
 	}
-	if dir.KeyframesFor(partID)[dup.ID] != dup {
-		t.Error("returned keyframe's ID doesn't index it")
+	if dir.KeyframesFor(partID)[dup.Index] != dup {
+		t.Error("returned keyframe's Index doesn't index it")
 	}
 }
 
