@@ -2,15 +2,23 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"animaker/pkg/app"
 	"animaker/pkg/applog"
+	"animaker/pkg/lint"
 	"animaker/pkg/ui"
 
 	fyneApp "fyne.io/fyne/v2/app"
 )
 
 func main() {
+	// "animaker lint <glob>..." checks track families from the command line
+	// (and CI) instead of opening the editor.
+	if len(os.Args) > 1 && os.Args[1] == "lint" {
+		os.Exit(lint.Run(os.Args[2:], os.Stdout))
+	}
+
 	// First, so a crash anywhere after this point leaves a log behind
 	// (bin\logs\ when built by build_local.ps1). Not fatal if it fails:
 	// the editor is still usable, just without a log.
