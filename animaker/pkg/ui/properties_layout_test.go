@@ -31,7 +31,7 @@ func TestRigSectionsDoNotOverlapAfterSelectingAPart(t *testing.T) {
 	w.Resize(fyne.NewSize(440, 1200))
 
 	pp.SelectPart(idx)
-	p.Selection.KeyframeIndex = kf.ID
+	p.Selection.KeyframeIndex = kf.Index
 	pp.Refresh()
 
 	sections := []struct {

@@ -30,8 +30,14 @@ jobs:
         run: go test ./... -v
 
   animaker:
-    name: build (animaker module)
-    runs-on: ubuntu-latest
+    name: build & test (animaker module, ${{ matrix.os }})
+    # Windows is the editor's target platform; Linux is kept building and
+    # passing too.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,9 +46,19 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: animaker/go.sum
 
+      # Windows runners already have a MinGW gcc on PATH for cgo.
       - name: Install Fyne build dependencies
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+
+      - name: Vet
+        working-directory: animaker
+        run: go vet ./...
 
       - name: Build
         working-directory: animaker
         run: go build ./...
+
+      - name: Test
+        working-directory: animaker
+        run: go test ./... -v

@@ -438,6 +438,54 @@ feedback after using the previous version:
       panel, which edits/creates the keyframe at the playhead like the
       other fields.
 
+23. **Full review fixes** (2026-10-02; issues timtwalsh/Game#10-#24,
+    decisions in `docs/ANIMAKER_REVIEW_QUESTIONS.md`).
+    - **Undo** (`undo.go`): snapshots are taken *before* each change;
+      `Undo(current)`/`Redo(current)` swap the live state with the top of
+      the other stack, and the live track is never shared with the
+      history (it was: one Ctrl+Z undid two changes, and edits after an
+      undo rewrote the redo state). Typed fields record one step per
+      focus burst (`selectAllEntry.startEdit`); buttons and pickers one
+      per change. Only the track is undoable - sheet import/removal and
+      preview overrides aren't, by decision.
+    - **Unsaved changes**: close (`SetCloseIntercept`), New and Open go
+      through `app.confirmDiscard` (Save / Don't Save / Cancel); the
+      title shows `*` while `Project.Dirty`.
+    - **Open** goes through `Project.OpenTrack`: nested `.anif`s are
+      re-read every time, and previews, undo, selection and playback
+      reset. Imported sheets stay loaded. New Track keeps Loop/Speed.
+    - **Scrubbing** (`Project.Scrub`) drops the keyframe selection so
+      the Selected Keyframe fields edit what the canvas shows; seeks that
+      follow a keyframe use `Seek` and keep it.
+    - **Props**: `Project.RemoveProp` refuses while a part is governed by
+      the prop or passes it through (`PropUsers`, `PropInUseError`).
+    - **Nested bindings** moved to the part's section as pick-lists, one
+      row per prop the nested track declares (Default / From parent prop
+      / Fixed; `buildNestedBindings`). Fixed values count as sheet or
+      `.anif` references (`ReferencedSheetNames`, `SheetUsers`,
+      `ReferencedAnimPaths`) and fixed `.anif` values are saved relative.
+    - **Add Part** filters props by kind and validates the name
+      (`ValidatePartName`, shared with Rename) and the result
+      (`CheckNewPart`). **Import Sprite Sheet** prefills from an existing
+      `.sprsh` (`file.ReadSheetSettings`), validates numbers, refuses a
+      cell larger than the image, and confirms before replacing a saved
+      template or a loaded sheet (`app.importReplaces`).
+    - **Files**: `.sprsh` image paths use forward slashes; `LoadTrack`
+      sorts keyframes (one per time); saves are atomic
+      (`writeFileAtomic`). `TrackMetadata` lost its never-saved
+      timestamps.
+    - **Draw order**: nested sprites sort by their Z at each nesting
+      level (`FlatSprite.zPath`), not parent Z + child Z/1000.
+    - **Performance**: the canvas measures parts once per redraw
+      (`partExtents`) and reuses `canvas.Image` objects per cell across
+      frames (`canvasRenderer.cellImage`); the timeline reuses ruler
+      labels. Fresh objects each frame had meant a GPU texture per sprite
+      per frame (Fyne caches textures per object for a minute).
+    - `Keyframe.ID` is now **`Keyframe.Index`**: a position, renumbered
+      on every sort, never saved - not an identity.
+    - **`animaker lint <glob>...`** (`pkg/lint`) checks a character's
+      tracks agree on their props; see the spec's Props section.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -478,7 +526,14 @@ feedback after using the previous version:
     saved), selection state, and `ResolveActiveSheetName`/
     `ResolveActiveSheet` (the prop → sheet resolution the whole
     customization system hangs off).
-  - `deepcopy.go`, `undo.go` — full-track-snapshot undo/redo.
+  - `deepcopy.go`, `undo.go` — full-track-snapshot undo/redo; snapshots
+    are taken before each change and the live track is never shared with
+    the history (entry 23).
+  - `nested.go` — nested animations: `NestedAnim`, `FlattenNested` /
+    `NestedExtent`, prop bindings (`childProps`) and direction modes.
+  - `sheet_remove.go` — `SheetUsers`/`RemoveSheet` and
+    `PropUsers`/`RemoveProp`, each refusing while something still uses
+    what's being removed.
 - `pkg/ui/` — Fyne widgets:
   - `timeline.go` — `scrubArea` (unexported): a custom-drawn ruler plus
     one row per Part, keyframes as markers positioned by `TimeMs`. Click
@@ -504,10 +559,10 @@ feedback after using the previous version:
     keeps scrubbing from resizing the canvas, and the quantization keeps
     a drag from doing so continuously; either would shift the origin out
     from under the cursor. Implements `Tappable` (click a part
-    to select it, `OnPartTapped`) and `Draggable` (drag an *already
-    placed* part to move an *existing* keyframe at the exact current
-    time — `OnPartDragStart/Dragged/DragEnd` — deliberately does **not**
-    create a keyframe implicitly; use "New Keyframe" first). Both share
+    to select it, `OnPartTapped`) and `Draggable` (drag the *selected*
+    part to move it, `OnPartDragStart/Dragged/DragEnd`; the drag keys the
+    part at the playhead if it has no keyframe there, via
+    `editor.EnsureKeyframe`). Both share
     `resolvedDraws()`/`hitTest()` so drawing and hit-testing can never
     disagree about where a part actually is. `LocalToAnimXY` converts a
     canvas-local point into the animation's own X/Y space (now a direct
@@ -516,9 +571,8 @@ feedback after using the previous version:
     **Rotation is stored and saved but not visually applied here** — Fyne
     has no simple rotated-image primitive, and the actual consumer of
     rotation is a future game-side (raylib) renderer, not this preview.
-    Nested-animation parts draw as a labeled placeholder box, not a
-    recursively-rendered sub-animation — see [Known gaps](#known-gaps-not-bugs)
-    below.
+    Nested-animation parts draw their animation live (entry 20); only
+    one whose animation isn't loaded draws as a labelled placeholder box.
   - `sheetgrid.go` — `SheetGridWidget`: renders every cell of a
     `SpriteSheetTemplate` in its real grid layout and implements
     `fyne.Draggable` to report which cell a drag started on plus the
@@ -531,15 +585,13 @@ feedback after using the previous version:
   - `properties.go` — **as of 2026-09-19, builds two separate panels**,
     not one (see [Why this shape](#why-this-shape) for the GraalShop
     reference this layout is borrowed from):
-    - `BuildPalette()` — the **left column**: just the selected part's
-      `SheetGridWidget` (its "Sprite Book" equivalent), scoped to
-      whichever part is selected rather than showing every loaded sheet
-      at once, since a dropped tile needs an unambiguous target part.
-      A header label names the part and its resolved sheet, and carries
-      the empty-state guidance ("Import a sprite sheet to begin" /
-      "Select a part to show its tiles" / "<part>: <sheet> (not
-      loaded)") — the palette being blank is the editor's most common
-      confusing state, so it must always say *why* it's blank.
+    - `BuildPalette()` — the **left column**: a sheet picker
+      (`Project.PaletteSheet`, with a Remove button) over that sheet's
+      `SheetGridWidget` (its "Sprite Book" equivalent). It doesn't depend
+      on the selection - a drop with nothing selected makes a new part -
+      but follows a selected part to its sheet. A label carries the grid
+      size or the empty-state guidance, since a blank palette is the
+      editor's most common confusing state.
     - `Build(directionBar)` — the **right column**: takes the direction
       bar (built in `app.go`, embedded here as a fixed header via
       `container.NewBorder` rather than its own separate top strip) +
@@ -555,7 +607,8 @@ feedback after using the previous version:
       selected keyframe's numeric transform fields *plus* a nudge D-pad
       (X/Y ±1, Z forward/back, rotation ±5° — `buildNudgeControls`,
       also a GraalShop borrow) for fine-tuning without retyping numbers,
-      a nested-bindings editor when relevant, and the props schema
+      the nested part's Prop / Animation / Direction / Bindings pickers
+      (in the part's section, entry 23), and the props schema
       (with its own **Add Prop** button) / preview-override sections.
       Every section here is its own pane in a tree of nested
       `container.NewVSplit`s (Fyne splits only take two children each),
@@ -571,27 +624,30 @@ feedback after using the previous version:
     (removed 2026-09-18) — Add Direction/Prop/Part are buttons in the
     panels that actually need them instead of a separate menu.
 - `pkg/file/` — persistence: `toml.go` (`SaveTrack`/`LoadTrack` for
-  `.anif`, `SaveSheetTemplate`/`LoadSheetTemplate` for `.sprsh`),
-  `image.go` (unchanged — generic image loading/cropping). The `.anif`
+  `.anif`, `SaveSheetTemplate`/`LoadSheetTemplate` for `.sprsh`, both
+  saved atomically), `sheets.go` (finding a track's sheets on open),
+  `nested.go` (loading nested `.anif`s), `image.go` (image loading). The `.anif`
   layout mirrors the model: `[[parts]]` once at track level carrying an
   `id`, then `[[directions.N.keyframes]]` entries each naming a
   `part_id`. `LoadTrack` rejects a keyframe whose `part_id` names no
   part, and rejects duplicate part ids, rather than dropping them
   silently. Keyframes are written in track-part order so saves are
-  stable rather than reordering with Go's map iteration.
+  stable rather than reordering with Go's map iteration, and sorted by
+  time on load.
+- `pkg/lint/` — `animaker lint <glob>...` (dispatched from `main.go`
+  before the GUI starts): checks a family of tracks agree on their props
+  and that nested bindings name real props.
+- `pkg/applog/` — per-session log files and crash reporting.
 
 ## Known gaps (not bugs)
 
 Deliberate scope cuts, not oversights:
 
-- **Nested-animation parts don't actually play their nested `.anif`** in
-  the canvas preview — they render as a placeholder box. The data model
-  (`Part.NestedAniPath`, `Part.NestedBindings`) is fully implemented and
-  saved/loaded correctly; only the recursive-load-and-render step for
-  the *preview* is missing.
-- **Rotation isn't visually applied** in the canvas for the same reason
-  (Fyne limitation) — see above. It's captured in every keyframe and
-  round-trips through save/load correctly.
+- **Rotation isn't visually applied** in the canvas (Fyne has no simple
+  rotated-image primitive) — see `canvas.go` above. It's captured in
+  every keyframe and round-trips through save/load correctly. (Nested
+  animations, once listed here too, have played live in the canvas since
+  2026-10-01.)
 - **No ghost/preview image follows the cursor during a drag** from the
   sheet grid to the canvas — the cell is picked up at drag-start and
   placed at drag-end with no visual feedback in between.
@@ -609,10 +665,12 @@ Deliberate scope cuts, not oversights:
   isn't saved with the track. Retiming has **no snapping**, so a dragged
   marker lands on whatever ms the cursor maps to; zooming in is the way
   to place one precisely.
-- The two items `docs/ANI_MAKER_SPEC.md`'s own "Open questions" section
-  flags (how one prop fans out to multiple physical sheets; the sword
-  "bent state" mechanism) are exactly as unresolved in code as in that
-  doc — nothing here should be read as having quietly decided them.
+- `docs/ANI_MAKER_SPEC.md`'s "Open questions" (how one prop fans out to
+  multiple physical sheets; the sword "bent state"; hit-spark events)
+  now carry the owner's answers there: separate parts get separate
+  sheets, a damaged weapon is its own animation, and a hit spark would
+  be the engine spawning an `.anif`. None needs an editor mechanism, and
+  nothing in code depends on them.
 
 **Fixed during the same-day UI rework, not just a scope note:** the
 original numeric-entry properties panel crashed on startup with any
@@ -695,9 +753,21 @@ ones from the interpolated pose. `pkg/ui/timeline_test.go` — tick and
 label spacing at every zoom (labels always on ticks), zoom clamping, the
 anchor keeping the time under the cursor fixed, and `timeForX`/`xForTime`
 round-tripping at every zoom. `pkg/ui/properties_test.go` —
-`sheetPickerOptions`. The rest
-of `pkg/ui` and all of `pkg/app` have no automated tests, being GUI wiring
-verified by manual launch. Note that launching the binary and confirming
+`sheetPickerOptions`.
+Added with the 2026-10-02 review fixes (entry 23):
+`pkg/editor/undo_test.go` (undo/redo stepping, no history aliasing,
+`OpenTrack` resetting the session), `prop_remove_test.go` (prop and
+binding-value use), `partname_test.go` (`CheckNewPart`),
+`pkg/ui/properties_undo_test.go` (one undo per typing burst, nudges,
+fixed sheet), `nested_bindings_ui_test.go`, `canvas_render_test.go`
+(sprites drawn where they've moved, via Fyne's software renderer),
+`canvas_bench_test.go` (`BenchmarkCanvasFrame`), `pkg/file`
+`binding_path_test.go` / `robustness_test.go`, `pkg/lint/lint_test.go`,
+and `pkg/app` (`unsaved_test.go`, `import_test.go`) using Fyne's test
+driver. `pkg/applog` tests crash capture in a child process; the
+fatal-error message line is only asserted on Windows. CI runs all of
+these on `windows-latest` and `ubuntu-latest`. The rest of `pkg/ui` and
+`pkg/app` is GUI wiring verified by manual launch. Note that launching the binary and confirming
 it stays responsive is a real part of the check here, not a formality: a
 `Select.ClearSelected()` recursion once shipped as a startup
 stack-overflow that `go test` could not have caught.

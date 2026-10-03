@@ -19,6 +19,12 @@ func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
 	nameEntry := newEntry()
 	nameEntry.SetText("untitled")
 	nameEntry.SetPlaceHolder("human_walk")
+	nameEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("the track needs a name")
+		}
+		return nil
+	}
 
 	form := dialog.NewForm(
 		"New Track",
@@ -28,7 +34,7 @@ func ShowNewTrackDialog(win fyne.Window, onCreate func(name string)) {
 		},
 		func(confirmed bool) {
 			if confirmed && onCreate != nil {
-				onCreate(nameEntry.Text)
+				onCreate(strings.TrimSpace(nameEntry.Text))
 			}
 		},
 		win,
@@ -51,15 +57,23 @@ type SheetImport struct {
 // ShowImportSheetDialog displays a dialog for importing a sprite sheet
 // template: pick a file, then name the sheet, define its fixed cell size
 // and one pivot for the whole sheet, and say whether it's swappable art
-// for a prop.
-func ShowImportSheetDialog(win fyne.Window, onImport func(SheetImport)) {
+// for a prop. prefill returns the settings to start from for an image
+// that already has a template (ok false for a new one), so re-importing a
+// sheet doesn't mean retyping its grid.
+func ShowImportSheetDialog(win fyne.Window, prefill func(imagePath string) (SheetImport, bool), onImport func(SheetImport)) {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
 		}
 		filePath := reader.URI().Path()
 		reader.Close()
-		showSheetGridDialog(win, filePath, onImport)
+		start := SheetImport{CellW: 32, CellH: 32, PivotX: 16, PivotY: 16}
+		if prefill != nil {
+			if p, ok := prefill(filePath); ok {
+				start = p
+			}
+		}
+		showSheetGridDialog(win, filePath, start, onImport)
 	}, win)
 
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
@@ -67,9 +81,12 @@ func ShowImportSheetDialog(win fyne.Window, onImport func(SheetImport)) {
 	fd.Show()
 }
 
-func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetImport)) {
+func showSheetGridDialog(win fyne.Window, filePath string, start SheetImport, onImport func(SheetImport)) {
 	baseName := filepath.Base(filePath)
 	defaultName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	if start.Name != "" {
+		defaultName = start.Name
+	}
 
 	// Required: the form's Import button stays disabled while it's blank.
 	nameEntry := newEntry()
@@ -81,14 +98,12 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetIm
 		return nil
 	}
 
-	cellWEntry := newEntry()
-	cellWEntry.SetText("32")
-	cellHEntry := newEntry()
-	cellHEntry.SetText("32")
-	pivotXEntry := newEntry()
-	pivotXEntry.SetText("16")
-	pivotYEntry := newEntry()
-	pivotYEntry.SetText("16")
+	// Validated, so Import stays disabled on a typo rather than quietly
+	// slicing with a stand-in value.
+	cellWEntry := validatedEntry(strconv.Itoa(start.CellW), positiveInt)
+	cellHEntry := validatedEntry(strconv.Itoa(start.CellH), positiveInt)
+	pivotXEntry := validatedEntry(formatFloat(start.PivotX), number)
+	pivotYEntry := validatedEntry(formatFloat(start.PivotY), number)
 
 	// The prop name defaults to the sheet name, so the common case (this
 	// sheet is the first art for a new slot) is one tick. Naming an
@@ -130,17 +145,11 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetIm
 				return
 			}
 			imp := SheetImport{FilePath: filePath, Name: strings.TrimSpace(nameEntry.Text)}
-			imp.CellW, _ = strconv.Atoi(cellWEntry.Text)
-			imp.CellH, _ = strconv.Atoi(cellHEntry.Text)
-			pivotX, _ := strconv.ParseFloat(pivotXEntry.Text, 32)
-			pivotY, _ := strconv.ParseFloat(pivotYEntry.Text, 32)
+			imp.CellW, _ = strconv.Atoi(strings.TrimSpace(cellWEntry.Text))
+			imp.CellH, _ = strconv.Atoi(strings.TrimSpace(cellHEntry.Text))
+			pivotX, _ := strconv.ParseFloat(strings.TrimSpace(pivotXEntry.Text), 32)
+			pivotY, _ := strconv.ParseFloat(strings.TrimSpace(pivotYEntry.Text), 32)
 			imp.PivotX, imp.PivotY = float32(pivotX), float32(pivotY)
-			if imp.CellW <= 0 {
-				imp.CellW = 32
-			}
-			if imp.CellH <= 0 {
-				imp.CellH = 32
-			}
 			if propCheck.Checked {
 				imp.PropName = strings.TrimSpace(propEntry.Text)
 				if imp.PropName == "" {
@@ -155,12 +164,47 @@ func showSheetGridDialog(win fyne.Window, filePath string, onImport func(SheetIm
 	form.Show()
 }
 
+func validatedEntry(text string, validate func(string) error) *selectAllEntry {
+	e := newEntry()
+	e.SetText(text)
+	e.Validator = validate
+	return e
+}
+
+func positiveInt(s string) error {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err != nil || n <= 0 {
+		return errors.New("a whole number above 0")
+	}
+	return nil
+}
+
+func number(s string) error {
+	if _, err := strconv.ParseFloat(strings.TrimSpace(s), 32); err != nil {
+		return errors.New("a number")
+	}
+	return nil
+}
+
+func formatFloat(f float32) string { return strconv.FormatFloat(float64(f), 'f', -1, 32) }
+
 // ShowAddDirectionDialog displays a dialog for adding a new direction.
-// Directions are keyed by int (0=up, 1=right, 2=down, 3=left by the game's
-// own convention, but any int is accepted).
-func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
+// Directions are keyed by a whole number 0 or above (0=up, 1=right, 2=down,
+// 3=left by the game's own convention; more for diagonals or extra
+// facings). exists reports a key the track already has; Add stays
+// disabled for that, or for anything that isn't such a number.
+func ShowAddDirectionDialog(win fyne.Window, exists func(key int) bool, onCreate func(key int)) {
 	keyEntry := newEntry()
 	keyEntry.SetPlaceHolder("0=up, 1=right, 2=down, 3=left, ...")
+	keyEntry.Validator = func(s string) error {
+		k, err := strconv.Atoi(strings.TrimSpace(s))
+		switch {
+		case err != nil || k < 0:
+			return errors.New("a whole number, 0 or above")
+		case exists != nil && exists(k):
+			return fmt.Errorf("direction %d already exists", k)
+		}
+		return nil
+	}
 
 	form := dialog.NewForm(
 		"Add Direction",
@@ -172,7 +216,7 @@ func ShowAddDirectionDialog(win fyne.Window, onCreate func(key int)) {
 			if !confirmed || onCreate == nil {
 				return
 			}
-			key, err := strconv.Atoi(keyEntry.Text)
+			key, err := strconv.Atoi(strings.TrimSpace(keyEntry.Text))
 			if err != nil {
 				return
 			}
@@ -230,35 +274,56 @@ func ShowAddPropDialog(win fyne.Window, labels, values []string, onCreate func(n
 	form.Show()
 }
 
-// ShowAddPartDialog displays a dialog for adding a part to the active
-// direction. propNames lists the track's declared props, for the
-// governing-prop dropdown; sheetNames lists the currently loaded sheets, so
-// the fixed sheet is picked from what exists rather than typed from memory
-// (a typo there produces a part that silently draws nothing).
-func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animPaths []string, onCreate func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string)) {
+// AddPartChoices is what the Add Part dialog offers: the track's props by
+// kind (a sheet part can only be governed by a sheet prop, a nested part
+// only by an animation prop), the loaded sheets, and the loaded animations
+// (labels and paths in parallel).
+type AddPartChoices struct {
+	SheetProps, AnimProps []string
+	Sheets                []string
+	AnimLabels, AnimPaths []string
+}
+
+// ShowAddPartDialog displays a dialog for adding a part to the rig.
+// Everything but the name is a pick-list of what exists, so a typo can't
+// produce a part that silently draws nothing. validateName vets the name
+// as it's typed (Add stays disabled until it passes); onCreate gets the
+// new part and may refuse it, which reopens the dialog with the error.
+func ShowAddPartDialog(win fyne.Window, c AddPartChoices, validateName func(string) error, onCreate func(*editor.Part) error) {
 	nameEntry := newEntry()
 	nameEntry.SetPlaceHolder("Body, Hair, Arm_Left, ...")
+	nameEntry.Validator = validateName
 
-	kindSelect := widget.NewSelect([]string{"sheet", "nested_ani"}, nil)
-	kindSelect.SetSelected("sheet")
-
-	propOptions := append([]string{"(none - fixed sheet)"}, propNames...)
-	propSelect := widget.NewSelect(propOptions, nil)
-	propSelect.SetSelected(propOptions[0])
-
-	fixedSheetSelect := widget.NewSelect(sheetNames, nil)
+	const noProp = "(none)"
+	propSelect := widget.NewSelect(nil, nil)
+	fixedSheetSelect := widget.NewSelect(c.Sheets, nil)
 	fixedSheetSelect.PlaceHolder = "(pick a loaded sheet)"
-	if len(sheetNames) == 1 {
-		fixedSheetSelect.SetSelected(sheetNames[0])
+	if len(c.Sheets) == 1 {
+		fixedSheetSelect.SetSelected(c.Sheets[0])
 	}
-
 	// A pick-list of imported animations rather than a typed path, which
 	// was easy to get wrong and gave no hint which files were available.
-	nestedSelect := widget.NewSelect(animLabels, nil)
+	nestedSelect := widget.NewSelect(c.AnimLabels, nil)
 	nestedSelect.PlaceHolder = "(use Import Animation first)"
-	if len(animLabels) == 1 {
-		nestedSelect.SetSelected(animLabels[0])
+	if len(c.AnimLabels) == 1 {
+		nestedSelect.SetSelected(c.AnimLabels[0])
 	}
+
+	// The prop list and which art picker applies follow the kind.
+	kindSelect := widget.NewSelect([]string{"sheet", "nested_ani"}, func(kind string) {
+		props := c.SheetProps
+		if kind == "nested_ani" {
+			props = c.AnimProps
+			fixedSheetSelect.Disable()
+			nestedSelect.Enable()
+		} else {
+			fixedSheetSelect.Enable()
+			nestedSelect.Disable()
+		}
+		propSelect.Options = append([]string{noProp}, props...)
+		propSelect.SetSelected(noProp)
+	})
+	kindSelect.SetSelected("sheet")
 
 	items := []*widget.FormItem{
 		{Text: "Name", Widget: nameEntry},
@@ -267,7 +332,7 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animP
 		{Text: "Fixed Sheet", Widget: fixedSheetSelect},
 		{Text: "Nested Animation", Widget: nestedSelect},
 	}
-	if len(sheetNames) == 0 {
+	if len(c.Sheets) == 0 {
 		items = append(items, &widget.FormItem{
 			Text:   "",
 			Widget: widget.NewLabel("No sheets imported yet — use Import Sprite Sheet first."),
@@ -279,18 +344,23 @@ func ShowAddPartDialog(win fyne.Window, propNames, sheetNames, animLabels, animP
 		"Add", "Cancel",
 		items,
 		func(confirmed bool) {
-			if !confirmed || onCreate == nil || nameEntry.Text == "" {
+			if !confirmed || onCreate == nil {
 				return
 			}
-			kind := editor.PartKindSheet
+			var part *editor.Part
 			if kindSelect.Selected == "nested_ani" {
-				kind = editor.PartKindNestedAni
+				part = editor.NewNestedAniPart(nameEntry.Text, valueFor(c.AnimLabels, c.AnimPaths, nestedSelect.Selected))
+			} else {
+				part = editor.NewSheetPart(nameEntry.Text, "", fixedSheetSelect.Selected)
 			}
-			governingProp := propSelect.Selected
-			if governingProp == propOptions[0] {
-				governingProp = ""
+			if propSelect.Selected != noProp {
+				part.GoverningProp = propSelect.Selected
 			}
-			onCreate(nameEntry.Text, kind, governingProp, fixedSheetSelect.Selected, valueFor(animLabels, animPaths, nestedSelect.Selected))
+			if err := onCreate(part); err != nil {
+				errDlg := dialog.NewError(err, win)
+				errDlg.SetOnClosed(func() { ShowAddPartDialog(win, c, validateName, onCreate) })
+				errDlg.Show()
+			}
 		},
 		win,
 	)

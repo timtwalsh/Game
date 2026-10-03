@@ -411,6 +411,11 @@ func (r *partLabelRenderer) Destroy()                     {}
 type scrubAreaRenderer struct {
 	widget  *scrubArea
 	objects []fyne.CanvasObject
+
+	// labels keeps each ruler label's text object across redraws (the
+	// timeline redraws every playback frame), so Fyne isn't handed - and
+	// left caching a texture for - a new one per label per frame.
+	labels map[uint32]*canvas.Text
 }
 
 func (r *scrubAreaRenderer) Layout(size fyne.Size) {}
@@ -454,8 +459,7 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 		top := float32(timelineRulerHeight / 2)
 		if t%labelStep == 0 {
 			top = 0
-			lbl := canvas.NewText(formatTimelineMs(t), ColorSectionHeader)
-			lbl.TextSize = 9
+			lbl := r.label(t)
 			lbl.Move(fyne.NewPos(x+2, 2))
 			objs = append(objs, lbl)
 		}
@@ -510,6 +514,20 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 	return objs
 }
 
+// label returns the ruler label for time t, reused from earlier redraws.
+func (r *scrubAreaRenderer) label(t uint32) *canvas.Text {
+	if r.labels == nil {
+		r.labels = map[uint32]*canvas.Text{}
+	}
+	if l := r.labels[t]; l != nil {
+		return l
+	}
+	l := canvas.NewText(formatTimelineMs(t), ColorSectionHeader)
+	l.TextSize = 9
+	r.labels[t] = l
+	return l
+}
+
 // formatTimelineMs labels a ruler tick: whole seconds as "2s" once that's
 // the natural unit, everything else in ms.
 func formatTimelineMs(t uint32) string {
@@ -528,6 +546,8 @@ type TimelineWidget struct {
 	scroll    *container.Scroll
 	info      *widget.Label
 	zoomLabel *widget.Label
+	loopCheck *widget.Check
+	speed     *widget.Select
 
 	OnKeyframeSelected    func(partIdx, kfIdx int)
 	OnKeyframeDeleted     func(partIdx, kfIdx int)
@@ -548,9 +568,28 @@ func NewTimelineWidget(project *editor.Project) *TimelineWidget {
 	return &TimelineWidget{project: project}
 }
 
+// SetProject switches to another project and shows its loop and speed
+// settings, which otherwise kept showing the previous project's.
 func (tw *TimelineWidget) SetProject(project *editor.Project) {
 	tw.project = project
 	tw.scrub.project = project
+	if tw.loopCheck != nil {
+		tw.loopCheck.SetChecked(project.Playback.LoopEnabled)
+	}
+	if tw.speed != nil {
+		tw.speed.SetSelected(speedLabel(project.Playback.SpeedFactor))
+	}
+}
+
+var speedFactors = map[string]float32{"50%": 0.5, "100%": 1.0, "200%": 2.0}
+
+func speedLabel(f float32) string {
+	for l, v := range speedFactors {
+		if v == f {
+			return l
+		}
+	}
+	return "100%"
 }
 
 func (tw *TimelineWidget) Build() fyne.CanvasObject {
@@ -641,16 +680,12 @@ func (tw *TimelineWidget) Build() fyne.CanvasObject {
 	loopCheck.Checked = tw.project.Playback.LoopEnabled
 
 	speedSelect := widget.NewSelect([]string{"50%", "100%", "200%"}, func(v string) {
-		switch v {
-		case "50%":
-			tw.project.Playback.SpeedFactor = 0.5
-		case "100%":
-			tw.project.Playback.SpeedFactor = 1.0
-		case "200%":
-			tw.project.Playback.SpeedFactor = 2.0
+		if f, ok := speedFactors[v]; ok {
+			tw.project.Playback.SpeedFactor = f
 		}
 	})
-	speedSelect.SetSelected("100%")
+	speedSelect.SetSelected(speedLabel(tw.project.Playback.SpeedFactor))
+	tw.loopCheck, tw.speed = loopCheck, speedSelect
 
 	tw.zoomLabel = widget.NewLabel("")
 	zoomOut := widget.NewButton("-", func() { tw.zoomAtPlayhead(tw.scrub.msPerPixel * timelineZoomStep) })

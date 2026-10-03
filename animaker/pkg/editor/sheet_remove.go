@@ -6,13 +6,20 @@ import (
 )
 
 // SheetUsers describes everything in the track that draws from the named
-// sheet: parts with it as their fixed sheet, and props with it as their
-// default. Empty means nothing would lose its art if the sheet went away.
+// sheet: parts with it as their fixed sheet, nested parts pinning one of
+// their animation's props to it, and props with it as their default.
+// Empty means nothing would lose its art if the sheet went away.
 func (t *Track) SheetUsers(name string) []string {
 	var users []string
 	for _, p := range t.Parts {
 		if p.Kind == PartKindSheet && p.FixedSheet == name {
 			users = append(users, fmt.Sprintf("part %q", p.Name))
+		}
+		for _, v := range p.staticBindingValues() {
+			if v == name {
+				users = append(users, fmt.Sprintf("part %q (a fixed binding)", p.Name))
+				break
+			}
 		}
 	}
 	for _, pd := range t.Props {
@@ -60,6 +67,61 @@ func (p *Project) RemoveSheet(name string) error {
 			delete(p.PreviewProps, prop)
 		}
 	}
+	p.Dirty = true
+	return nil
+}
+
+// PropUsers describes everything in the track that depends on the named
+// prop: parts it governs, and nested parts passing it through to their
+// animation. Empty means removing the prop changes nothing that draws.
+func (t *Track) PropUsers(name string) []string {
+	var users []string
+	for _, p := range t.Parts {
+		if p.GoverningProp == name {
+			users = append(users, fmt.Sprintf("part %q", p.Name))
+			continue
+		}
+		for child, b := range p.NestedBindings {
+			if b.PassthroughFrom == name {
+				users = append(users, fmt.Sprintf("part %q (passes it to %q)", p.Name, child))
+				break
+			}
+		}
+	}
+	return users
+}
+
+// PropInUseError is RemoveProp's refusal while something still depends on
+// the prop.
+type PropInUseError struct {
+	Prop  string
+	Users []string
+}
+
+func (e *PropInUseError) Error() string {
+	return fmt.Sprintf("prop %q is still used by %s. Unlink those parts from it, or delete them, "+
+		"then remove it.", e.Prop, strings.Join(e.Users, ", "))
+}
+
+// RemoveProp removes the prop at idx from the track, recording an undo
+// step. Like RemoveSheet it refuses (PropInUseError) while anything uses
+// the prop: removing it then would leave those parts linked to a prop that
+// no longer exists, silently drawing nothing. Its preview override goes
+// with it, so a later prop of the same name doesn't inherit it.
+func (p *Project) RemoveProp(idx int) error {
+	props := p.CurrentTrack.Props
+	if idx < 0 || idx >= len(props) {
+		return fmt.Errorf("invalid prop index: %d", idx)
+	}
+	name := props[idx].Name
+	if users := p.CurrentTrack.PropUsers(name); len(users) > 0 {
+		return &PropInUseError{Prop: name, Users: users}
+	}
+	p.RecordUndo()
+	if err := RemoveProp(p.CurrentTrack, idx); err != nil {
+		return err
+	}
+	delete(p.PreviewProps, name)
 	p.Dirty = true
 	return nil
 }

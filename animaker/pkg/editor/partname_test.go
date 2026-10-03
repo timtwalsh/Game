@@ -89,3 +89,39 @@ func TestRenamePart(t *testing.T) {
 		t.Errorf("rename to its own name: %v", err)
 	}
 }
+
+func TestCheckNewPart(t *testing.T) {
+	tr := NewTrack("t")
+	AddProp(tr, "hair", "hair_a")
+	AddProp(tr, "held", "torch.anif")
+	AddPart(tr, NewSheetPart("Body", "", "body"))
+
+	gov := func(p *Part, prop string) *Part { p.GoverningProp = prop; return p }
+	for _, tc := range []struct {
+		name string
+		part *Part
+		ok   bool
+	}{
+		{"sheet with fixed sheet", NewSheetPart(" Head ", "", "head"), true},
+		{"sheet with sheet prop", NewSheetPart("Hair", "hair", ""), true},
+		{"sheet with nothing", NewSheetPart("Hair", "", ""), false},
+		{"sheet with anim prop", NewSheetPart("Hair", "held", ""), false},
+		{"nested with path", NewNestedAniPart("Torch", "torch.anif"), true},
+		{"nested with anim prop", gov(NewNestedAniPart("Torch", ""), "held"), true},
+		{"nested with sheet prop", gov(NewNestedAniPart("Torch", "torch.anif"), "hair"), false},
+		{"nested with nothing", NewNestedAniPart("Torch", ""), false},
+		{"taken name", NewSheetPart("Body", "", "body"), false},
+		{"blank name", NewSheetPart("  ", "", "body"), false},
+		{"unknown prop", NewSheetPart("X", "nope", ""), false},
+	} {
+		err := CheckNewPart(tr, tc.part)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+	p := NewSheetPart(" Head ", "", "head")
+	CheckNewPart(tr, p)
+	if p.Name != "Head" {
+		t.Errorf("name not trimmed: %q", p.Name)
+	}
+}

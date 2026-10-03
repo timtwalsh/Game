@@ -7,6 +7,7 @@ import (
 	"animaker/pkg/ui"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
@@ -108,13 +110,20 @@ func (a *Application) Run() {
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
 		a.onZoom,
+		a.showAbout,
 	)
 	a.Window.SetMainMenu(menu)
 
 	a.registerShortcuts()
 
 	a.Window.SetContent(mainLayout)
+	// Closing with unsaved changes asks first. Window.Close, which the
+	// prompt calls once it's answered, doesn't come back through here.
+	a.Window.SetCloseIntercept(func() {
+		a.confirmDiscard(a.Window.Close)
+	})
 	a.Window.SetOnClosed(a.onClose)
+	a.updateTitle()
 
 	go a.playbackLoop()
 	a.reportPreviousCrash()
@@ -266,7 +275,7 @@ func (a *Application) wireCallbacks() {
 		kf, _ := editor.EnsureKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
 		a.dragKf = kf
 		a.dragOrigX, a.dragOrigY = kf.X, kf.Y
-		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Selection.KeyframeIndex = kf.Index
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
@@ -285,7 +294,7 @@ func (a *Application) wireCallbacks() {
 
 	// -- Timeline --
 	a.timeline.OnScrub = func(ms uint32) {
-		a.Project.Seek(ms)
+		a.Project.Scrub(ms)
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeSelected = func(partIdx, kfIdx int) {
@@ -345,7 +354,7 @@ func (a *Application) wireCallbacks() {
 		}
 		a.Project.RecordUndo()
 		kf, _ := editor.EnsureKeyframe(dir, part.ID, a.Project.Playback.ElapsedMs)
-		sel.KeyframeIndex = kf.ID
+		sel.KeyframeIndex = kf.Index
 		a.Project.Dirty = true
 		a.refreshAll()
 	}
@@ -369,7 +378,7 @@ func (a *Application) wireCallbacks() {
 		if err != nil {
 			return
 		}
-		sel.KeyframeIndex = dup.ID
+		sel.KeyframeIndex = dup.Index
 		a.Project.Seek(dup.TimeMs)
 		a.Project.Dirty = true
 		a.refreshAll()
@@ -379,7 +388,7 @@ func (a *Application) wireCallbacks() {
 		a.Project.Playback.IsPlaying = false
 		a.Project.RecordUndo()
 		a.properties.SelectPart(partIdx)
-		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Selection.KeyframeIndex = kf.Index
 		a.refreshAll()
 	}
 	a.timeline.OnKeyframeRetimed = func(partIdx int, kf *editor.Keyframe, newTimeMs uint32) {
@@ -390,12 +399,12 @@ func (a *Application) wireCallbacks() {
 		// Refused if it would land exactly on another keyframe of this
 		// part; the marker just holds for that one mouse-move, and the
 		// next one carries it past.
-		if editor.MoveKeyframe(dir, part.ID, kf.ID, newTimeMs) != nil {
+		if editor.MoveKeyframe(dir, part.ID, kf.Index, newTimeMs) != nil {
 			return
 		}
 		// Moving can reorder the keyframes, so re-read the index, and keep
 		// the playhead on the keyframe so the canvas shows its pose.
-		a.Project.Selection.KeyframeIndex = kf.ID
+		a.Project.Selection.KeyframeIndex = kf.Index
 		a.Project.Seek(kf.TimeMs)
 		a.Project.Dirty = true
 		a.refreshAll()
@@ -415,6 +424,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnLoadPreviewSheet = a.onLoadPreviewSheet
 	a.properties.OnRemoveSheet = a.confirmRemoveSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
+	a.properties.OnError = a.showError
 	a.properties.OnPartDelete = a.confirmDeletePart
 	a.properties.OnKeyframeRetimed = func() { a.refreshAll() }
 	a.properties.OnKeyframeChanged = func() {
@@ -467,13 +477,14 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	}
 	x, y := a.canvasWidget.LocalToAnimXY(local)
 
-	a.Project.RecordUndo()
+	before := a.Project.TakeSnapshot()
 	partIdx, kf := a.Project.DropTile(sheetName, row, col, x, y)
 	if kf == nil {
-		return
+		return // nothing changed, so no undo step (it would also clear redo)
 	}
+	a.Project.UndoStack.Push(before)
 	a.properties.SelectPart(partIdx)
-	a.Project.Selection.KeyframeIndex = kf.ID
+	a.Project.Selection.KeyframeIndex = kf.Index
 	a.Project.Dirty = true
 	a.refreshAll()
 }
@@ -510,6 +521,10 @@ func (a *Application) registerShortcuts() {
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyZ, Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift}, func(_ fyne.Shortcut) {
 		a.onRedo()
 	})
+	// Ctrl+Y is redo by Windows convention, alongside Ctrl+Shift+Z.
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyY, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		a.onRedo()
+	})
 	// Esc deselects, so the next palette drop creates a new part instead
 	// of keying the selected one (see onTileDropped). Only reaches here
 	// when no text entry has focus, so it won't fight typing in a field.
@@ -523,19 +538,86 @@ func (a *Application) registerShortcuts() {
 
 // -- Menu handlers --
 
+// confirmDiscard runs then straight away when there are no unsaved changes;
+// otherwise it asks whether to save them first, discard them, or cancel
+// (in which case then never runs). Closing the window, New Track and Open
+// all go through it, so none of them can silently throw away work.
+func (a *Application) confirmDiscard(then func()) {
+	if !a.Project.Dirty {
+		then()
+		return
+	}
+	msg := widget.NewLabel(fmt.Sprintf("%q has unsaved changes. Save them first?",
+		a.Project.CurrentTrack.Metadata.Name))
+	msg.Wrapping = fyne.TextWrapWord
+	var d *dialog.CustomDialog
+	save := widget.NewButton("Save", func() {
+		d.Hide()
+		a.saveThen(then)
+	})
+	save.Importance = widget.HighImportance
+	discard := widget.NewButton("Don't Save", func() {
+		d.Hide()
+		then()
+	})
+	discard.Importance = widget.DangerImportance
+	cancel := widget.NewButton("Cancel", func() { d.Hide() })
+	d = dialog.NewCustomWithoutButtons("Unsaved Changes",
+		container.NewVBox(msg, container.NewHBox(layout.NewSpacer(), cancel, discard, save)), a.Window)
+	d.Resize(fyne.NewSize(440, 160))
+	d.Show()
+}
+
+// saveThen saves (asking where, for a track never saved) and runs then only
+// if the save went through - a cancelled Save As or a failed write leaves
+// the unsaved work where it is.
+func (a *Application) saveThen(then func()) {
+	if a.Project.SavePath != "" {
+		if a.saveToPath(a.Project.SavePath) {
+			then()
+		}
+		return
+	}
+	a.showSaveAs(then)
+}
+
+// updateTitle shows the track's name in the window title, with a leading
+// "*" while it has unsaved changes.
+func (a *Application) updateTitle() {
+	if a.Window == nil {
+		return
+	}
+	mark := ""
+	if a.Project.Dirty {
+		mark = "*"
+	}
+	a.Window.SetTitle("ANIFile Animation Maker — " + mark + a.Project.CurrentTrack.Metadata.Name)
+}
+
 func (a *Application) onNewTrack() {
+	a.confirmDiscard(a.newTrack)
+}
+
+func (a *Application) newTrack() {
 	ui.ShowNewTrackDialog(a.Window, func(name string) {
+		// Loop and speed are the artist's playback preferences, not part
+		// of a track, so they carry over to the new one.
+		prev := a.Project.Playback
 		a.Project = editor.NewProject(name)
+		a.Project.Playback.LoopEnabled, a.Project.Playback.SpeedFactor = prev.LoopEnabled, prev.SpeedFactor
 		a.canvasWidget.SetProject(a.Project)
 		a.timeline.SetProject(a.Project)
 		a.properties.SetProject(a.Project)
 		a.refreshDirectionSelect()
 		a.refreshAll()
-		a.Window.SetTitle("ANIFile Animation Maker — " + name)
 	})
 }
 
 func (a *Application) onOpenTrack() {
+	a.confirmDiscard(a.openTrack)
+}
+
+func (a *Application) openTrack() {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
@@ -553,7 +635,10 @@ func (a *Application) onOpenTrack() {
 		// them now - previously nothing did, and a reopened track drew
 		// nothing at all. Sheets already loaded this session are kept.
 		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
-		problems = append(problems, file.LoadNestedAnimsFor(track, a.Project.LoadedAnims)...)
+		// Nested animations are always re-read, never taken from what
+		// was loaded before, so an .anif edited since shows as it is now.
+		anims := map[string]*editor.NestedAnim{}
+		problems = append(problems, file.LoadNestedAnimsFor(track, anims)...)
 		for name, s := range sheets {
 			a.Project.LoadedSheets[name] = s
 		}
@@ -566,23 +651,14 @@ func (a *Application) onOpenTrack() {
 			}
 		}
 
-		a.Project.CurrentTrack = track
-		a.Project.SavePath = filePath
-		a.Project.Dirty = false
-		a.Project.UndoStack.Clear()
-		keys := track.SortedDirectionKeys()
-		if len(keys) > 0 {
-			a.Project.Playback.ActiveDirection = keys[0]
-		}
-		a.Project.Playback.ElapsedMs = 0
-		a.Project.Selection = &editor.Selection{PartIndex: -1, KeyframeIndex: -1}
+		a.Project.OpenTrack(track, filePath, anims)
+		missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
 
 		a.canvasWidget.SetProject(a.Project)
 		a.timeline.SetProject(a.Project)
 		a.properties.SetProject(a.Project)
 		a.refreshDirectionSelect()
 		a.refreshAll()
-		a.Window.SetTitle("ANIFile Animation Maker — " + track.Metadata.Name)
 		a.reportUnloadedSheets(missing, problems)
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
@@ -599,13 +675,20 @@ func (a *Application) onSaveTrack() {
 }
 
 func (a *Application) onSaveAsTrack() {
+	a.showSaveAs(func() {})
+}
+
+// showSaveAs asks where to save, saves there, and runs then if it saved.
+func (a *Application) showSaveAs(then func()) {
 	fd := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 		if err != nil || writer == nil {
 			return
 		}
 		filePath := writer.URI().Path()
 		writer.Close()
-		a.saveToPath(filePath)
+		if a.saveToPath(filePath) {
+			then()
+		}
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
 	fd.SetFileName(a.Project.CurrentTrack.Metadata.Name + ".anif")
@@ -626,15 +709,16 @@ func (a *Application) sheetRefs() []file.SheetRef {
 	return refs
 }
 
-func (a *Application) saveToPath(path string) {
-	a.Project.CurrentTrack.Metadata.UpdatedAt = time.Now()
+// saveToPath saves the track and reports whether it worked.
+func (a *Application) saveToPath(path string) bool {
 	if err := file.SaveTrack(a.Project.CurrentTrack, path, a.sheetRefs()); err != nil {
 		a.showError(fmt.Errorf("failed to save: %w", err))
-		return
+		return false
 	}
 	a.Project.SavePath = path
 	a.Project.Dirty = false
-	a.Window.SetTitle("ANIFile Animation Maker — " + a.Project.CurrentTrack.Metadata.Name)
+	a.updateTitle()
+	return true
 }
 
 // reportUnloadedSheets tells the artist which sheets a just-opened track
@@ -672,43 +756,106 @@ func (a *Application) reportUnloadedSheets(missing, problems []string) {
 // complaint when import only filled LoadedSheets and changed nothing on
 // screen.
 func (a *Application) onImportSpriteSheet() {
-	ui.ShowImportSheetDialog(a.Window, func(imp ui.SheetImport) {
+	ui.ShowImportSheetDialog(a.Window, existingSheetSettings, func(imp ui.SheetImport) {
 		img, err := file.LoadImage(imp.FilePath)
 		if err != nil {
 			a.showError(fmt.Errorf("failed to load image: %w", err))
 			return
 		}
-
 		tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
-		a.Project.LoadedSheets[imp.Name] = tmpl
-		a.Project.PaletteSheet = imp.Name
-
-		sprshPath := strings.TrimSuffix(imp.FilePath, filepath.Ext(imp.FilePath)) + ".sprsh"
-		if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
-			a.showError(fmt.Errorf("failed to save sheet template: %w", err))
-		} else {
-			tmpl.SprshPath = sprshPath
+		if tmpl.Cols() == 0 || tmpl.Rows() == 0 {
+			b := img.Bounds()
+			a.showError(fmt.Errorf("a %dx%d cell doesn't fit in this %dx%d image - check Cell Width and Cell Height",
+				imp.CellW, imp.CellH, b.Dx(), b.Dy()))
+			return
 		}
-
-		propNote := ""
-		if imp.PropName != "" {
-			if a.Project.CurrentTrack.FindProp(imp.PropName) == nil {
-				a.Project.RecordUndo()
-				editor.EnsureProp(a.Project.CurrentTrack, imp.PropName, imp.Name)
-				propNote = fmt.Sprintf("\n\nDeclared prop %q with this sheet as its default.", imp.PropName)
-			} else {
-				propNote = fmt.Sprintf("\n\nAdded as another option for prop %q - "+
-					"pick it under Preview Overrides to see it.", imp.PropName)
+		replaces := a.importReplaces(imp)
+		if len(replaces) == 0 {
+			a.importSheet(imp, tmpl)
+			return
+		}
+		msg := widget.NewLabel("This import replaces:\n\n- " + strings.Join(replaces, "\n- ") +
+			"\n\nParts drawing from the old sheet will be re-sliced with the new settings.")
+		msg.Wrapping = fyne.TextWrapWord
+		d := dialog.NewCustomConfirm("Replace Existing Sheet?", "Replace", "Cancel", msg, func(ok bool) {
+			if ok {
+				a.importSheet(imp, tmpl)
 			}
-		}
-
-		a.refreshAll()
-		dialog.ShowInformation("Import Complete",
-			fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.\n\n"+
-				"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.%s",
-				imp.Name, imp.CellW, imp.CellH, tmpl.Cols(), tmpl.Rows(), propNote),
-			a.Window)
+		}, a.Window)
+		d.Resize(fyne.NewSize(520, 280))
+		d.Show()
 	})
+}
+
+// existingSheetSettings prefills the import dialog from the .sprsh an image
+// already has, so re-importing it starts from its saved grid and pivot.
+func existingSheetSettings(imagePath string) (ui.SheetImport, bool) {
+	st, err := file.ReadSheetSettings(file.SprshPathFor(imagePath))
+	if err != nil {
+		return ui.SheetImport{}, false
+	}
+	return ui.SheetImport{Name: st.Name, CellW: st.CellW, CellH: st.CellH, PivotX: st.PivotX, PivotY: st.PivotY}, true
+}
+
+// importReplaces lists what importing imp would overwrite: the image's
+// existing .sprsh if the settings differ from it, and an already-loaded
+// sheet of the same name if it's a different image or grid. Empty means
+// the import changes nothing that exists.
+func (a *Application) importReplaces(imp ui.SheetImport) []string {
+	var out []string
+	sprsh := file.SprshPathFor(imp.FilePath)
+	if old, err := file.ReadSheetSettings(sprsh); err == nil {
+		now := file.SheetSettings{Name: imp.Name, CellW: imp.CellW, CellH: imp.CellH, PivotX: imp.PivotX, PivotY: imp.PivotY}
+		if old != now {
+			out = append(out, fmt.Sprintf("the saved template %s (%q, %dx%d cells, pivot %v,%v)",
+				filepath.Base(sprsh), old.Name, old.CellW, old.CellH, old.PivotX, old.PivotY))
+		}
+	}
+	if old := a.Project.LoadedSheets[imp.Name]; old != nil {
+		if filepath.Clean(old.FilePath) != filepath.Clean(imp.FilePath) || old.CellW != imp.CellW ||
+			old.CellH != imp.CellH || old.PivotX != imp.PivotX || old.PivotY != imp.PivotY {
+			desc := fmt.Sprintf("the loaded sheet %q (%s, %dx%d cells)", imp.Name, filepath.Base(old.FilePath), old.CellW, old.CellH)
+			if users := a.Project.CurrentTrack.SheetUsers(imp.Name); len(users) > 0 {
+				desc += ", used by " + strings.Join(users, ", ")
+			}
+			out = append(out, desc)
+		}
+	}
+	return out
+}
+
+// importSheet loads an accepted import into the project and writes its
+// .sprsh beside the image.
+func (a *Application) importSheet(imp ui.SheetImport, tmpl *editor.SpriteSheetTemplate) {
+	a.Project.LoadedSheets[imp.Name] = tmpl
+	a.Project.Dirty = true // the .anif records its sheets
+	a.Project.PaletteSheet = imp.Name
+
+	sprshPath := file.SprshPathFor(imp.FilePath)
+	if err := file.SaveSheetTemplate(tmpl, sprshPath); err != nil {
+		a.showError(fmt.Errorf("failed to save sheet template: %w", err))
+	} else {
+		tmpl.SprshPath = sprshPath
+	}
+
+	propNote := ""
+	if imp.PropName != "" {
+		if a.Project.CurrentTrack.FindProp(imp.PropName) == nil {
+			a.Project.RecordUndo()
+			editor.EnsureProp(a.Project.CurrentTrack, imp.PropName, imp.Name)
+			propNote = fmt.Sprintf("\n\nDeclared prop %q with this sheet as its default.", imp.PropName)
+		} else {
+			propNote = fmt.Sprintf("\n\nAdded as another option for prop %q - "+
+				"pick it under Preview Overrides to see it.", imp.PropName)
+		}
+	}
+
+	a.refreshAll()
+	dialog.ShowInformation("Import Complete",
+		fmt.Sprintf("Imported %q: %dx%d cells, %d cols x %d rows.\n\n"+
+			"Its tiles are in the left panel. Drag one onto the canvas to add it as a part.%s",
+			imp.Name, imp.CellW, imp.CellH, tmpl.Cols(), tmpl.Rows(), propNote),
+		a.Window)
 }
 
 // onLoadPreviewSheet lets the artist try other art on a prop on the fly —
@@ -851,7 +998,9 @@ func (a *Application) addPart(part *editor.Part) bool {
 }
 
 func (a *Application) onAddDirection() {
-	ui.ShowAddDirectionDialog(a.Window, func(key int) {
+	track := a.Project.CurrentTrack
+	exists := func(key int) bool { _, ok := track.Directions[key]; return ok }
+	ui.ShowAddDirectionDialog(a.Window, exists, func(key int) {
 		a.Project.RecordUndo()
 		editor.AddDirection(a.Project.CurrentTrack, key)
 		a.refreshDirectionSelect()
@@ -877,20 +1026,29 @@ func (a *Application) onAddProp() {
 }
 
 func (a *Application) onAddPart() {
-	var propNames []string
-	for _, p := range a.Project.CurrentTrack.Props {
-		propNames = append(propNames, p.Name)
+	track := a.Project.CurrentTrack
+	c := ui.AddPartChoices{Sheets: a.Project.LoadedSheetNames(), AnimPaths: a.Project.LoadedAnimPaths()}
+	c.AnimLabels = ui.AnimLabels(c.AnimPaths)
+	for _, p := range track.Props {
+		if p.IsAnimProp() {
+			c.AnimProps = append(c.AnimProps, p.Name)
+		} else {
+			c.SheetProps = append(c.SheetProps, p.Name)
+		}
 	}
-	animPaths := a.Project.LoadedAnimPaths()
-	ui.ShowAddPartDialog(a.Window, propNames, a.Project.LoadedSheetNames(), ui.AnimLabels(animPaths), animPaths, func(name string, kind editor.PartKind, governingProp, fixedSheet, nestedPath string) {
+	validateName := func(name string) error {
+		_, err := editor.ValidatePartName(track, name, -1)
+		return err
+	}
+	ui.ShowAddPartDialog(a.Window, c, validateName, func(part *editor.Part) error {
+		if err := editor.CheckNewPart(track, part); err != nil {
+			return err
+		}
 		// Selected straight away, so the left palette switches to its sheet
 		// and the artist can drag a tile without a second click.
-		if kind == editor.PartKindNestedAni {
-			a.addPart(editor.NewNestedAniPart(name, nestedPath))
-		} else {
-			a.addPart(editor.NewSheetPart(name, governingProp, fixedSheet))
-		}
+		a.addPart(part)
 		a.refreshAll()
+		return nil
 	})
 }
 
@@ -906,6 +1064,20 @@ func (a *Application) onRedo() {
 		a.refreshDirectionSelect()
 		a.refreshAll()
 	}
+}
+
+// showAbout names the editor and where its session logs are - the file
+// to attach to a bug report.
+func (a *Application) showAbout() {
+	msg := widget.NewLabel("ANIFile Animation Maker - authors rigged, multi-part sprite animations " +
+		"(.anif) and sprite sheet templates (.sprsh). See docs/ANI_MAKER_SPEC.md.\n\n" +
+		"Session logs (attach the latest to a bug report):")
+	msg.Wrapping = fyne.TextWrapWord
+	logs := widget.NewEntry()
+	logs.SetText(applog.DefaultDir())
+	d := dialog.NewCustom("About", "OK", container.NewVBox(msg, logs), a.Window)
+	d.Resize(fyne.NewSize(520, 220))
+	d.Show()
 }
 
 func (a *Application) onZoom(factor float32) {
@@ -955,6 +1127,7 @@ func (a *Application) refreshAll() {
 	if a.titleLabel != nil {
 		a.titleLabel.SetText(a.Project.CurrentTrack.Metadata.Name)
 	}
+	a.updateTitle()
 }
 
 func (a *Application) onClose() {

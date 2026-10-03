@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -161,7 +162,11 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 		if len(part.NestedBindings) > 0 {
 			tp.NestedBindings = make(map[string]tomlPropBinding, len(part.NestedBindings))
 			for k, v := range part.NestedBindings {
-				tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+				static := v.StaticValue
+				if editor.IsAnimValue(static) {
+					static = relAnimPath(path, static)
+				}
+				tp.NestedBindings[k] = tomlPropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: static}
 			}
 		}
 		tt.Parts = append(tt.Parts, tp)
@@ -187,7 +192,33 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 	if err := toml.NewEncoder(buf).Encode(tt); err != nil {
 		return fmt.Errorf("failed to encode track: %w", err)
 	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	return writeFileAtomic(path, buf.Bytes())
+}
+
+// writeFileAtomic replaces path with data all at once: it writes a temp
+// file beside it and renames that over the original, so a crash or full
+// disk mid-save leaves the old file intact instead of a truncated one.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once renamed
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // LoadTrack reads a track from a .anif TOML file, plus where it says its
@@ -244,7 +275,11 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 		if len(tp.NestedBindings) > 0 {
 			part.NestedBindings = make(map[string]editor.PropBinding, len(tp.NestedBindings))
 			for k, v := range tp.NestedBindings {
-				part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: v.StaticValue}
+				static := v.StaticValue
+				if editor.IsAnimValue(static) {
+					static = absAnimPath(path, static)
+				}
+				part.NestedBindings[k] = editor.PropBinding{PassthroughFrom: v.PassthroughFrom, StaticValue: static}
 			}
 		}
 		migrateDirectionBinding(part)
@@ -266,12 +301,13 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 				return nil, nil, fmt.Errorf("direction %s has a keyframe for unknown part id %d", dirName, tkf.PartID)
 			}
 			dir.Keyframes[tkf.PartID] = append(dir.Keyframes[tkf.PartID], &editor.Keyframe{
-				ID: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
+				Index: len(dir.Keyframes[tkf.PartID]), TimeMs: tkf.TimeMs,
 				X: tkf.X, Y: tkf.Y, Z: tkf.Z,
 				RotationDeg: tkf.RotationDeg, Row: tkf.Row, Col: tkf.Col,
 				Direction: tkf.Direction,
 			})
 		}
+		normalizeLoadedKeyframes(dir)
 		t.Directions[dirKey] = dir
 	}
 
@@ -280,6 +316,30 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	}
 
 	return t, refs, nil
+}
+
+// normalizeLoadedKeyframes sorts each part's keyframes by time, which
+// everything that reads them assumes (interpolation, retiming, the
+// timeline), and keeps one keyframe per time - the last one in the file -
+// since two at one instant make "the keyframe at the playhead" ambiguous.
+// The editor always saves them that way; this covers a file edited or
+// merged by hand.
+func normalizeLoadedKeyframes(dir *editor.Direction) {
+	for id, kfs := range dir.Keyframes {
+		sort.SliceStable(kfs, func(i, j int) bool { return kfs[i].TimeMs < kfs[j].TimeMs })
+		out := kfs[:0]
+		for _, kf := range kfs {
+			if n := len(out); n > 0 && out[n-1].TimeMs == kf.TimeMs {
+				out[n-1] = kf
+				continue
+			}
+			out = append(out, kf)
+		}
+		for i, kf := range out {
+			kf.Index = i
+		}
+		dir.Keyframes[id] = out
+	}
 }
 
 // migrateDirectionBinding converts the old way of setting a nested part's
@@ -340,6 +400,9 @@ func SaveSheetTemplate(s *editor.SpriteSheetTemplate, sprshPath string) error {
 	if rel, err := filepath.Rel(filepath.Dir(sprshPath), s.FilePath); err == nil {
 		imgPath = rel
 	}
+	// Forward slashes on disk, like every path in an .anif, so a template
+	// saved on Windows still opens elsewhere.
+	imgPath = filepath.ToSlash(imgPath)
 
 	ts := tomlSheetTemplate{
 		Name: s.Name, FilePath: imgPath,
@@ -351,7 +414,7 @@ func SaveSheetTemplate(s *editor.SpriteSheetTemplate, sprshPath string) error {
 	if err := toml.NewEncoder(buf).Encode(ts); err != nil {
 		return fmt.Errorf("failed to encode sheet template: %w", err)
 	}
-	return os.WriteFile(sprshPath, buf.Bytes(), 0644)
+	return writeFileAtomic(sprshPath, buf.Bytes())
 }
 
 // LoadSheetTemplate reads a .sprsh file and loads its referenced image.
@@ -361,7 +424,7 @@ func LoadSheetTemplate(sprshPath string) (*editor.SpriteSheetTemplate, error) {
 		return nil, fmt.Errorf("failed to decode sheet template: %w", err)
 	}
 
-	imgPath := ts.FilePath
+	imgPath := filepath.FromSlash(ts.FilePath)
 	if !filepath.IsAbs(imgPath) {
 		imgPath = filepath.Join(filepath.Dir(sprshPath), imgPath)
 	}
@@ -373,4 +436,26 @@ func LoadSheetTemplate(sprshPath string) (*editor.SpriteSheetTemplate, error) {
 	s := editor.NewSpriteSheetTemplate(ts.Name, imgPath, img, ts.CellW, ts.CellH, ts.PivotX, ts.PivotY)
 	s.SprshPath = sprshPath
 	return s, nil
+}
+
+// SprshPathFor is where a sheet image's .sprsh lives: beside it, same name.
+func SprshPathFor(imagePath string) string {
+	return strings.TrimSuffix(imagePath, filepath.Ext(imagePath)) + ".sprsh"
+}
+
+// SheetSettings are a .sprsh's grid and pivot, without its image.
+type SheetSettings struct {
+	Name           string
+	CellW, CellH   int
+	PivotX, PivotY float32
+}
+
+// ReadSheetSettings reads a .sprsh's name, grid and pivot without loading
+// the image, e.g. to prefill a re-import of the same image.
+func ReadSheetSettings(sprshPath string) (SheetSettings, error) {
+	var ts tomlSheetTemplate
+	if _, err := toml.DecodeFile(sprshPath, &ts); err != nil {
+		return SheetSettings{}, fmt.Errorf("failed to decode sheet template: %w", err)
+	}
+	return SheetSettings{Name: ts.Name, CellW: ts.CellW, CellH: ts.CellH, PivotX: ts.PivotX, PivotY: ts.PivotY}, nil
 }

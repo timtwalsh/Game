@@ -215,6 +215,26 @@ func (p *Project) DeletePart(idx int) error {
 	return nil
 }
 
+// OpenTrack makes track, just loaded from path, the one being edited, with
+// anims (freshly loaded, so edits made to a nested .anif since it was last
+// opened show up) as the nested animations. Everything that belonged to
+// the previous track goes: its undo history, selection, playhead and
+// preview overrides - a preview set on the old track's "hair" would
+// otherwise carry over to the new track's "hair". Imported sheets stay
+// loaded, as they're shared art the next track may well use.
+func (p *Project) OpenTrack(track *Track, path string, anims map[string]*NestedAnim) {
+	p.CurrentTrack = track
+	p.SavePath = path
+	p.Dirty = false
+	p.UndoStack.Clear()
+	p.LoadedAnims = anims
+	p.PreviewProps = map[string]string{}
+	p.PreviewSheets = map[string]*SpriteSheetTemplate{}
+	p.Selection = &Selection{PartIndex: -1, KeyframeIndex: -1}
+	p.Stop()
+	p.Playback.ActiveDirection = firstDirectionKey(track)
+}
+
 // -- Undo/redo --
 
 func (p *Project) TakeSnapshot() *ProjectSnapshot {
@@ -235,8 +255,11 @@ func (p *Project) RecordUndo() {
 	p.Dirty = true
 }
 
+// Undo and Redo hand the stack a deep copy of the live track, so the track
+// being edited never also sits in the history - otherwise the next edit
+// after an undo would rewrite the state a redo later restores.
 func (p *Project) Undo() bool {
-	snap := p.UndoStack.Undo()
+	snap := p.UndoStack.Undo(p.TakeSnapshot())
 	if snap == nil {
 		return false
 	}
@@ -245,7 +268,7 @@ func (p *Project) Undo() bool {
 }
 
 func (p *Project) Redo() bool {
-	snap := p.UndoStack.Redo()
+	snap := p.UndoStack.Redo(p.TakeSnapshot())
 	if snap == nil {
 		return false
 	}
@@ -307,6 +330,11 @@ func (p *Project) Play() {
 	if dir == nil || (dir.TotalDurationMs() == 0 && !p.hasPosedNested(dir)) {
 		return
 	}
+	// Parked at (or past) the end, which is where a non-looping play
+	// stops: start over, rather than stopping again at once.
+	if total := dir.TotalDurationMs(); total > 0 && p.Playback.ElapsedMs >= total {
+		p.Playback.ElapsedMs = 0
+	}
 	p.Playback.IsPlaying = true
 }
 
@@ -331,6 +359,7 @@ const scrubStepMs = 50
 
 func (p *Project) StepForward() {
 	p.Playback.IsPlaying = false
+	p.Selection.KeyframeIndex = -1 // a step is a scrub (see Scrub)
 	dir := p.ActiveDirection()
 	limit := uint32(0)
 	if dir != nil {
@@ -344,6 +373,7 @@ func (p *Project) StepForward() {
 
 func (p *Project) StepBackward() {
 	p.Playback.IsPlaying = false
+	p.Selection.KeyframeIndex = -1 // a step is a scrub (see Scrub)
 	if p.Playback.ElapsedMs < scrubStepMs {
 		dir := p.ActiveDirection()
 		if dir != nil {
@@ -370,6 +400,18 @@ func (p *Project) SetActiveDirection(key int) {
 	// so index N is the same part in every facing and switching direction
 	// just changes which keyframes you're editing. Only the keyframe
 	// selection is dropped, since keyframes are per-direction.
+	p.Selection.KeyframeIndex = -1
+}
+
+// Scrub is the artist moving the playhead (dragging or clicking the
+// timeline): a Seek that also drops the keyframe selection, so the
+// Selected Keyframe fields go back to editing what the canvas shows at
+// the new time - the keyframe there, or a new one on the first edit -
+// rather than a keyframe left behind somewhere else. The part stays
+// selected. Seeks that follow a keyframe (clicking its marker, retiming,
+// duplicating) call Seek and keep it.
+func (p *Project) Scrub(timeMs uint32) {
+	p.Seek(timeMs)
 	p.Selection.KeyframeIndex = -1
 }
 

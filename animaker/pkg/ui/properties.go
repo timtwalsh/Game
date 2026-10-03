@@ -4,6 +4,7 @@ import (
 	"animaker/pkg/editor"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -43,19 +44,21 @@ type PropertiesPanel struct {
 	// OnTileDropped is forwarded from the active part's SheetGridWidget —
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
-	OnTileDragStart   func()
-	OnTileDropped     func(sheetName string, row, col int, absPos fyne.Position)
-	OnTileTapped      func(row, col int)
-	OnImport          func()
-	OnImportAnim      func()
-	OnAddPart         func() // app.go owns the dialog (needs the current prop list)
-	OnAddProp         func()
-	OnPartChanged     func()
+	OnTileDragStart func()
+	OnTileDropped   func(sheetName string, row, col int, absPos fyne.Position)
+	OnTileTapped    func(row, col int)
+	OnImport        func()
+	OnImportAnim    func()
+	OnAddPart       func() // app.go owns the dialog (needs the current prop list)
+	OnAddProp       func()
+	OnPartChanged   func()
 	// OnPartDelete asks app.go to delete a part; it confirms first.
-	OnPartDelete func(idx int)
+	OnPartDelete      func(idx int)
 	OnKeyframeChanged func()
 	OnKeyframeRetimed func() // the selected keyframe's time was typed in
 	OnPropsChanged    func()
+	// OnError shows an error to the artist (app.go owns the window).
+	OnError func(err error)
 	// OnLoadPreviewSheet asks app.go (which owns the window, for the file
 	// dialog) to load an image as a preview-only option for a prop.
 	OnLoadPreviewSheet func(propName string)
@@ -430,6 +433,7 @@ func (pp *PropertiesPanel) refreshPartLink() {
 	// Assigned after SetSelected above so seeding the current value doesn't
 	// fire the handler — Fyne's Select re-fires OnChanged on SetSelected.
 	fixedSelect.OnChanged = func(v string) {
+		pp.project.RecordUndo()
 		part.FixedSheet = v
 		pp.project.Dirty = true
 		pp.refreshSheetGrid()
@@ -505,6 +509,7 @@ func (pp *PropertiesPanel) buildNestedLink(part *editor.Part) {
 	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Prop:"), nil, propSelect))
 	pp.partLinkBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Animation:"), nil, animSelect))
 	pp.buildNestedDirection(part)
+	pp.buildNestedBindings(part)
 	if len(pp.project.LoadedAnims) == 0 {
 		pp.partLinkBox.Add(widget.NewLabel("No animations imported yet - use Import Animation."))
 	}
@@ -671,21 +676,38 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		pose = editor.ResolvedTransform{X: kf.X, Y: kf.Y, Z: kf.Z, RotationDeg: kf.RotationDeg,
 			Row: kf.Row, Col: kf.Col, Direction: kf.Direction}
 	}
-	// target is the keyframe an edit applies to, created (undoably) on the
-	// first edit when there isn't one at the playhead.
+	// target is the keyframe an edit applies to, created on the first edit
+	// when there isn't one at the playhead.
 	target := func() *editor.Keyframe {
 		if kf == nil {
-			pp.project.RecordUndo()
 			kf, _ = editor.EnsureKeyframe(dir, part.ID, playhead)
-			pp.project.Selection.KeyframeIndex = kf.ID
+			pp.project.Selection.KeyframeIndex = kf.Index
 		}
 		return kf
 	}
+	// beginEdit records the undo step for one edit - a button click, a
+	// picker change, or one burst of typing in a field - before it changes
+	// anything, creating the keyframe it applies to if need be.
+	beginEdit := func() *editor.Keyframe {
+		pp.project.RecordUndo()
+		return target()
+	}
+	field := func(v float32, set func(kf *editor.Keyframe, v float32)) *selectAllEntry {
+		var e *selectAllEntry
+		e = numEntry(fmt.Sprintf("%v", v), func(v float32) {
+			if e.startEdit() {
+				beginEdit()
+			}
+			set(target(), v)
+			pp.notifyKeyframeChanged()
+		})
+		return e
+	}
 
-	xEntry := numEntry(fmt.Sprintf("%v", pose.X), func(v float32) { target().X = v; pp.notifyKeyframeChanged() })
-	yEntry := numEntry(fmt.Sprintf("%v", pose.Y), func(v float32) { target().Y = v; pp.notifyKeyframeChanged() })
-	zEntry := numEntry(fmt.Sprintf("%v", pose.Z), func(v float32) { target().Z = v; pp.notifyKeyframeChanged() })
-	rotEntry := numEntry(fmt.Sprintf("%v", pose.RotationDeg), func(v float32) { target().RotationDeg = v; pp.notifyKeyframeChanged() })
+	xEntry := field(pose.X, func(kf *editor.Keyframe, v float32) { kf.X = v })
+	yEntry := field(pose.Y, func(kf *editor.Keyframe, v float32) { kf.Y = v })
+	zEntry := field(pose.Z, func(kf *editor.Keyframe, v float32) { kf.Z = v })
+	rotEntry := field(pose.RotationDeg, func(kf *editor.Keyframe, v float32) { kf.RotationDeg = v })
 
 	grid := container.NewGridWithColumns(2,
 		widget.NewLabel("X"), xEntry,
@@ -711,17 +733,13 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		// Assigned after SetSelected, which would re-fire it.
 		dirSelect.OnChanged = func(label string) {
 			if k, ok := directionKeyFor(keys, labels, label); ok {
-				target().Direction = k
+				beginEdit().Direction = k
 				pp.notifyKeyframeChanged()
 			}
 		}
 		pp.keyframeBox.Add(container.NewBorder(nil, nil, widget.NewLabel("Direction"), nil, dirSelect))
 	}
-	pp.keyframeBox.Add(pp.buildNudgeControls(target))
-
-	if part.Kind == editor.PartKindNestedAni {
-		pp.keyframeBox.Add(pp.buildNestedBindingsEditor(part))
-	}
+	pp.keyframeBox.Add(pp.buildNudgeControls(beginEdit))
 
 	pp.keyframeBox.Refresh()
 }
@@ -760,13 +778,13 @@ func (pp *PropertiesPanel) buildTimeEntry(part *editor.Part, kf *editor.Keyframe
 			}
 		}
 		pp.project.RecordUndo()
-		if err := editor.MoveKeyframe(dir, part.ID, kf.ID, newMs); err != nil {
+		if err := editor.MoveKeyframe(dir, part.ID, kf.Index, newMs); err != nil {
 			status.SetText(err.Error())
 			return
 		}
 		// Moving re-sorts, so re-read the index; and keep the playhead on
 		// the keyframe so the canvas still shows the pose being edited.
-		pp.project.Selection.KeyframeIndex = kf.ID
+		pp.project.Selection.KeyframeIndex = kf.Index
 		pp.project.Seek(kf.TimeMs)
 		pp.project.Dirty = true
 		if pp.OnKeyframeRetimed != nil {
@@ -797,12 +815,13 @@ const (
 // an in-progress keystroke), a nudge click rebuilds the keyframe section
 // afterward so the entries visibly reflect the new value immediately.
 //
-// target returns the keyframe to nudge, creating it at the playhead on
-// first use (see refreshKeyframe).
-func (pp *PropertiesPanel) buildNudgeControls(target func() *editor.Keyframe) fyne.CanvasObject {
+// beginEdit records an undo step and returns the keyframe to nudge,
+// creating it at the playhead on first use (see refreshKeyframe). Each
+// click is its own undo step.
+func (pp *PropertiesPanel) buildNudgeControls(beginEdit func() *editor.Keyframe) fyne.CanvasObject {
 	nudge := func(apply func(kf *editor.Keyframe)) func() {
 		return func() {
-			apply(target())
+			apply(beginEdit())
 			pp.notifyKeyframeChanged()
 			pp.refreshKeyframe()
 		}
@@ -841,68 +860,211 @@ func (pp *PropertiesPanel) notifyKeyframeChanged() {
 	}
 }
 
-func (pp *PropertiesPanel) buildNestedBindingsEditor(part *editor.Part) fyne.CanvasObject {
-	box := container.NewVBox(newSectionHeader("Bindings"))
+// Binding modes, as the bindings editor labels them.
+const (
+	bindDefault     = "Default"
+	bindPassthrough = "From parent prop"
+	bindStatic      = "Fixed"
+)
 
-	for propName, binding := range part.NestedBindings {
-		if propName == "direction" {
-			continue // set with the part's Direction picker instead
-		}
-		name := propName
-		b := binding
-		modeSelect := widget.NewSelect([]string{"passthrough", "static"}, nil)
-		valueEntry := newEntry()
-		if b.PassthroughFrom != "" {
-			modeSelect.SetSelected("passthrough")
-			valueEntry.SetText(b.PassthroughFrom)
-		} else {
-			modeSelect.SetSelected("static")
-			valueEntry.SetText(b.StaticValue)
-		}
-		apply := func() {
-			nb := part.NestedBindings[name]
-			if modeSelect.Selected == "passthrough" {
-				nb.PassthroughFrom = valueEntry.Text
-				nb.StaticValue = ""
-			} else {
-				nb.StaticValue = valueEntry.Text
-				nb.PassthroughFrom = ""
+// buildNestedBindings sets, for each prop the nested animation declares,
+// where its value comes from: the nested track's own default, one of this
+// (the parent) track's props passed through, or a fixed value. E.g. a city
+// guard pins its torch's torch_base to "torchbase_metal", while the
+// player's walk declares its own torch_base prop and passes it through.
+//
+// Every choice is a pick-list - the nested track's props, the parent's
+// props, loaded sheets or animations - because a typed name that matches
+// nothing silently falls back to the default.
+func (pp *PropertiesPanel) buildNestedBindings(part *editor.Part) {
+	anim := pp.project.ResolveNestedAnim(part)
+	if anim == nil {
+		// Can't list the nested track's props; keep showing what's bound
+		// rather than hiding or dropping it.
+		if len(part.NestedBindings) > 0 {
+			pp.partLinkBox.Add(newSectionHeader("Bindings"))
+			for _, name := range sortedBindingNames(part) {
+				b := part.NestedBindings[name]
+				desc := "fixed: " + b.StaticValue
+				if b.PassthroughFrom != "" {
+					desc = "from parent prop " + b.PassthroughFrom
+				}
+				pp.partLinkBox.Add(widget.NewLabel(name + " - " + desc + " (animation not loaded)"))
 			}
-			part.NestedBindings[name] = nb
-			pp.notifyKeyframeChanged()
 		}
-		modeSelect.OnChanged = func(string) { apply() }
-		valueEntry.OnChanged = func(string) { apply() }
-
-		delBtn := widget.NewButton("x", func() {
-			delete(part.NestedBindings, name)
-			pp.notifyKeyframeChanged()
-			pp.refreshKeyframe()
-		})
-		delBtn.Importance = widget.DangerImportance
-
-		row := container.NewBorder(nil, nil, widget.NewLabel(name), delBtn,
-			container.NewHBox(modeSelect, valueEntry))
-		box.Add(row)
+		return
 	}
 
-	newPropEntry := newEntry()
-	newPropEntry.SetPlaceHolder("nested prop name, e.g. torch_sheet")
-	addBtn := widget.NewButton("+ Binding", func() {
-		if newPropEntry.Text == "" {
+	declared := map[string]bool{}
+	var rows []fyne.CanvasObject
+	for _, pd := range anim.Track.Props {
+		declared[pd.Name] = true
+		rows = append(rows, pp.bindingRow(part, anim, pd))
+	}
+	// Bindings for props the nested track doesn't declare (renamed or
+	// removed there since) do nothing; show them so they can be cleared.
+	for _, name := range sortedBindingNames(part) {
+		if declared[name] {
+			continue
+		}
+		name := name
+		clear := widget.NewButton("Remove", func() {
+			pp.project.RecordUndo()
+			delete(part.NestedBindings, name)
+			pp.notifyPartChanged()
+			pp.refreshPartLink()
+		})
+		rows = append(rows, container.NewBorder(nil, nil, nil, clear,
+			widget.NewLabel(fmt.Sprintf("%s - not a prop of %s", name, anim.DisplayName()))))
+	}
+	if len(rows) == 0 {
+		return
+	}
+	pp.partLinkBox.Add(newSectionHeader("Bindings (" + anim.DisplayName() + " props)"))
+	for _, r := range rows {
+		pp.partLinkBox.Add(r)
+	}
+}
+
+func sortedBindingNames(part *editor.Part) []string {
+	names := make([]string, 0, len(part.NestedBindings))
+	for n := range part.NestedBindings {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// bindingRow is one nested prop's binding: a mode picker and, unless it's
+// left at the default, a value picker.
+func (pp *PropertiesPanel) bindingRow(part *editor.Part, anim *editor.NestedAnim, pd editor.PropDef) fyne.CanvasObject {
+	b, bound := part.NestedBindings[pd.Name]
+	mode := bindDefault
+	switch {
+	case bound && b.PassthroughFrom != "":
+		mode = bindPassthrough
+	case bound && b.StaticValue != "":
+		mode = bindStatic
+	}
+
+	defLabel := pd.Default
+	if pd.IsAnimProp() {
+		defLabel = filepath.Base(defLabel)
+	}
+	modeSelect := widget.NewSelect([]string{bindDefault, bindPassthrough, bindStatic}, nil)
+	modeSelect.SetSelected(mode)
+
+	// The value picker's options depend on the mode: the parent's props of
+	// the same kind (sheet or animation), or the values the prop can take.
+	var values, labels []string
+	current := ""
+	switch mode {
+	case bindPassthrough:
+		for _, parent := range pp.project.CurrentTrack.Props {
+			if parent.IsAnimProp() == pd.IsAnimProp() {
+				values = append(values, parent.Name)
+			}
+		}
+		current = b.PassthroughFrom
+		values = sheetPickerOptions(values, current)
+		labels = values
+	case bindStatic:
+		values, labels = pp.bindingValueOptions(anim, pd)
+		current = b.StaticValue
+		if current != "" && !contains(values, current) { // keep showing a value that isn't loaded
+			values = append([]string{current}, values...)
+			labels = append([]string{current}, labels...)
+		}
+	}
+	valueSelect := widget.NewSelect(labels, nil)
+	if current != "" {
+		valueSelect.SetSelected(labelFor(labels, values, current))
+	}
+
+	set := func(nb editor.PropBinding, keep bool) {
+		pp.project.RecordUndo()
+		if !keep {
+			delete(part.NestedBindings, pd.Name)
+		} else {
+			if part.NestedBindings == nil {
+				part.NestedBindings = map[string]editor.PropBinding{}
+			}
+			part.NestedBindings[pd.Name] = nb
+		}
+		pp.notifyPartChanged()
+	}
+	// Assigned after the SetSelected calls above, which would re-fire them.
+	modeSelect.OnChanged = func(m string) {
+		if m == mode {
 			return
 		}
-		if part.NestedBindings == nil {
-			part.NestedBindings = map[string]editor.PropBinding{}
+		switch m {
+		case bindDefault:
+			set(editor.PropBinding{}, false)
+		case bindPassthrough:
+			// Start from a parent prop of the same name if there is one -
+			// the usual case, e.g. torch_base passed through as torch_base.
+			from := ""
+			if parent := pp.project.CurrentTrack.FindProp(pd.Name); parent != nil && parent.IsAnimProp() == pd.IsAnimProp() {
+				from = parent.Name
+			}
+			set(editor.PropBinding{PassthroughFrom: from}, true)
+		case bindStatic:
+			set(editor.PropBinding{StaticValue: pd.Default}, true)
 		}
-		part.NestedBindings[newPropEntry.Text] = editor.PropBinding{}
-		newPropEntry.SetText("")
-		pp.notifyKeyframeChanged()
-		pp.refreshKeyframe()
-	})
-	box.Add(container.NewBorder(nil, nil, nil, addBtn, newPropEntry))
+		pp.refreshPartLink()
+	}
+	valueSelect.OnChanged = func(label string) {
+		v := valueFor(labels, values, label)
+		if mode == bindPassthrough {
+			set(editor.PropBinding{PassthroughFrom: v}, true)
+		} else {
+			set(editor.PropBinding{StaticValue: v}, true)
+		}
+	}
 
-	return box
+	row := container.NewGridWithColumns(2, modeSelect)
+	if mode == bindDefault {
+		row.Add(widget.NewLabel("(" + defLabel + ")"))
+	} else {
+		if len(values) == 0 {
+			valueSelect.PlaceHolder = "(no parent props of this kind)"
+		}
+		row.Add(valueSelect)
+	}
+	return container.NewBorder(nil, nil, widget.NewLabel(pd.Name+":"), nil, row)
+}
+
+// bindingValueOptions lists the fixed values a nested prop can be pinned
+// to: for a sheet prop, the nested animation's own sheets and the parent's
+// loaded sheets (the order a nested sheet name is looked up in); for an
+// animation prop, the loaded animations.
+func (pp *PropertiesPanel) bindingValueOptions(anim *editor.NestedAnim, pd editor.PropDef) (values, labels []string) {
+	if pd.IsAnimProp() {
+		values = pp.project.LoadedAnimPaths()
+		return values, AnimLabels(values)
+	}
+	seen := map[string]bool{}
+	for n := range anim.Sheets {
+		seen[n] = true
+	}
+	for _, n := range pp.project.LoadedSheetNames() {
+		seen[n] = true
+	}
+	for n := range seen {
+		values = append(values, n)
+	}
+	sort.Strings(values)
+	return values, values
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // -- Props schema --
@@ -920,9 +1082,12 @@ func (pp *PropertiesPanel) refreshSchema() {
 		}
 		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, def))
 		delBtn := widget.NewButton("x", func() {
-			pp.project.RecordUndo()
-			editor.RemoveProp(pp.project.CurrentTrack, idx)
-			pp.project.Dirty = true
+			if err := pp.project.RemoveProp(idx); err != nil {
+				if pp.OnError != nil {
+					pp.OnError(err)
+				}
+				return
+			}
 			if pp.OnPropsChanged != nil {
 				pp.OnPropsChanged()
 			}
@@ -987,6 +1152,8 @@ func (pp *PropertiesPanel) refreshPreview() {
 
 // -- Helpers --
 
+// numEntry is a field that calls onChange with every value typed into it
+// that parses as a number.
 func numEntry(initial string, onChange func(float32)) *selectAllEntry {
 	e := newEntry()
 	e.SetText(initial)

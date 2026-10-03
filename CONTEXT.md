@@ -64,6 +64,7 @@ instead of only catching problems after the fact.
 ```powershell
 go test ./...          # runs shared/, client/, server/ test suites
 go test ./... -v       # verbose, per-test output
+cd animaker; go test ./...   # the animaker module is separate: run its tests from its own folder
 ```
 
 Coverage as of 2026-09-17: `shared/types_test.go` (Vec2, TileType,

@@ -1,9 +1,6 @@
 package editor
 
-import (
-	"sort"
-	"time"
-)
+import "sort"
 
 // Track is one named motion (e.g. "human_walk") and corresponds to exactly
 // one .anif file. There is no wrapping "character" asset — see
@@ -35,10 +32,8 @@ type Track struct {
 }
 
 type TrackMetadata struct {
-	Name      string
-	Version   string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Name    string
+	Version string
 }
 
 // PropDef declares a customization slot. A prop's value is always the name
@@ -205,7 +200,11 @@ type PropBinding struct {
 // parts only) is explicitly chosen by the artist per keyframe — never
 // derived from the Track's name, direction, or frame index.
 type Keyframe struct {
-	ID          int
+	// Index is the keyframe's position among its part's keyframes in this
+	// direction, kept up to date as they're re-sorted. It's a position, not
+	// an identity (it isn't saved; nothing refers to a keyframe except by
+	// part and time), so hold the *Keyframe to follow one across a re-sort.
+	Index       int
 	TimeMs      uint32
 	X, Y, Z     float32 // Z is tweened like X/Y, feeds draw-order sort
 	RotationDeg float32
@@ -232,13 +231,12 @@ var DefaultDirectionKeys = []int{0, 1, 2, 3} // 0=up, 1=right, 2=down, 3=left
 
 // NewTrack creates a track with the four default directions and no parts.
 func NewTrack(name string) *Track {
-	now := time.Now()
 	dirs := make(map[int]*Direction, len(DefaultDirectionKeys))
 	for _, k := range DefaultDirectionKeys {
 		dirs[k] = NewDirection()
 	}
 	return &Track{
-		Metadata:     TrackMetadata{Name: name, Version: "1.0", CreatedAt: now, UpdatedAt: now},
+		Metadata:     TrackMetadata{Name: name, Version: "1.0"},
 		Props:        []PropDef{},
 		RefBoxWidth:  DefaultRefBoxWidth,
 		RefBoxHeight: DefaultRefBoxHeight,
@@ -275,13 +273,19 @@ func (t *Track) nextPartID() int {
 }
 
 // ReferencedSheetNames lists every sheet the track names — parts' fixed
-// sheets and props' defaults — sorted and without duplicates. These are
-// the sheets it needs loaded to draw as authored.
+// sheets, props' defaults and nested parts' fixed binding values — sorted
+// and without duplicates. These are the sheets it needs loaded to draw as
+// authored.
 func (t *Track) ReferencedSheetNames() []string {
 	seen := map[string]bool{}
 	for _, p := range t.Parts {
 		if p.Kind == PartKindSheet && p.FixedSheet != "" {
 			seen[p.FixedSheet] = true
+		}
+		for _, v := range p.staticBindingValues() {
+			if !IsAnimValue(v) {
+				seen[v] = true
+			}
 		}
 	}
 	for _, pd := range t.Props {
@@ -297,8 +301,30 @@ func (t *Track) ReferencedSheetNames() []string {
 	return names
 }
 
+// staticBindingValues lists the values a nested part's bindings pin, in
+// sorted binding order: each is a sheet name, or an .anif path for a
+// nested prop that holds animations.
+func (p *Part) staticBindingValues() []string {
+	if p.Kind != PartKindNestedAni {
+		return nil
+	}
+	keys := make([]string, 0, len(p.NestedBindings))
+	for k := range p.NestedBindings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var vals []string
+	for _, k := range keys {
+		if b := p.NestedBindings[k]; b.PassthroughFrom == "" && b.StaticValue != "" {
+			vals = append(vals, b.StaticValue)
+		}
+	}
+	return vals
+}
+
 // ReferencedAnimPaths lists every nested .anif the track names - nested
-// parts' own paths and animation props' defaults - without duplicates.
+// parts' own paths, animation props' defaults and fixed binding values -
+// without duplicates.
 func (t *Track) ReferencedAnimPaths() []string {
 	seen := map[string]bool{}
 	var paths []string
@@ -311,6 +337,11 @@ func (t *Track) ReferencedAnimPaths() []string {
 	for _, p := range t.Parts {
 		if p.Kind == PartKindNestedAni {
 			add(p.NestedAniPath)
+		}
+		for _, v := range p.staticBindingValues() {
+			if IsAnimValue(v) {
+				add(v)
+			}
 		}
 	}
 	for _, pd := range t.Props {

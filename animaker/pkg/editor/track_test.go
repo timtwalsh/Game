@@ -64,8 +64,8 @@ func TestAddKeyframeKeepsSortedOrder(t *testing.T) {
 		if kfs[i].TimeMs != w {
 			t.Errorf("keyframe[%d].TimeMs = %v, want %v (not sorted)", i, kfs[i].TimeMs, w)
 		}
-		if kfs[i].ID != i {
-			t.Errorf("keyframe[%d].ID = %v, want %v (not reindexed after sort)", i, kfs[i].ID, i)
+		if kfs[i].Index != i {
+			t.Errorf("keyframe[%d].ID = %v, want %v (not reindexed after sort)", i, kfs[i].Index, i)
 		}
 	}
 }
