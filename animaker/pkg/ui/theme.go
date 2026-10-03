@@ -95,6 +95,7 @@ var (
 	ColorFrameBoxSelected   = color.RGBA{R: 70, G: 110, B: 180, A: 255}
 	ColorFrameBoxHover      = color.RGBA{R: 60, G: 60, B: 75, A: 255}
 	ColorScrubber           = color.RGBA{R: 255, G: 180, B: 50, A: 255}
+	ColorMarker             = color.RGBA{R: 120, G: 220, B: 160, A: 200} // .anichar markers
 
 	// Properties colors
 	ColorSectionHeader  = color.RGBA{R: 180, G: 200, B: 255, A: 255}

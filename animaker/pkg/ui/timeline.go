@@ -134,6 +134,10 @@ type scrubArea struct {
 	// caching a renderer for a fresh throwaway widget per row per frame.
 	rowLabels  []*partLabel
 	rowDeletes []*rowDeleteButton
+
+	// markers are the open animation's .anichar markers, drawn as named
+	// lines down the timeline (none when the track isn't a character's).
+	markers []editor.Marker
 }
 
 func newScrubArea(project *editor.Project) *scrubArea {
@@ -605,6 +609,19 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 		objs = append(objs, guide)
 	}
 
+	// Character markers: a line down every row, named on the ruler.
+	for _, m := range s.markers {
+		x := s.xForTime(m.TimeMs)
+		line := canvas.NewLine(ColorMarker)
+		line.StrokeWidth = 1
+		line.Position1 = fyne.NewPos(x, timelineRulerHeight/2)
+		line.Position2 = fyne.NewPos(x, size.Height)
+		name := canvas.NewText(m.Name, ColorMarker)
+		name.TextSize = 10
+		name.Move(fyne.NewPos(x+3, timelineRulerHeight-name.MinSize().Height))
+		objs = append(objs, line, name)
+	}
+
 	// Playhead, drawn last so it's always on top.
 	playX := s.xForTime(s.project.Playback.ElapsedMs)
 	playhead := canvas.NewLine(ColorScrubber)
@@ -880,6 +897,24 @@ func (tw *TimelineWidget) applyScrollOffset(offsetX float32) {
 	}
 	tw.scroll.ScrollToOffset(fyne.NewPos(offsetX, tw.scroll.Offset.Y))
 	tw.scroll.Refresh()
+}
+
+// SetMarkers shows the open animation's character markers on the
+// timeline; nil hides them.
+func (tw *TimelineWidget) SetMarkers(ms []editor.Marker) {
+	if tw.scrub == nil {
+		return
+	}
+	tw.scrub.markers = ms
+	tw.scrub.Refresh()
+}
+
+// Markers is what SetMarkers last set.
+func (tw *TimelineWidget) Markers() []editor.Marker {
+	if tw.scrub == nil {
+		return nil
+	}
+	return tw.scrub.markers
 }
 
 func (tw *TimelineWidget) refreshZoomLabel() {

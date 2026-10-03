@@ -41,7 +41,7 @@ Track (= one .anif file, one named motion — "human_walk.anif")
         └── Keyframes (map[Part.ID][]*Keyframe — how this facing poses each part)
 ```
 
-- **Track = one file, one motion.** `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif`, `human_hurt.anif`, `base_wood_torch.anif` are each their own `Track`. There is no wrapping "character" file — see [Props](#props) for why, and what that costs.
+- **Track = one file, one motion.** `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif`, `human_hurt.anif`, `base_wood_torch.anif` are each their own `Track`, complete on its own. A character's tracks can be grouped by an optional [`.anichar`](#anichar-a-character--toml) manifest that *names* them (`walk` plays `human_walk.anif`) and adds play mode and markers, but owns nothing a track needs: the rig and props stay in each `.anif` — see [Props](#props) for why, and what that costs.
 - **Direction is first-class, not a prop, and is a plain int, not a name.** A track declares how many directions it has, `DirectionCount` N = 1, 4, 8 or 16 (16 is the limit), and its keys are `0..N-1` clockwise from north: key k faces k×360/N degrees. Each is named from the 16-point compass (N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW), so a 4-direction track's keys are N/E/S/W and an 8-direction track's are N, NE, E … NW. **8 is exactly the game's own facing** (`client/prediction.go`: 0=N, 1=NE, 2=E … 7=NW), and 4 is exactly what tracks always used (0=up, 1=right, 2=down, 3=left), so files without a recorded count are read by their keys. A non-directional thing (a treasure chest) has N=1 and just key `0`. (Corrected 2026-10-03, #46: this section used to claim 0=up/1=right/2=down/3=left *was* the game's convention, which never matched the game's 8-way numbering.) Anything consuming a track maps a facing to the nearest direction the track has, by angle; a facing exactly between two (NE on a 4-direction track) goes to the sideways one (E/W).
 - **Parts belong to the Track; Directions hold only keyframes.** The rig's slot list is declared once on the `Track` and exists in every direction. What differs per facing is the *keyframes*, which each `Direction` stores keyed by `Part.ID` — art commonly differs enough by facing (back of the head vs. front of it) that sharing one timeline across directions doesn't hold up, but the slot list itself does hold up. Switching direction in the editor therefore only changes which canvas and keyframes you see. A part with no keyframes in a given direction simply isn't drawn there; posing it in each facing is the artist's work, and which facings they pose is their call. (Corrected 2026-09-19: Parts previously lived *inside* each Direction, which meant importing a sheet produced a part visible only in direction 0 and forced the artist to maintain four parallel copies of the same slot list.)
 - **A Track carries a reference box, not a working area.** `RefBoxWidth`/`RefBoxHeight` (48x64 by default) size a character-sized guide the editor draws from the origin down-right, so parts can be placed relative to a real body footprint. It is *only* a guide: the coordinate space is unbounded and parts may sit at negative coordinates above or left of the origin (a raised sword, a trailing cape). These replaced the `CanvasWidth`/`CanvasHeight` "working area" of 2026-09-18, which implied a bound that never actually existed and forced the editor's canvas to clip rather than grow. Files written with the old `canvas_width`/`canvas_height` keys load with the defaults.
@@ -154,7 +154,7 @@ type PropDef struct {
 
 **In the editor, a prop is usually declared at import** (2026-10-01): ticking "Swappable art" when importing a sheet declares a prop (named after the sheet unless renamed) with that sheet as its default, or adds the sheet as another option for an existing prop. Parts dropped from a sheet a prop is currently set to are linked to that prop. Every place a prop's value is chosen is a pick-list of loaded sheets, since a value naming no loaded sheet makes linked parts draw nothing. To try other art on the fly, a preview override can also load any image file; it is sliced on the prop's default sheet's grid and pivot (as a swap would be at runtime) and is preview-only, never saved into the `.anif` and never written as a `.sprsh`.
 
-**Props are declared per-Track file, not in a shared "character" manifest.** This was an explicit choice (see discussion 2026-09-18): a `Character` manifest owning the schema once was considered and would prevent drift, but the team is staying small and would rather keep track files self-contained. The cost this accepts: nothing *structurally* guarantees `human_walk.anif` and `human_idle.anif` agree on what `hair` means or that it exists in both. A linter validating that a family of Track files (e.g. everything matching `human_*.anif`) agree on their prop schema is load-bearing, not a nice-to-have, because of the next point. **Built 2026-10-02** as `animaker lint <glob> [<glob> ...]` (`animaker/pkg/lint`): each glob is one character's family. Errors (exit code 1): a track lacking a prop another declares, or a prop holding sheets in one track and `.anif`s in another. Also errors: a nested part binding a prop its animation doesn't declare, or passing through a prop its own track lacks. Differing defaults are reported as info only. Grouping families with a config file instead of globs is still open.
+**Props are declared per-Track file, not in a shared "character" manifest.** This was an explicit choice (see discussion 2026-09-18), and still holds since the `.anichar` arrived (2026-10-03, #42): that manifest names a character's tracks but owns neither rig nor props. A `Character` manifest owning the schema once was considered and would prevent drift, but the team is staying small and would rather keep track files self-contained. The cost this accepts: nothing *structurally* guarantees `human_walk.anif` and `human_idle.anif` agree on what `hair` means or that it exists in both. A linter validating that a family of Track files (e.g. everything matching `human_*.anif`) agree on their prop schema is load-bearing, not a nice-to-have, because of the next point. **Built 2026-10-02** as `animaker lint <glob> [<glob> ...]` (`animaker/pkg/lint`): each glob is one character's family. Errors (exit code 1): a track lacking a prop another declares, or a prop holding sheets in one track and `.anif`s in another. Also errors: a nested part binding a prop its animation doesn't declare, or passing through a prop its own track lacks. Differing defaults are reported as info only. A glob matching `.anichar` files checks each character instead (2026-10-03): its animations are the family, so no glob is needed to say which tracks belong together, and each animation's markers must fall within its track.
 
 **Why the linter matters at runtime, specifically:** a character's prop values (customization) live on the runtime instance, not on any one Track, and are expected to carry over automatically when a state machine swaps which Track is playing (idle → walk). If two Tracks for the same character don't agree on prop names, that swap is exactly when a customization silently stops applying — a visible bug, not a theoretical one.
 
@@ -262,6 +262,62 @@ levels of subfolders) for a `.sprsh` declaring the needed name, and lists any
 sheet it still can't find. Keeping a track's sheets beside it is the expected
 layout.
 
+### `.anichar` (a Character) — TOML
+
+Optional (2026-10-03, #42). Names a character's animations and adds facts
+about each; never transitions, chaining or blend rules, which the engine's
+state machine owns (the same reasoning that rejected GANI's `setbackto`).
+Each `.anif` is unchanged by it and still usable alone — a torch or a chest
+needs no character.
+
+```toml
+# human.anichar
+name = "human"
+controller = "humanoid"     # optional: which engine controller drives it
+
+[animations.idle]
+anif = "human_idle.anif"    # relative to the .anichar
+mode = "loop"
+
+[animations.walk]
+anif = "human_walk.anif"
+mode = "loop"
+markers = { footstep = [0, 250] }
+
+[animations.sword_attack]
+anif = "human_sword_attack.anif"
+mode = "once"
+markers = { hit = 300, can_cancel = 450 }
+
+[animations.death]
+anif = "human_death.anif"
+mode = "hold"
+```
+
+- **Names** are what the engine plays by (`Play("walk")`): letters, digits
+  and `_`.
+- **mode:** `loop` (default), `once` (plays through; the runtime reports
+  when it finishes), or `hold` (stays on the last frame).
+- **markers:** named times in ms, one (`hit = 300`) or several
+  (`footstep = [0, 250]`), for presentation timing: footstep sounds, hit
+  sparks. **Gameplay timing is never read from them.** The server is
+  authoritative, so when a sword hit lands lives in gameplay data
+  (`sword: windup 300ms`), and a keyframe nudge can't change balance.
+  `animaker lint` checks markers fall within their track; checking them
+  against gameplay timing waits for that data to exist.
+- **controller** names the engine controller that drives the character,
+  which decides the animation names it needs (`humanoid`: idle, walk, run,
+  sword_attack). Lint will check them once controllers exist in the engine.
+
+In the editor: **File › New Character / Open Character** shows the
+character's animations above the palette. Clicking one opens its track;
+**Add Animation** makes a new track beside the `.anichar`
+(`<character>_<name>.anif`) from the open animation's rig (`RigFrom`, so
+parts and props agree), or an empty one, or adds an existing `.anif`. The
+open animation's play mode and markers are edited in the panel, and its
+markers are drawn on the timeline. The manifest holds no poses, so it's
+saved on every change rather than joining the track's unsaved work.
+
 ### `.sprsh` (a sprite sheet template) — TOML
 
 ```toml
@@ -312,7 +368,8 @@ Dropped from v1, confirmed during design discussion, not carried into v2:
 
 - **Hitboxes** (collision/attack boxes) and **events** (sound/particle/shake/flash) — dropped for this pass. Flagged as likely to partially return: "hit spark"-style one-off effects at a specific timeline instant are exactly what the old events system was for, and combat will probably need *something* like it. Not designed here — revisit when combat is actually being built.
 - **"Slash trail"-style motion-trail effects** — identified as a renderer-level concern that reads recent position/rotation history, not a rig/editor concern. The `.anif` format doesn't need to encode this at all.
-- **Character-level manifest/grouping file** — considered (see [Props](#props)), rejected in favor of per-Track schema + a linter (`animaker lint`).
+- **A character file owning the rig and props** (Spine's model, with `.anif`s holding only keyframes) — considered (see [Props](#props)), rejected in favor of per-Track schema + a linter (`animaker lint`). The `.anichar` (2026-10-03) is the narrower manifest: it names a character's tracks and adds play mode and markers, nothing more. Revisit owning the rig if keeping rigs in step across many animations becomes painful.
+- **Transitions, chaining and blend rules in any asset** — the engine's state machine owns them.
 - **Game-side loader/renderer** — not built this pass; see [Runtime design guidance](#runtime-design-guidance-not-built-this-pass) for constraints a future implementation should follow.
 - **Atlas packing / export pipeline** — deferred to a dedicated future session, once there's real authored content to pack.
 
@@ -358,7 +415,7 @@ Grounding the abstract model in the concrete case that shaped it:
 - A hairstyle content library ships `human_hair_v2_template.sprsh` — cell size and pivot fixed once. A sheet named `long_blonde` and another named `short_spikey` both conform to it: same cell size, same pivot, same `(row, col)` meaning per pose (`idle-0`, `idle-1`, `flinch`, `running-0`...`running-3`, laid out as columns = direction, rows = animation+frame). `human_walk.anif`'s `Hair` keyframes for a given walk frame reference, say, `(row=4, col=2)` — whatever hairstyle is currently equipped, that cell is used.
 - An artist authoring `human_burning.anif`'s `Hair` keyframes can deliberately reference the same cell used for "flinch" elsewhere (reuse, not automation) if it looks right for a burning reaction — nothing forces a 1:1 mapping between Track names and cell rows.
 - `human_torch_run.anif` — a `Track` with a `Torch` Part of kind `nested_ani`, `nested_ani_path = "base_wood_torch.anif"`. Its `direction` binding passes through from `human_torch_run`'s own active direction, so the torch turns with the character while its own 8-frame flicker loop keeps playing independently, unsynced to the walk cycle.
-- `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif` are three separate files, each independently declaring the same `hair`/`arms`/`legs`/`head`/`body` props (Option C — no shared manifest). `animaker lint "human_*.anif"` flags it if any of them drift out of agreement, since a running `AnimatedInstance`'s `Props` map is expected to keep applying correctly across a state-machine transition between all three.
+- `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif` are three separate files, each independently declaring the same `hair`/`arms`/`legs`/`head`/`body` props (Option C — no shared rig; `human.anichar` just names them as `walk`, `idle`, `sword_attack`). `animaker lint human.anichar` flags it if any of them drift out of agreement, since a running `AnimatedInstance`'s `Props` map is expected to keep applying correctly across a state-machine transition between all three.
 
 ---
 
