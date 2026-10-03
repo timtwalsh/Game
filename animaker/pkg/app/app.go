@@ -489,16 +489,20 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	a.refreshAll()
 }
 
-// onTileTapped re-points the selected keyframe at a different cell of the
-// palette's sheet. This is the counterpart to dragging: a click edits what
-// is already selected, a drag creates something new.
+// onTileTapped makes a clicked palette cell the selected part's frame at
+// the playhead, keeping its position (editor.Project.TapTile). This is the
+// counterpart to dragging: a click edits what is already selected, a drag
+// places something. A click that can't apply says why - it used to do
+// nothing at all unless a timeline marker happened to be selected.
 func (a *Application) onTileTapped(row, col int) {
-	kf := a.Project.SelectedKeyframe()
-	if kf == nil {
-		return
+	before := a.Project.TakeSnapshot()
+	kf, err := a.Project.TapTile(a.Project.PaletteSheet, row, col)
+	if err != nil {
+		a.showError(err)
+		return // nothing changed, so no undo step (it would also clear redo)
 	}
-	a.Project.RecordUndo()
-	kf.Row, kf.Col = row, col
+	a.Project.UndoStack.Push(before)
+	a.Project.Selection.KeyframeIndex = kf.Index
 	a.Project.Dirty = true
 	a.refreshAll()
 }

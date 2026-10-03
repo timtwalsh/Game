@@ -104,3 +104,50 @@ func TestEnsurePropKeepsAnExistingDefault(t *testing.T) {
 		t.Errorf("props = %+v, want one hair prop defaulting to hair_short", track.Props)
 	}
 }
+
+// Reported: select a part, click a tile - nothing happened unless a
+// timeline marker was selected. A click now keys the selected part at the
+// playhead with that cell, keeping its position.
+func TestTapTileKeysSelectedPartAtPlayheadKeepingPose(t *testing.T) {
+	p := NewProject("test")
+	dir := p.ActiveDirection()
+	idx, _ := p.DropTile("sprite", 0, 0, 10, 20)
+	p.Selection.PartIndex, p.Selection.KeyframeIndex = idx, -1 // as clicking the part leaves it
+	p.Scrub(200)
+
+	kf, err := p.TapTile("sprite", 0, 3)
+	if err != nil {
+		t.Fatalf("TapTile: %v", err)
+	}
+	kfs := dir.KeyframesFor(p.CurrentTrack.Parts[idx].ID)
+	if len(kfs) != 2 || kf != kfs[1] {
+		t.Fatalf("keyframes = %d, want a new one at the playhead", len(kfs))
+	}
+	if kf.TimeMs != 200 || kf.Col != 3 || kf.X != 10 || kf.Y != 20 {
+		t.Errorf("keyframe = %+v, want col 3 at 200ms, still at (10,20)", *kf)
+	}
+	if kfs[0].Col != 0 {
+		t.Errorf("first keyframe re-celled to %d, want it left at 0", kfs[0].Col)
+	}
+
+	// On a keyed time it re-cells that keyframe rather than adding one.
+	if _, err := p.TapTile("sprite", 0, 2); err != nil || len(dir.KeyframesFor(p.CurrentTrack.Parts[idx].ID)) != 2 || kf.Col != 2 {
+		t.Errorf("second tap: err %v, col %d, want the 200ms keyframe re-celled to 2", err, kf.Col)
+	}
+}
+
+func TestTapTileRefusesWithoutAPartOrFromAnotherSheet(t *testing.T) {
+	p := NewProject("test")
+	if _, err := p.TapTile("sprite", 0, 1); err == nil {
+		t.Error("tap with nothing selected: want an error, not a silent no-op")
+	}
+
+	idx, kf := p.DropTile("body", 0, 0, 0, 0)
+	p.Selection.PartIndex = idx
+	if _, err := p.TapTile("hair", 2, 5); err == nil {
+		t.Error("tap from another sheet: want an error")
+	}
+	if kf.Row != 0 || kf.Col != 0 {
+		t.Errorf("refused tap changed the keyframe to (%d,%d)", kf.Row, kf.Col)
+	}
+}
