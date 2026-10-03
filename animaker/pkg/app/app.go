@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -34,7 +33,7 @@ type Application struct {
 	canvasWidget *ui.CanvasWidget
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
-	directionSel *widget.Select
+	directionTabs *ui.DirectionTabs
 	// addFacingsBtn adds the four standard facings; disabled once the track
 	// has them all.
 	addFacingsBtn *widget.Button
@@ -138,30 +137,30 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 	a.titleLabel = widget.NewLabel(a.Project.CurrentTrack.Metadata.Name)
 	a.titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	a.directionSel = widget.NewSelect(nil, func(s string) {
-		key, err := strconv.Atoi(s)
-		if err != nil {
-			return
-		}
-		// The Select re-fires this on every programmatic SetSelected
-		// (undo, load, refreshDirectionSelect), which always names the
-		// direction already active - so only a real switch can prompt.
-		switched := key != a.Project.Playback.ActiveDirection
-		a.Project.SetActiveDirection(key)
-		a.refreshAll()
-		if switched {
-			a.offerTimingCopy(key)
-		}
-	})
+	a.directionTabs = ui.NewDirectionTabs()
+	a.directionTabs.OnSelect = a.switchDirection
 	// New tracks have one direction; a character needs the four facings,
 	// so that's one click rather than four trips through Add Direction.
 	a.addFacingsBtn = widget.NewButton("+ Up/Right/Down/Left", a.onAddStandardDirections)
 	a.refreshDirectionSelect()
 
-	addDirBtn := widget.NewButton("+ Add Direction", a.onAddDirection)
+	addDirBtn := widget.NewButton("+ Direction...", a.onAddDirection)
 
-	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel,
-		a.addFacingsBtn, addDirBtn)
+	return container.NewVBox(
+		container.NewHBox(a.titleLabel, layout.NewSpacer(), a.addFacingsBtn, addDirBtn),
+		a.directionTabs.Object(),
+	)
+}
+
+// switchDirection makes key the facing being edited, offering to copy
+// timing into it if it's empty.
+func (a *Application) switchDirection(key int) {
+	if _, ok := a.Project.CurrentTrack.Directions[key]; !ok || key == a.Project.Playback.ActiveDirection {
+		return
+	}
+	a.Project.SetActiveDirection(key)
+	a.refreshAll()
+	a.offerTimingCopy(key)
 }
 
 // onAddStandardDirections adds whichever of the four facings the track
@@ -177,17 +176,13 @@ func (a *Application) onAddStandardDirections() {
 	a.refreshAll()
 }
 
+// refreshDirectionSelect rebuilds the direction tabs - their keyframe
+// counts change with every edit, so refreshAll calls it too.
 func (a *Application) refreshDirectionSelect() {
-	keys := a.Project.CurrentTrack.SortedDirectionKeys()
-	options := make([]string, len(keys))
-	for i, k := range keys {
-		options[i] = strconv.Itoa(k)
+	if a.directionTabs == nil {
+		return
 	}
-	a.directionSel.Options = options
-	if len(options) > 0 {
-		a.directionSel.SetSelected(strconv.Itoa(a.Project.Playback.ActiveDirection))
-	}
-	a.directionSel.Refresh()
+	a.directionTabs.Refresh(a.Project.CurrentTrack, a.Project.Playback.ActiveDirection)
 	if a.addFacingsBtn != nil {
 		if a.Project.CurrentTrack.HasStandardDirections() {
 			a.addFacingsBtn.Disable()
@@ -457,6 +452,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnKeyframeChanged = func() {
 		a.canvasWidget.Refresh()
 		a.timeline.Refresh()
+		a.refreshDirectionSelect() // an edit can create a keyframe: the counts change
 	}
 	a.properties.OnPartChanged = func() {
 		a.canvasWidget.Refresh()
@@ -1158,6 +1154,7 @@ func (a *Application) refreshAll() {
 	if a.titleLabel != nil {
 		a.titleLabel.SetText(a.Project.CurrentTrack.Metadata.Name)
 	}
+	a.refreshDirectionSelect()
 	a.updateTitle()
 }
 

@@ -813,6 +813,6 @@ func (tw *TimelineWidget) buildInfoText() string {
 	// ruler runs past the end of the animation (see scrubArea.totalMs), so
 	// "120ms / 0ms" would otherwise look like a bug rather than a playhead
 	// parked in the empty space where the next keyframe goes.
-	return fmt.Sprintf("Direction: %d   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d   |   Ctrl+wheel to zoom, drag a marker to retime",
-		tw.project.Playback.ActiveDirection, tw.project.Playback.ElapsedMs, total, partCount)
+	return fmt.Sprintf("Direction: %s   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d   |   Ctrl+wheel to zoom, drag a marker to retime",
+		directionName(tw.project.Playback.ActiveDirection), tw.project.Playback.ElapsedMs, total, partCount)
 }

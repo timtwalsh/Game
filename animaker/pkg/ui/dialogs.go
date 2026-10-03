@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -409,14 +410,14 @@ func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name st
 func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy func(src int)) {
 	options := make([]string, len(sources))
 	for i, k := range sources {
-		options[i] = strconv.Itoa(k)
+		options[i] = directionName(k)
 	}
 	srcSelect := widget.NewSelect(options, nil)
 	srcSelect.SetSelected(options[0])
 
-	msg := widget.NewLabel(fmt.Sprintf("Direction %d has no keyframes yet. Copy the keyframe times "+
+	msg := widget.NewLabel(fmt.Sprintf("The %s direction has no keyframes yet. Copy the keyframe times "+
 		"from another direction as a starting point? Only the timing is copied: every "+
-		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", target))
+		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", directionName(target)))
 	msg.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
@@ -430,8 +431,8 @@ func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy fun
 			if !confirmed || onCopy == nil {
 				return
 			}
-			if src, err := strconv.Atoi(srcSelect.Selected); err == nil {
-				onCopy(src)
+			if i := slices.Index(options, srcSelect.Selected); i >= 0 {
+				onCopy(sources[i])
 			}
 		},
 		win,
