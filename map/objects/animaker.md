@@ -485,6 +485,51 @@ feedback after using the previous version:
       on every sort, never saved - not an identity.
     - **`animaker lint <glob>...`** (`pkg/lint`) checks a character's
       tracks agree on their props; see the spec's Props section.
+24. **Artist UX review** (2026-10-03; issues timtwalsh/Game#26-#39,
+    one commit each). Walked each artist journey through the code.
+    - **Directions**: new tracks start with **one direction (0)**, not
+      four - a torch meant to be non-directional had three empty facings
+      by accident. "+ Up/Right/Down/Left" adds the standard facings
+      (`AddStandardDirections`). The direction bar is a row of tabs
+      named by facing with keyframe counts, unposed ones in the warning
+      colour (`ui.DirectionTabs`). A nested animation's empty direction
+      now falls back to a posed one (`pickDirection`), which is what
+      made that torch vanish whenever its parent turned.
+    - **Palette**: clicking a tile keys the selected part at the playhead
+      with that cell, keeping its position (`Project.TapTile`); it used
+      to do nothing unless a timeline marker was selected, and could
+      write another sheet's cell onto the part. A drop that adds a part
+      opens its rename dialog. Dragging shows a faint preview where the
+      tile will land (`CanvasWidget.SetDropPreview`). "Edit..." reopens
+      the sheet on show in the import dialog.
+    - **Import dialog** draws the image with its grid and every cell's
+      pivot live (`ui.SheetSetupPreview`); clicking a cell places the
+      pivot. New images start from a common cell size that divides them
+      (`SuggestCellSize`) and a bottom-centre pivot.
+    - **Placement** snaps to whole pixels (`editor.SnapPosition`; Alt
+      for sub-pixel). Timeline retimes snap to other parts' keyframes,
+      with a guide line, else the tick grid; clicks/scrubs snap onto
+      keys (`editor.SnapTime`, `Direction.KeyTimes`; Alt for free).
+    - **Keyboard** (`app.onTypedKey`, operations in `editor/shortcuts.go`,
+      list in `ui.ShortcutHelp` / Help > Keyboard Shortcuts): Space
+      play/pause, `,`/`.` keyframe step (Shift: 50ms), arrows nudge,
+      Delete, 1-4 directions, F2 rename, O onion skin, Ctrl+[ / ] draw
+      order (Shift: front/back), Ctrl+Shift+S, Ctrl+I.
+    - **Onion skin** (`CanvasWidget.ToggleOnion`): the selected part's
+      poses at its neighbouring keyframes, faint, not while playing.
+    - **Draw order** "To Back"/"To Front" buttons (`ZOrderTarget`);
+      Rotation is labelled "not previewed" and a selected part's
+      rotation is drawn as a tick from its pivot.
+    - **Props**: each schema row's default is a picker
+      (`Project.SetPropDefault`, undoable, same kind and loaded only).
+    - **File > New Track from Rig...** (`editor.RigFrom`,
+      `app.loadAndOpen`): a track's parts, props, sheets and directions
+      without keyframes, opened as unsaved new work.
+    - Not built, pending decisions: whether a drop on the selected part
+      should keep its position (#27), and mirroring a direction via a
+      cell-to-direction mapping on sheets (#40, design).
+    - `Application.build` is split out of `Run` so app tests drive the
+      real UI (`pkg/app/shortcuts_test.go`, `rig_test.go`).
 
 ## Shape
 
@@ -645,26 +690,23 @@ Deliberate scope cuts, not oversights:
 
 - **Rotation isn't visually applied** in the canvas (Fyne has no simple
   rotated-image primitive) — see `canvas.go` above. It's captured in
-  every keyframe and round-trips through save/load correctly. (Nested
-  animations, once listed here too, have played live in the canvas since
-  2026-10-01.)
-- **No ghost/preview image follows the cursor during a drag** from the
-  sheet grid to the canvas — the cell is picked up at drag-start and
-  placed at drag-end with no visual feedback in between.
-- **No keyboard arrow-key nudging** — GraalShop supports both clicking
-  its nudge arrows and pressing the keyboard arrow keys for pixel-by-pixel
-  movement; only the click-buttons (`buildNudgeControls`) were built here.
-  Wiring plain (non-modifier) arrow keys risks conflicting with Fyne
-  `Entry` widgets' own cursor-movement handling, so it needs more care
-  than a quick add.
+  every keyframe and round-trips through save/load correctly; the field
+  says "not previewed" and a selected part's rotation is drawn as a tick
+  (entry 24). (Nested animations, once listed here too, have played
+  live in the canvas since 2026-10-01.)
+- **Single-key shortcuts need the canvas to have focus**: arrows, Space,
+  Delete etc. go to the canvas only while no text field is focused
+  (Fyne routes them to a focused `Entry` first), so after typing in a
+  field, click the canvas. (The drag preview and arrow-key nudging, once
+  listed here, were built in entry 24.)
 - **The palette shows one sheet at a time**, picked from a dropdown,
   rather than every loaded sheet at once the way GraalShop's Sprite Book
   does. Not a data-model limit — `onTileDropped` now receives the sheet
   name — just an unbuilt layout.
 - **Timeline zoom is per-session** — it resets to 100% on restart and
-  isn't saved with the track. Retiming has **no snapping**, so a dragged
-  marker lands on whatever ms the cursor maps to; zooming in is the way
-  to place one precisely.
+  isn't saved with the track. (Retiming snaps since entry 24.)
+- **The onion skin covers sheet parts only**; a nested part shows no
+  ghosts.
 - `docs/ANI_MAKER_SPEC.md`'s "Open questions" (how one prop fans out to
   multiple physical sheets; the sword "bent state"; hit-spark events)
   now carry the owner's answers there: separate parts get separate
@@ -771,6 +813,19 @@ these on `windows-latest` and `ubuntu-latest`. The rest of `pkg/ui` and
 it stays responsive is a real part of the check here, not a formality: a
 `Select.ClearSelected()` recursion once shipped as a startup
 stack-overflow that `go test` could not have caught.
+
+Added with entry 24: `pkg/editor/shortcuts_test.go` (play/pause, keyframe
+stepping, edit target, delete target, Z order), `drop_test.go`'s
+`TapTile` cases, `keyframe_ops_test.go`'s `SnapPosition`/`SnapTime`/
+`KeyTimes`/`NeighbourKeyframes`, `nested_test.go`'s empty-direction
+fallback (confirmed to fail on the old `pickDirection`),
+`timeline_test.go`'s one-direction default, `track_test.go`'s `RigFrom`;
+`pkg/ui/direction_tabs_test.go`, `sheet_setup_test.go`,
+`props_schema_test.go`, the onion-skin and drop-preview cases in
+`canvas_render_test.go`, the retime/scrub snapping case in
+`timeline_test.go`; and `pkg/app/shortcuts_test.go` / `rig_test.go`,
+which build the real UI via `Application.build` and drive keys, drops
+and New Track from Rig.
 
 ## See
 
