@@ -224,3 +224,50 @@ func SnapPosition(x, y float32, subPixel bool) (float32, float32) {
 	}
 	return float32(math.Round(float64(x))), float32(math.Round(float64(y)))
 }
+
+// KeyTimes lists every keyframe time in the direction, sorted and without
+// repeats, leaving out the part exceptPartID (-1 to keep every part).
+// These are what timeline drags snap to.
+func (d *Direction) KeyTimes(exceptPartID int) []uint32 {
+	seen := map[uint32]bool{}
+	var out []uint32
+	for id, kfs := range d.Keyframes {
+		if id == exceptPartID {
+			continue
+		}
+		for _, kf := range kfs {
+			if !seen[kf.TimeMs] {
+				seen[kf.TimeMs] = true
+				out = append(out, kf.TimeMs)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// SnapTime snaps a dragged time t: to the nearest of targets if one is
+// within `within` ms (onTarget is then true), else to the nearest multiple
+// of grid (0 = no grid). Targets win over the grid so parts' keyframes
+// line up: the spec has keyframes share tick times within a direction,
+// and free dragging let them drift to 598ms against 603ms.
+func SnapTime(t uint32, targets []uint32, within, grid uint32) (snapped uint32, onTarget bool) {
+	best, bestDist := uint32(0), uint32(0)
+	found := false
+	for _, tt := range targets {
+		dist := tt - t
+		if t > tt {
+			dist = t - tt
+		}
+		if dist <= within && (!found || dist < bestDist) {
+			best, bestDist, found = tt, dist, true
+		}
+	}
+	if found {
+		return best, true
+	}
+	if grid > 0 {
+		return (t + grid/2) / grid * grid, false
+	}
+	return t, false
+}

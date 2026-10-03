@@ -208,3 +208,39 @@ func TestSnapPositionRoundsToWholePixelsUnlessSubPixel(t *testing.T) {
 		t.Errorf("sub-pixel = (%v, %v), want the exact point", x, y)
 	}
 }
+
+func TestSnapTimePrefersOtherKeysThenGrid(t *testing.T) {
+	keys := []uint32{100, 600}
+	cases := []struct {
+		t, want uint32
+		onKey   bool
+	}{
+		{597, 600, true},  // near another part's key
+		{606, 600, true},  // either side
+		{340, 350, false}, // nothing near: the 50ms grid
+		{324, 300, false},
+		{104, 100, true},
+	}
+	for _, c := range cases {
+		if got, on := SnapTime(c.t, keys, 8, 50); got != c.want || on != c.onKey {
+			t.Errorf("SnapTime(%d) = %d, %v; want %d, %v", c.t, got, on, c.want, c.onKey)
+		}
+	}
+	if got, _ := SnapTime(343, nil, 8, 0); got != 343 {
+		t.Errorf("no targets, no grid: %d, want 343 unchanged", got)
+	}
+}
+
+func TestKeyTimesLeavesOutThePartBeingMoved(t *testing.T) {
+	dir := NewDirection()
+	AddKeyframe(dir, 1, 0)
+	AddKeyframe(dir, 1, 200)
+	AddKeyframe(dir, 2, 200)
+	AddKeyframe(dir, 2, 350)
+	if got := dir.KeyTimes(1); len(got) != 2 || got[0] != 200 || got[1] != 350 {
+		t.Errorf("KeyTimes(1) = %v, want [200 350]", got)
+	}
+	if got := dir.KeyTimes(-1); len(got) != 3 {
+		t.Errorf("KeyTimes(-1) = %v, want [0 200 350]", got)
+	}
+}

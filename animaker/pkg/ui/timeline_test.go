@@ -176,3 +176,44 @@ func TestTimelineShowsNewProjectsPlaybackSettings(t *testing.T) {
 		t.Error("syncing the widgets changed the project's settings")
 	}
 }
+
+// Dragging a marker snaps onto another part's keyframe when close, else
+// onto the ruler's tick grid; a click near a keyframe scrubs exactly to it.
+func TestTimelineDragsSnap(t *testing.T) {
+	test.NewTempApp(t)
+	p := editor.NewProject("t")
+	dir := p.ActiveDirection()
+	body := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("body", "", "s"))
+	head := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("head", "", "s"))
+	editor.AddKeyframe(dir, body.ID, 0)
+	editor.AddKeyframe(dir, body.ID, 200)
+	editor.AddKeyframe(dir, head.ID, 600)
+
+	s := newScrubArea(p) // 2ms per pixel: snaps within 12ms, 20ms tick grid
+	var got []uint32
+	s.OnRetime = func(_ int, _ *editor.Keyframe, ms uint32) { got = append(got, ms) }
+
+	// Grab body's 200ms marker and drag it to ~593ms, then to ~331ms.
+	rowY := float32(timelineRulerHeight + timelineRowHeight/2)
+	start := fyne.NewPos(s.xForTime(200), rowY)
+	to := func(ms float32) {
+		pos := fyne.NewPos(start.X+(ms-200)/s.msPerPixel, rowY)
+		s.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{Position: pos}, Dragged: fyne.NewDelta(pos.X-start.X, 0)})
+	}
+	to(593)
+	if s.snapMarkMs != 600 {
+		t.Errorf("snap guide at %d, want 600 (head's key)", s.snapMarkMs)
+	}
+	to(331)
+	s.DragEnd()
+	if len(got) != 2 || got[0] != 600 || got[1] != 340 {
+		t.Errorf("retimed to %v, want [600 340]", got)
+	}
+
+	var scrubbed uint32
+	s.OnScrub = func(ms uint32) { scrubbed = ms }
+	s.scrubTo(s.xForTime(604))
+	if scrubbed != 600 {
+		t.Errorf("click near 600ms scrubbed to %d, want 600", scrubbed)
+	}
+}
