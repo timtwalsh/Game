@@ -45,6 +45,7 @@ type PropertiesPanel struct {
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
 	OnTileDragStart func()
+	OnTileDragMove  func(sheetName string, row, col int, absPos fyne.Position)
 	OnTileDropped   func(sheetName string, row, col int, absPos fyne.Position)
 	OnTileTapped    func(row, col int)
 	OnImport        func()
@@ -64,6 +65,8 @@ type PropertiesPanel struct {
 	OnLoadPreviewSheet func(propName string)
 	// OnRemoveSheet asks app.go to remove an imported sheet; it confirms.
 	OnRemoveSheet func(sheetName string)
+	// OnEditSheet asks app.go to reopen a sheet's grid and pivot settings.
+	OnEditSheet func(sheetName string)
 }
 
 func NewPropertiesPanel(project *editor.Project) *PropertiesPanel {
@@ -130,7 +133,7 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 	pp.rigScroll = container.NewVScroll(pp.rigBox)
 
 	propsHint := widget.NewLabel("A prop is a swappable art slot (e.g. hair). Its value is a sheet; " +
-		"parts linked to it draw from that sheet. Tick \"Swappable art\" when importing to make one.")
+		"parts linked to it draw from that sheet. Tick \"Swappable art\" when importing to make one; pick its default below.")
 	propsHint.Wrapping = fyne.TextWrapWord
 	propsArea := container.NewVScroll(container.NewVBox(
 		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn), propsHint, pp.schemaBox,
@@ -163,7 +166,8 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 
 	hint := widget.NewLabel("Drag a tile onto the canvas: with a part selected it keys that part " +
 		"at the playhead; with nothing selected (Esc) it adds a new part. " +
-		"Click a tile to re-cell the selected keyframe.")
+		"Click a tile to make it the selected part's frame at the playhead. " +
+		"Parts snap to whole pixels; hold Alt while dropping or dragging to place between them.")
 	hint.Wrapping = fyne.TextWrapWord
 
 	// Removes the sheet on show from the track - e.g. one imported by
@@ -174,9 +178,15 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 		}
 	})
 	removeBtn.Importance = widget.DangerImportance
+	// Reopens the sheet on show's cell size and pivot over its image.
+	editBtn := widget.NewButton("Edit...", func() {
+		if pp.OnEditSheet != nil && pp.project.PaletteSheet != "" {
+			pp.OnEditSheet(pp.project.PaletteSheet)
+		}
+	})
 
 	header := container.NewVBox(
-		container.NewBorder(nil, nil, nil, removeBtn, pp.paletteSelect),
+		container.NewBorder(nil, nil, nil, container.NewHBox(editBtn, removeBtn), pp.paletteSelect),
 		pp.paletteLabel,
 	)
 	return container.NewBorder(header, hint, nil, nil, container.NewScroll(pp.sheetGrid))
@@ -212,6 +222,11 @@ func (pp *PropertiesPanel) ensureSheetGrid() {
 	pp.sheetGrid.OnDragStart = func() {
 		if pp.OnTileDragStart != nil {
 			pp.OnTileDragStart()
+		}
+	}
+	pp.sheetGrid.OnDragMove = func(row, col int, absPos fyne.Position) {
+		if pp.OnTileDragMove != nil {
+			pp.OnTileDragMove(pp.project.PaletteSheet, row, col, absPos)
 		}
 	}
 	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
@@ -560,14 +575,14 @@ func (pp *PropertiesPanel) buildNestedDirection(part *editor.Part) {
 }
 
 // nestedDirectionKeys lists the directions the part's nested animation
-// has, or the four defaults if it isn't loaded.
+// has, or the four standard facings if it isn't loaded.
 func (pp *PropertiesPanel) nestedDirectionKeys(part *editor.Part) []int {
 	if anim := pp.project.ResolveNestedAnim(part); anim != nil {
 		if keys := anim.Track.SortedDirectionKeys(); len(keys) > 0 {
 			return keys
 		}
 	}
-	return editor.DefaultDirectionKeys
+	return editor.StandardDirectionKeys
 }
 
 // directionLabel names a direction key the way the game numbers them.
@@ -713,7 +728,9 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		widget.NewLabel("X"), xEntry,
 		widget.NewLabel("Y"), yEntry,
 		widget.NewLabel("Z"), zEntry,
-		widget.NewLabel("Rotation"), rotEntry,
+		// The canvas can't draw rotation (see canvas.go), so say so rather
+		// than leave a field that seems to do nothing.
+		widget.NewLabel("Rotation (not previewed)"), rotEntry,
 	)
 	if kf != nil {
 		pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms  (row %d, col %d)", part.Name, kf.TimeMs, kf.Row, kf.Col)))
@@ -826,6 +843,15 @@ func (pp *PropertiesPanel) buildNudgeControls(beginEdit func() *editor.Keyframe)
 			pp.refreshKeyframe()
 		}
 	}
+	// To Front / To Back put the part in front of / behind every other
+	// part posed at the playhead (Ctrl+Shift+] / [ do the same).
+	zOrder := func(label string, front bool) *widget.Button {
+		return widget.NewButton(label, func() {
+			if z, ok := pp.project.ZOrderTarget(front); ok {
+				nudge(func(kf *editor.Keyframe) { kf.Z = z })()
+			}
+		})
+	}
 
 	xyPad := container.NewGridWithColumns(3,
 		layout.NewSpacer(),
@@ -844,13 +870,18 @@ func (pp *PropertiesPanel) buildNudgeControls(beginEdit func() *editor.Keyframe)
 		widget.NewButton("Back -", nudge(func(kf *editor.Keyframe) { kf.Z -= nudgeStepZ })),
 		widget.NewButton("Fwd +", nudge(func(kf *editor.Keyframe) { kf.Z += nudgeStepZ })),
 	)
+	zOrderRow := container.NewHBox(
+		widget.NewLabel("Draw order:"),
+		zOrder("To Back", false),
+		zOrder("To Front", true),
+	)
 	rotRow := container.NewHBox(
 		widget.NewLabel("Rot:"),
 		widget.NewButton("-", nudge(func(kf *editor.Keyframe) { kf.RotationDeg -= nudgeStepRot })),
 		widget.NewButton("+", nudge(func(kf *editor.Keyframe) { kf.RotationDeg += nudgeStepRot })),
 	)
 
-	return container.NewVBox(xyPad, zRow, rotRow)
+	return container.NewVBox(xyPad, zRow, zOrderRow, rotRow)
 }
 
 func (pp *PropertiesPanel) notifyKeyframeChanged() {
@@ -1076,11 +1107,29 @@ func (pp *PropertiesPanel) refreshSchema() {
 	pp.schemaBox.RemoveAll()
 	for i, prop := range pp.project.CurrentTrack.Props {
 		idx := i
-		def := prop.Default
+		name := prop.Name
+		// The default is a pick-list of values of the prop's own kind, so it
+		// can be changed after the prop is made (Project.SetPropDefault).
+		// Preview-only sheets aren't offered: they're never saved.
+		values := sheetPickerOptions(pp.project.LoadedSheetNames(), prop.Default)
+		labels := values
 		if prop.IsAnimProp() {
-			def = filepath.Base(def)
+			values = sheetPickerOptions(pp.project.LoadedAnimPaths(), prop.Default)
+			labels = AnimLabels(values)
 		}
-		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, def))
+		defSelect := widget.NewSelect(labels, nil)
+		defSelect.SetSelected(labelFor(labels, values, prop.Default))
+		// Assigned after SetSelected, which would re-fire it.
+		defSelect.OnChanged = func(label string) {
+			changed, err := pp.project.SetPropDefault(name, valueFor(labels, values, label))
+			if err != nil && pp.OnError != nil {
+				pp.OnError(err)
+			}
+			if (changed || err != nil) && pp.OnPropsChanged != nil {
+				pp.OnPropsChanged() // on an error too, to put the picker back
+			}
+		}
+		label := widget.NewLabel(name + ":")
 		delBtn := widget.NewButton("x", func() {
 			if err := pp.project.RemoveProp(idx); err != nil {
 				if pp.OnError != nil {
@@ -1093,7 +1142,7 @@ func (pp *PropertiesPanel) refreshSchema() {
 			}
 		})
 		delBtn.Importance = widget.DangerImportance
-		pp.schemaBox.Add(container.NewBorder(nil, nil, nil, delBtn, label))
+		pp.schemaBox.Add(container.NewBorder(nil, nil, label, delBtn, defSelect))
 	}
 	pp.schemaBox.Refresh()
 }

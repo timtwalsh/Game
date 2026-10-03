@@ -223,18 +223,18 @@ const (
 	DefaultRefBoxHeight = 64
 )
 
-// DefaultDirectionKeys are the four facings every track starts with, in the
-// game's own convention. A track almost always needs all four, and adding
-// them up front is cheaper than making the artist create each by hand;
-// unused ones simply stay empty and cost nothing on disk beyond a header.
-var DefaultDirectionKeys = []int{0, 1, 2, 3} // 0=up, 1=right, 2=down, 3=left
+// StandardDirectionKeys are the four facings of the game's own convention.
+// A track gets them only when the artist asks (AddStandardDirections).
+var StandardDirectionKeys = []int{0, 1, 2, 3} // 0=up, 1=right, 2=down, 3=left
 
-// NewTrack creates a track with the four default directions and no parts.
+// NewTrack creates a track with a single direction, 0, and no parts.
+//
+// One, not the four standard facings: many assets (a torch, a chest, an
+// effect) are non-directional, and seeding four left them with three empty
+// facings by accident - which a nested animation then played as nothing.
+// Adding facings is a deliberate step (AddStandardDirections).
 func NewTrack(name string) *Track {
-	dirs := make(map[int]*Direction, len(DefaultDirectionKeys))
-	for _, k := range DefaultDirectionKeys {
-		dirs[k] = NewDirection()
-	}
+	dirs := map[int]*Direction{0: NewDirection()}
 	return &Track{
 		Metadata:     TrackMetadata{Name: name, Version: "1.0"},
 		Props:        []PropDef{},

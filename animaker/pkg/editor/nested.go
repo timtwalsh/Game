@@ -210,16 +210,20 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 }
 
 // pickDirection is the direction of t that plays when want is asked for:
-// want itself, or t's first direction if t doesn't have it.
+// want itself, or t's first posed direction if t doesn't pose want. A
+// direction that exists but has no keyframes counts as missing - a torch
+// saved with the old four-direction default but only posed facing up must
+// still show when its parent faces right, not play an empty facing.
 func pickDirection(t *Track, want int) (int, bool) {
-	if _, ok := t.Directions[want]; ok {
+	if d := t.Directions[want]; d != nil && d.TotalKeyframes() > 0 {
 		return want, true
 	}
-	keys := t.SortedDirectionKeys()
-	if len(keys) == 0 {
-		return 0, false
+	for _, k := range t.SortedDirectionKeys() {
+		if t.Directions[k].TotalKeyframes() > 0 {
+			return k, true
+		}
 	}
-	return keys[0], true
+	return 0, false
 }
 
 // childProps resolves a nested track's prop values: each binding either

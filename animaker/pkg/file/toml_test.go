@@ -10,6 +10,7 @@ import (
 
 func TestSaveLoadTrackRoundTrip(t *testing.T) {
 	track := editor.NewTrack("human_walk")
+	editor.AddStandardDirections(track)
 	editor.AddProp(track, "hair", "long_blonde")
 	editor.AddProp(track, "arms", "leather")
 

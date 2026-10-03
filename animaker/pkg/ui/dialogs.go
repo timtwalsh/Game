@@ -4,7 +4,9 @@ import (
 	"animaker/pkg/editor"
 	"errors"
 	"fmt"
+	"image"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -59,21 +61,27 @@ type SheetImport struct {
 // and one pivot for the whole sheet, and say whether it's swappable art
 // for a prop. prefill returns the settings to start from for an image
 // that already has a template (ok false for a new one), so re-importing a
-// sheet doesn't mean retyping its grid.
-func ShowImportSheetDialog(win fyne.Window, prefill func(imagePath string) (SheetImport, bool), onImport func(SheetImport)) {
+// sheet doesn't mean retyping its grid. loadImage reads the image for the
+// dialog's preview; if it fails the dialog still works, without one.
+func ShowImportSheetDialog(win fyne.Window, prefill func(imagePath string) (SheetImport, bool),
+	loadImage func(path string) (image.Image, error), onImport func(SheetImport)) {
 	fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil || reader == nil {
 			return
 		}
 		filePath := reader.URI().Path()
 		reader.Close()
-		start := SheetImport{CellW: 32, CellH: 32, PivotX: 16, PivotY: 16}
+		var img image.Image
+		if loadImage != nil {
+			img, _ = loadImage(filePath) // no preview if it can't be read; Import reports why
+		}
+		start := newSheetDefaults(img)
 		if prefill != nil {
 			if p, ok := prefill(filePath); ok {
 				start = p
 			}
 		}
-		showSheetGridDialog(win, filePath, start, onImport)
+		showSheetGridDialog(win, "Import Sprite Sheet", "Import", filePath, img, start, onImport)
 	}, win)
 
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
@@ -81,7 +89,27 @@ func ShowImportSheetDialog(win fyne.Window, prefill func(imagePath string) (Shee
 	fd.Show()
 }
 
-func showSheetGridDialog(win fyne.Window, filePath string, start SheetImport, onImport func(SheetImport)) {
+// ShowEditSheetDialog reopens an imported sheet's settings - grid, pivot,
+// name - over its image, without finding the file again. The result goes
+// through the same path as an import (onImport).
+func ShowEditSheetDialog(win fyne.Window, filePath string, img image.Image, current SheetImport, onImport func(SheetImport)) {
+	showSheetGridDialog(win, "Edit Sprite Sheet", "Apply", filePath, img, current, onImport)
+}
+
+// newSheetDefaults is where a sheet with no saved template starts: a cell
+// size that divides the image evenly if a common one does, and a
+// bottom-centre pivot.
+func newSheetDefaults(img image.Image) SheetImport {
+	cw, ch := 32, 32
+	if img != nil {
+		b := img.Bounds()
+		cw, ch = SuggestCellSize(b.Dx(), b.Dy())
+	}
+	px, py := DefaultPivot(cw, ch)
+	return SheetImport{CellW: cw, CellH: ch, PivotX: px, PivotY: py}
+}
+
+func showSheetGridDialog(win fyne.Window, title, confirm, filePath string, img image.Image, start SheetImport, onImport func(SheetImport)) {
 	baseName := filepath.Base(filePath)
 	defaultName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	if start.Name != "" {
@@ -105,6 +133,28 @@ func showSheetGridDialog(win fyne.Window, filePath string, start SheetImport, on
 	pivotXEntry := validatedEntry(formatFloat(start.PivotX), number)
 	pivotYEntry := validatedEntry(formatFloat(start.PivotY), number)
 
+	// The sheet with its grid and pivot, redrawn as the numbers change;
+	// clicking a cell places the pivot.
+	var preview *SheetSetupPreview
+	if img != nil {
+		preview = NewSheetSetupPreview(img)
+		update := func(string) {
+			cw, _ := strconv.Atoi(strings.TrimSpace(cellWEntry.Text))
+			ch, _ := strconv.Atoi(strings.TrimSpace(cellHEntry.Text))
+			px, _ := strconv.ParseFloat(strings.TrimSpace(pivotXEntry.Text), 32)
+			py, _ := strconv.ParseFloat(strings.TrimSpace(pivotYEntry.Text), 32)
+			preview.SetGrid(cw, ch, float32(px), float32(py))
+		}
+		for _, e := range []*selectAllEntry{cellWEntry, cellHEntry, pivotXEntry, pivotYEntry} {
+			e.OnChanged = update
+		}
+		update("")
+		preview.OnPivotPicked = func(x, y float32) {
+			pivotXEntry.SetText(formatFloat(x))
+			pivotYEntry.SetText(formatFloat(y))
+		}
+	}
+
 	// The prop name defaults to the sheet name, so the common case (this
 	// sheet is the first art for a new slot) is one tick. Naming an
 	// existing prop adds this sheet as another option for it instead.
@@ -126,20 +176,24 @@ func showSheetGridDialog(win fyne.Window, filePath string, start SheetImport, on
 		"Parts made from this sheet's tiles will follow it.")
 	propHint.Wrapping = fyne.TextWrapWord
 
+	items := []*widget.FormItem{{Text: "File", Widget: widget.NewLabel(filePath)}}
+	if preview != nil {
+		items = append(items, &widget.FormItem{Text: "", Widget: preview})
+	}
+	items = append(items,
+		&widget.FormItem{Text: "Sheet Name", Widget: nameEntry},
+		&widget.FormItem{Text: "Cell Width", Widget: cellWEntry},
+		&widget.FormItem{Text: "Cell Height", Widget: cellHEntry},
+		&widget.FormItem{Text: "Pivot X", Widget: pivotXEntry},
+		&widget.FormItem{Text: "Pivot Y", Widget: pivotYEntry},
+		&widget.FormItem{Text: "", Widget: propCheck},
+		&widget.FormItem{Text: "Prop Name", Widget: propEntry},
+		&widget.FormItem{Text: "", Widget: propHint},
+	)
 	form := dialog.NewForm(
-		"Import Sprite Sheet",
-		"Import", "Cancel",
-		[]*widget.FormItem{
-			{Text: "File", Widget: widget.NewLabel(filePath)},
-			{Text: "Sheet Name", Widget: nameEntry},
-			{Text: "Cell Width", Widget: cellWEntry},
-			{Text: "Cell Height", Widget: cellHEntry},
-			{Text: "Pivot X", Widget: pivotXEntry},
-			{Text: "Pivot Y", Widget: pivotYEntry},
-			{Text: "", Widget: propCheck},
-			{Text: "Prop Name", Widget: propEntry},
-			{Text: "", Widget: propHint},
-		},
+		title,
+		confirm, "Cancel",
+		items,
 		func(confirmed bool) {
 			if !confirmed || onImport == nil {
 				return
@@ -160,7 +214,11 @@ func showSheetGridDialog(win fyne.Window, filePath string, start SheetImport, on
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(460, 520))
+	if preview != nil {
+		form.Resize(fyne.NewSize(620, 760))
+	} else {
+		form.Resize(fyne.NewSize(460, 520))
+	}
 	form.Show()
 }
 
@@ -409,14 +467,14 @@ func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name st
 func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy func(src int)) {
 	options := make([]string, len(sources))
 	for i, k := range sources {
-		options[i] = strconv.Itoa(k)
+		options[i] = directionName(k)
 	}
 	srcSelect := widget.NewSelect(options, nil)
 	srcSelect.SetSelected(options[0])
 
-	msg := widget.NewLabel(fmt.Sprintf("Direction %d has no keyframes yet. Copy the keyframe times "+
+	msg := widget.NewLabel(fmt.Sprintf("The %s direction has no keyframes yet. Copy the keyframe times "+
 		"from another direction as a starting point? Only the timing is copied: every "+
-		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", target))
+		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", directionName(target)))
 	msg.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
@@ -430,8 +488,8 @@ func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy fun
 			if !confirmed || onCopy == nil {
 				return
 			}
-			if src, err := strconv.Atoi(srcSelect.Selected); err == nil {
-				onCopy(src)
+			if i := slices.Index(options, srcSelect.Selected); i >= 0 {
+				onCopy(sources[i])
 			}
 		},
 		win,

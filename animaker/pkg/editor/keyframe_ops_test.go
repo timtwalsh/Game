@@ -189,3 +189,82 @@ func times(kfs []*Keyframe) []uint32 {
 	}
 	return out
 }
+
+// Canvas positions snap to whole pixels by default: at 4x zoom a drop
+// otherwise lands on quarter pixels, which renders blurry in the game.
+func TestSnapPositionRoundsToWholePixelsUnlessSubPixel(t *testing.T) {
+	cases := [][4]float32{
+		{12.75, -3.25, 13, -3},
+		{12.25, -3.75, 12, -4},
+		{0.5, -0.5, 1, -1}, // halves round away from zero, symmetrically
+		{7, 9, 7, 9},
+	}
+	for _, c := range cases {
+		if x, y := SnapPosition(c[0], c[1], false); x != c[2] || y != c[3] {
+			t.Errorf("SnapPosition(%v, %v) = (%v, %v), want (%v, %v)", c[0], c[1], x, y, c[2], c[3])
+		}
+	}
+	if x, y := SnapPosition(12.75, -3.25, true); x != 12.75 || y != -3.25 {
+		t.Errorf("sub-pixel = (%v, %v), want the exact point", x, y)
+	}
+}
+
+func TestSnapTimePrefersOtherKeysThenGrid(t *testing.T) {
+	keys := []uint32{100, 600}
+	cases := []struct {
+		t, want uint32
+		onKey   bool
+	}{
+		{597, 600, true},  // near another part's key
+		{606, 600, true},  // either side
+		{340, 350, false}, // nothing near: the 50ms grid
+		{324, 300, false},
+		{104, 100, true},
+	}
+	for _, c := range cases {
+		if got, on := SnapTime(c.t, keys, 8, 50); got != c.want || on != c.onKey {
+			t.Errorf("SnapTime(%d) = %d, %v; want %d, %v", c.t, got, on, c.want, c.onKey)
+		}
+	}
+	if got, _ := SnapTime(343, nil, 8, 0); got != 343 {
+		t.Errorf("no targets, no grid: %d, want 343 unchanged", got)
+	}
+}
+
+func TestKeyTimesLeavesOutThePartBeingMoved(t *testing.T) {
+	dir := NewDirection()
+	AddKeyframe(dir, 1, 0)
+	AddKeyframe(dir, 1, 200)
+	AddKeyframe(dir, 2, 200)
+	AddKeyframe(dir, 2, 350)
+	if got := dir.KeyTimes(1); len(got) != 2 || got[0] != 200 || got[1] != 350 {
+		t.Errorf("KeyTimes(1) = %v, want [200 350]", got)
+	}
+	if got := dir.KeyTimes(-1); len(got) != 3 {
+		t.Errorf("KeyTimes(-1) = %v, want [0 200 350]", got)
+	}
+}
+
+func TestNeighbourKeyframes(t *testing.T) {
+	dir := NewDirection()
+	for _, ms := range []uint32{0, 200, 400} {
+		AddKeyframe(dir, 1, ms)
+	}
+	cases := []struct {
+		at, prev, next int64 // -1 = none
+	}{
+		{100, 0, 200}, {200, 0, 400}, {0, -1, 200}, {400, 200, -1}, {500, 400, -1},
+	}
+	for _, c := range cases {
+		p, n := dir.NeighbourKeyframes(1, uint32(c.at))
+		got := func(k *Keyframe) int64 {
+			if k == nil {
+				return -1
+			}
+			return int64(k.TimeMs)
+		}
+		if got(p) != c.prev || got(n) != c.next {
+			t.Errorf("at %d: prev %d next %d, want %d %d", c.at, got(p), got(n), c.prev, c.next)
+		}
+	}
+}

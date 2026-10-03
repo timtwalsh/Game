@@ -119,6 +119,30 @@ func AddDirection(t *Track, key int) *Direction {
 	return d
 }
 
+// AddStandardDirections adds whichever of the four standard facings (0-3)
+// the track doesn't have yet, and returns the keys it added.
+func AddStandardDirections(t *Track) []int {
+	var added []int
+	for _, k := range StandardDirectionKeys {
+		if _, ok := t.Directions[k]; !ok {
+			AddDirection(t, k)
+			added = append(added, k)
+		}
+	}
+	return added
+}
+
+// HasStandardDirections reports whether the track has all four standard
+// facings.
+func (t *Track) HasStandardDirections() bool {
+	for _, k := range StandardDirectionKeys {
+		if _, ok := t.Directions[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // RemoveDirection deletes a direction by key.
 func RemoveDirection(t *Track, key int) {
 	delete(t.Directions, key)
@@ -194,4 +218,22 @@ func CheckNewPart(t *Track, part *Part) error {
 		return errors.New("pick the sheet it draws from (Import Sprite Sheet first), or a prop that chooses one")
 	}
 	return nil
+}
+
+// RigFrom makes a new track named name with src's rig and none of its
+// animation: the same parts (names, kinds, prop links, fixed sheets,
+// nested animations and bindings, and IDs), props with their defaults,
+// reference box and directions - but no keyframes in any direction.
+//
+// For a character's family of tracks (walk, idle, attack): starting each
+// from one rig keeps their parts and prop schema in agreement, which is
+// what `animaker lint` otherwise has to catch after the fact. It copies
+// structure only, never authored poses.
+func RigFrom(src *Track, name string) *Track {
+	t := src.DeepCopy()
+	t.Metadata.Name = name
+	for k := range t.Directions {
+		t.Directions[k] = NewDirection()
+	}
+	return t
 }

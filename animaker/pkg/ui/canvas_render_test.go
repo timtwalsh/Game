@@ -9,6 +9,7 @@ import (
 	"animaker/pkg/editor"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 )
 
@@ -52,5 +53,77 @@ func TestReusedSpriteImagesFollowTheAnimation(t *testing.T) {
 	}
 	if isRed(at(0)) {
 		t.Error("sprite still drawn at its old place")
+	}
+}
+
+// With the onion skin on, the selected part's neighbouring keyframe poses
+// draw faintly behind it; off, or while playing, they don't.
+func TestOnionSkinDrawsNeighbouringPoses(t *testing.T) {
+	test.NewTempApp(t)
+	p := editor.NewProject("t")
+	p.LoadedSheets["r"] = editor.NewSpriteSheetTemplate("r", "r.png", image.NewRGBA(image.Rect(0, 0, 8, 8)), 8, 8, 0, 0)
+	part := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("box", "", "r"))
+	editor.AddKeyframe(p.ActiveDirection(), part.ID, 0).X = 0
+	editor.AddKeyframe(p.ActiveDirection(), part.ID, 200).X = 40
+	p.Selection.PartIndex = 0
+	p.Seek(100)
+
+	cw := NewCanvasWidget(p)
+	w := test.NewWindow(cw)
+	t.Cleanup(w.Close)
+	ghosts := func() (n int) {
+		for _, o := range test.WidgetRenderer(cw).Objects() {
+			if img, ok := o.(*canvas.Image); ok && img.Translucency == onionTranslucency {
+				n++
+			}
+		}
+		return n
+	}
+
+	if ghosts() != 0 {
+		t.Error("ghosts drawn with the onion skin off")
+	}
+	cw.ToggleOnion()
+	if got := ghosts(); got != 2 {
+		t.Errorf("%d ghosts, want 2 (the keyframes at 0 and 200ms)", got)
+	}
+	p.Playback.IsPlaying = true
+	cw.Refresh()
+	if got := ghosts(); got != 0 {
+		t.Errorf("%d ghosts while playing, want 0", got)
+	}
+}
+
+// A palette tile dragged over the canvas shows faintly where it would
+// land, placed by its pivot; clearing the preview removes it.
+func TestDropPreviewShowsWhereATileWouldLand(t *testing.T) {
+	test.NewTempApp(t)
+	p := editor.NewProject("t")
+	sheet := editor.NewSpriteSheetTemplate("r", "r.png", image.NewRGBA(image.Rect(0, 0, 16, 8)), 8, 8, 4, 8)
+	cw := NewCanvasWidget(p)
+	cw.SetZoom(2)
+	w := test.NewWindow(cw)
+	t.Cleanup(w.Close)
+	preview := func() *canvas.Image {
+		for _, o := range test.WidgetRenderer(cw).Objects() {
+			if img, ok := o.(*canvas.Image); ok && img.Translucency == dropPreviewTranslucency {
+				return img
+			}
+		}
+		return nil
+	}
+
+	cw.SetDropPreview(sheet, 0, 1, 10, 20)
+	img := preview()
+	if img == nil {
+		t.Fatal("no preview drawn")
+	}
+	origin := cw.originScreen()
+	if want := fyne.NewPos(origin.X+(10-4)*2, origin.Y+(20-8)*2); img.Position() != want {
+		t.Errorf("preview at %v, want %v (pivot on the drop point)", img.Position(), want)
+	}
+	cw.ClearDropPreview()
+	if preview() != nil {
+		t.Error("preview still drawn after ClearDropPreview")
 	}
 }

@@ -76,3 +76,32 @@ func TestFixedBindingCountsAsSheetUse(t *testing.T) {
 		t.Errorf("ReferencedAnimPaths = %v, lacks the fixed .anif value", tr.ReferencedAnimPaths())
 	}
 }
+
+// Requested: change a prop's default after creating it, which deleting
+// and re-adding couldn't do once parts used the prop.
+func TestSetPropDefault(t *testing.T) {
+	p := NewProject("test")
+	p.LoadedSheets["hair_short"] = &SpriteSheetTemplate{Name: "hair_short"}
+	p.LoadedSheets["hair_long"] = &SpriteSheetTemplate{Name: "hair_long"}
+	EnsureProp(p.CurrentTrack, "hair", "hair_short")
+	p.DropTile("hair_short", 0, 0, 0, 0) // a part linked to the prop
+
+	if changed, err := p.SetPropDefault("hair", "hair_long"); err != nil || !changed {
+		t.Fatalf("SetPropDefault: changed %v, err %v", changed, err)
+	}
+	if got := p.CurrentTrack.FindProp("hair").Default; got != "hair_long" {
+		t.Errorf("default = %q, want hair_long", got)
+	}
+	if !p.Undo() || p.CurrentTrack.FindProp("hair").Default != "hair_short" {
+		t.Error("undo didn't restore hair_short")
+	}
+
+	for _, bad := range []string{"not_loaded", "torch.anif"} {
+		if _, err := p.SetPropDefault("hair", bad); err == nil {
+			t.Errorf("default %q accepted, want an error", bad)
+		}
+	}
+	if changed, err := p.SetPropDefault("hair", "hair_short"); changed || err != nil {
+		t.Errorf("same value: changed %v, err %v, want a no-op", changed, err)
+	}
+}

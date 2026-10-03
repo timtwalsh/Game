@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"path/filepath"
 	"sort"
 
@@ -38,6 +39,11 @@ type CanvasWidget struct {
 	project  *editor.Project
 	zoom     float32
 	showGrid bool
+	// showOnion draws the selected part's neighbouring keyframe poses
+	// faintly behind it (ToggleOnion).
+	showOnion bool
+	// preview is a palette tile being dragged over the canvas, or nil.
+	preview *dropPreview
 
 	draggingPartIdx int // -1 = not dragging
 	// dragStartLocal is where the press began, widget-local. Drags report
@@ -504,9 +510,21 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 
 	draws := cw.resolvedDrawsAt(ext, origin)
 	sel := cw.project.Selection
+	// Onion skin first, so the real poses draw over it.
+	if cw.showOnion && !cw.project.Playback.IsPlaying && sel != nil {
+		for _, d := range draws {
+			if d.partIdx == sel.PartIndex {
+				objs = append(objs, r.onionGhosts(d, ext[d.part], origin)...)
+			}
+		}
+	}
 	for _, d := range draws {
 		selected := sel != nil && sel.PartIndex == d.partIdx
 		objs = append(objs, r.drawPart(d, origin, selected)...)
+	}
+	// A tile being dragged in from the palette, on top of everything.
+	if pv := r.dropPreviewImage(origin); pv != nil {
+		objs = append(objs, pv)
 	}
 
 	return objs
@@ -531,6 +549,9 @@ func (r *canvasRenderer) drawPart(d resolvedDraw, origin fyne.Position, selected
 	objs := []fyne.CanvasObject{img}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
+		if tick := rotationTick(d, origin, r.widget.zoom); tick != nil {
+			objs = append(objs, tick)
+		}
 	}
 	return objs
 }
@@ -570,6 +591,9 @@ func (r *canvasRenderer) drawNested(d resolvedDraw, origin fyne.Position, select
 	}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
+		if tick := rotationTick(d, origin, cw.zoom); tick != nil {
+			objs = append(objs, tick)
+		}
 	}
 	return objs
 }
@@ -606,4 +630,122 @@ func (r *canvasRenderer) buildGrid(size fyne.Size, origin fyne.Position) []fyne.
 		objs = append(objs, line)
 	}
 	return objs
+}
+
+// rotationTick is a selected part's rotation, drawn: a line from its pivot
+// pointing the way the part's "up" would after rotating. The preview can't
+// rotate the sprite itself, so this is how a non-zero rotation becomes
+// visible at all. nil for no rotation.
+func rotationTick(d resolvedDraw, origin fyne.Position, zoom float32) fyne.CanvasObject {
+	if d.tr.RotationDeg == 0 {
+		return nil
+	}
+	pivot := fyne.NewPos(origin.X+d.tr.X*zoom, origin.Y+d.tr.Y*zoom)
+	length := d.size.Height / 2
+	if d.size.Width/2 > length {
+		length = d.size.Width / 2
+	}
+	line := canvas.NewLine(color.RGBA{R: 255, G: 220, B: 60, A: 255})
+	line.StrokeWidth = 2
+	line.Position1 = pivot
+	line.Position2 = rotationTickEnd(pivot, length, d.tr.RotationDeg)
+	return line
+}
+
+// rotationTickEnd is where a tick of the given length from pivot ends for
+// a rotation of deg degrees, clockwise on screen (as raylib, the game's
+// renderer, rotates): 0 points straight up, 90 to the right.
+func rotationTickEnd(pivot fyne.Position, length, deg float32) fyne.Position {
+	rad := float64(deg) * math.Pi / 180
+	return fyne.NewPos(pivot.X+length*float32(math.Sin(rad)), pivot.Y-length*float32(math.Cos(rad)))
+}
+
+// onionTranslucency is how faint an onion-skin ghost is (1 = invisible).
+const onionTranslucency = 0.7
+
+// onionGhosts draws the selected part's poses at its keyframes either side
+// of the playhead, faintly, so the pose between them can be judged
+// without scrubbing back and forth. Sheet parts only; ghosts are drawn,
+// never hit-tested, so they can't be clicked or dragged.
+func (r *canvasRenderer) onionGhosts(d resolvedDraw, e partExtent, origin fyne.Position) []fyne.CanvasObject {
+	if d.part.Kind != editor.PartKindSheet || d.sheet == nil {
+		return nil
+	}
+	cw := r.widget
+	prev, next := cw.project.ActiveDirection().NeighbourKeyframes(d.part.ID, cw.project.Playback.ElapsedMs)
+	var objs []fyne.CanvasObject
+	for _, kf := range []*editor.Keyframe{prev, next} {
+		if kf == nil {
+			continue
+		}
+		cell, err := d.sheet.CellImage(kf.Row, kf.Col)
+		if err != nil {
+			continue
+		}
+		// Its own image, not one from the per-frame pool: a pooled image
+		// would carry the translucency over to its next, solid, use.
+		img := canvas.NewImageFromImage(cell)
+		img.ScaleMode = canvas.ImageScalePixels
+		img.FillMode = canvas.ImageFillOriginal
+		img.Translucency = onionTranslucency
+		img.Resize(fyne.NewSize(e.w*cw.zoom, e.h*cw.zoom))
+		img.Move(fyne.NewPos(origin.X+(kf.X-e.pivotX)*cw.zoom, origin.Y+(kf.Y-e.pivotY)*cw.zoom))
+		objs = append(objs, img)
+	}
+	return objs
+}
+
+// ToggleOnion turns the onion skin on or off.
+func (cw *CanvasWidget) ToggleOnion() {
+	cw.showOnion = !cw.showOnion
+	cw.Refresh()
+}
+
+// dropPreview is a palette tile being dragged over the canvas: which cell,
+// and the animation X/Y it would land at.
+type dropPreview struct {
+	sheet    *editor.SpriteSheetTemplate
+	row, col int
+	x, y     float32
+}
+
+// dropPreviewTranslucency is how faint the dragged tile's preview is.
+const dropPreviewTranslucency = 0.4
+
+// SetDropPreview shows where a dragged palette tile would land: the cell,
+// drawn faintly by its pivot at animation (x, y), exactly as a drop there
+// would place it.
+func (cw *CanvasWidget) SetDropPreview(sheet *editor.SpriteSheetTemplate, row, col int, x, y float32) {
+	cw.preview = &dropPreview{sheet: sheet, row: row, col: col, x: x, y: y}
+	cw.Refresh()
+}
+
+// ClearDropPreview removes the drag preview (the drag ended or left the
+// canvas).
+func (cw *CanvasWidget) ClearDropPreview() {
+	if cw.preview == nil {
+		return
+	}
+	cw.preview = nil
+	cw.Refresh()
+}
+
+// dropPreviewImage draws the drag preview, or nil without one.
+func (r *canvasRenderer) dropPreviewImage(origin fyne.Position) fyne.CanvasObject {
+	cw := r.widget
+	pv := cw.preview
+	if pv == nil || pv.sheet == nil {
+		return nil
+	}
+	cell, err := pv.sheet.CellImage(pv.row, pv.col)
+	if err != nil {
+		return nil
+	}
+	img := canvas.NewImageFromImage(cell) // its own: pooled images must stay solid
+	img.ScaleMode = canvas.ImageScalePixels
+	img.FillMode = canvas.ImageFillOriginal
+	img.Translucency = dropPreviewTranslucency
+	img.Resize(fyne.NewSize(float32(pv.sheet.CellW)*cw.zoom, float32(pv.sheet.CellH)*cw.zoom))
+	img.Move(fyne.NewPos(origin.X+(pv.x-pv.sheet.PivotX)*cw.zoom, origin.Y+(pv.y-pv.sheet.PivotY)*cw.zoom))
+	return img
 }

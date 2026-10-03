@@ -3,6 +3,7 @@ package editor
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -210,4 +211,79 @@ func kfToResolved(kf *Keyframe) ResolvedTransform {
 
 func lerp(a, b, t float32) float32 {
 	return a + (b-a)*t
+}
+
+// SnapPosition rounds a canvas position to whole animation pixels, unless
+// subPixel. The canvas maps screen pixels to animation pixels by the zoom,
+// so a drop or drag at 4x lands on quarter pixels (12.75, -3.25) - blurry
+// for pixel art in the game, and not values anyone would type. Whole
+// pixels are the default; holding Alt asks for the exact point.
+func SnapPosition(x, y float32, subPixel bool) (float32, float32) {
+	if subPixel {
+		return x, y
+	}
+	return float32(math.Round(float64(x))), float32(math.Round(float64(y)))
+}
+
+// KeyTimes lists every keyframe time in the direction, sorted and without
+// repeats, leaving out the part exceptPartID (-1 to keep every part).
+// These are what timeline drags snap to.
+func (d *Direction) KeyTimes(exceptPartID int) []uint32 {
+	seen := map[uint32]bool{}
+	var out []uint32
+	for id, kfs := range d.Keyframes {
+		if id == exceptPartID {
+			continue
+		}
+		for _, kf := range kfs {
+			if !seen[kf.TimeMs] {
+				seen[kf.TimeMs] = true
+				out = append(out, kf.TimeMs)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// SnapTime snaps a dragged time t: to the nearest of targets if one is
+// within `within` ms (onTarget is then true), else to the nearest multiple
+// of grid (0 = no grid). Targets win over the grid so parts' keyframes
+// line up: the spec has keyframes share tick times within a direction,
+// and free dragging let them drift to 598ms against 603ms.
+func SnapTime(t uint32, targets []uint32, within, grid uint32) (snapped uint32, onTarget bool) {
+	best, bestDist := uint32(0), uint32(0)
+	found := false
+	for _, tt := range targets {
+		dist := tt - t
+		if t > tt {
+			dist = t - tt
+		}
+		if dist <= within && (!found || dist < bestDist) {
+			best, bestDist, found = tt, dist, true
+		}
+	}
+	if found {
+		return best, true
+	}
+	if grid > 0 {
+		return (t + grid/2) / grid * grid, false
+	}
+	return t, false
+}
+
+// NeighbourKeyframes returns a part's keyframes either side of timeMs: the
+// last one strictly before it and the first strictly after (nil where
+// there isn't one). With the playhead on a keyframe, these are that
+// keyframe's neighbours - the poses an onion skin shows around it.
+func (d *Direction) NeighbourKeyframes(partID int, timeMs uint32) (prev, next *Keyframe) {
+	for _, kf := range d.KeyframesFor(partID) {
+		switch {
+		case kf.TimeMs < timeMs:
+			prev = kf
+		case kf.TimeMs > timeMs && next == nil:
+			next = kf
+		}
+	}
+	return prev, next
 }

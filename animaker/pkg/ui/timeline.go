@@ -105,6 +105,9 @@ type scrubArea struct {
 	retimePart   int
 	retimeKf     *editor.Keyframe // held by pointer: retiming re-sorts, so its index moves
 	retimeOrigMs uint32
+	// snapMarkMs is the other-part keyframe time a retime drag has snapped
+	// onto, drawn as a guide line; -1 when it isn't on one.
+	snapMarkMs int64
 
 	OnScrub            func(timeMs uint32)
 	OnKeyframeSelected func(partIdx, kfIdx int)
@@ -124,7 +127,7 @@ type scrubArea struct {
 }
 
 func newScrubArea(project *editor.Project) *scrubArea {
-	s := &scrubArea{project: project, msPerPixel: timelineDefaultMsPerPx}
+	s := &scrubArea{project: project, msPerPixel: timelineDefaultMsPerPx, snapMarkMs: -1}
 	s.ExtendBaseWidget(s)
 	return s
 }
@@ -232,9 +235,33 @@ func (s *scrubArea) Dragged(e *fyne.DragEvent) {
 	if t < 0 {
 		t = 0
 	}
-	if s.OnRetime != nil {
-		s.OnRetime(s.retimePart, s.retimeKf, uint32(t+0.5))
+	ms := uint32(t + 0.5)
+	s.snapMarkMs = -1
+	if !altHeld() {
+		// Onto another part's keyframe if one is near, else the ruler's
+		// tick grid - so parts' keys line up and times come out round.
+		var others []uint32
+		if dir := s.project.ActiveDirection(); dir != nil {
+			others = dir.KeyTimes(s.parts()[s.retimePart].ID)
+		}
+		var onKey bool
+		ms, onKey = editor.SnapTime(ms, others, s.snapWithinMs(), niceTickStep(s.msPerPixel, timelineMinTickPx, 0))
+		if onKey {
+			s.snapMarkMs = int64(ms)
+		}
 	}
+	if s.OnRetime != nil {
+		s.OnRetime(s.retimePart, s.retimeKf, ms)
+	}
+}
+
+// timelineSnapPx is how close, on screen, a drag must come to a keyframe
+// to snap onto it - a fixed distance in pixels, so it feels the same at
+// every zoom.
+const timelineSnapPx = 6
+
+func (s *scrubArea) snapWithinMs() uint32 {
+	return uint32(timelineSnapPx * s.msPerPixel)
 }
 
 func (s *scrubArea) DragEnd() {
@@ -243,6 +270,14 @@ func (s *scrubArea) DragEnd() {
 	}
 	s.dragMode = dragNone
 	s.retimeKf = nil
+	s.snapMarkMs = -1
+	s.Refresh()
+}
+
+// altHeld reports whether Alt is down, which turns timeline snapping off.
+func altHeld() bool {
+	d, ok := fyne.CurrentApp().Driver().(desktop.Driver)
+	return ok && d.CurrentKeyModifiers()&fyne.KeyModifierAlt != 0
 }
 
 // Scrolled hands every wheel event to TimelineWidget, which owns both the
@@ -259,8 +294,14 @@ func (s *scrubArea) scrubTo(x float32) {
 	if x < timelineLabelWidth {
 		x = timelineLabelWidth
 	}
+	ms := s.timeForX(x)
+	// A click or scrub near a keyframe lands exactly on it, so the canvas
+	// shows that keyframe's pose rather than one a few ms off it.
+	if dir := s.project.ActiveDirection(); dir != nil && !altHeld() {
+		ms, _ = editor.SnapTime(ms, dir.KeyTimes(-1), s.snapWithinMs(), 0)
+	}
 	if s.OnScrub != nil {
-		s.OnScrub(s.timeForX(x))
+		s.OnScrub(ms)
 	}
 }
 
@@ -501,6 +542,17 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 			marker.Move(fyne.NewPos(x-timelineMarkerSize/2, rowY+timelineRowHeight/2-timelineMarkerSize/2-1))
 			objs = append(objs, marker)
 		}
+	}
+
+	// While a retime is snapped onto another part's keyframe, a guide line
+	// shows which.
+	if s.dragMode == dragRetime && s.snapMarkMs >= 0 {
+		x := s.xForTime(uint32(s.snapMarkMs))
+		guide := canvas.NewLine(color.RGBA{R: 255, G: 220, B: 60, A: 160})
+		guide.StrokeWidth = 1
+		guide.Position1 = fyne.NewPos(x, timelineRulerHeight)
+		guide.Position2 = fyne.NewPos(x, size.Height)
+		objs = append(objs, guide)
 	}
 
 	// Playhead, drawn last so it's always on top.
@@ -813,6 +865,6 @@ func (tw *TimelineWidget) buildInfoText() string {
 	// ruler runs past the end of the animation (see scrubArea.totalMs), so
 	// "120ms / 0ms" would otherwise look like a bug rather than a playhead
 	// parked in the empty space where the next keyframe goes.
-	return fmt.Sprintf("Direction: %d   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d   |   Ctrl+wheel to zoom, drag a marker to retime",
-		tw.project.Playback.ActiveDirection, tw.project.Playback.ElapsedMs, total, partCount)
+	return fmt.Sprintf("Direction: %s   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d   |   Ctrl+wheel to zoom, drag a marker to retime (snaps; Alt for free)",
+		directionName(tw.project.Playback.ActiveDirection), tw.project.Playback.ElapsedMs, total, partCount)
 }

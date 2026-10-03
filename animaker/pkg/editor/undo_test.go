@@ -91,6 +91,7 @@ func TestOpenTrackResetsTheSession(t *testing.T) {
 	p.Playback.IsPlaying, p.Playback.ElapsedMs, p.Playback.NestedClockMs = true, 500, 900
 
 	track := NewTrack("new")
+	AddStandardDirections(track)
 	RemoveDirection(track, 0) // first direction is now 1
 	anims := map[string]*NestedAnim{}
 	p.OpenTrack(track, "new.anif", anims)

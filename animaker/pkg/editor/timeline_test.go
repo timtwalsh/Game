@@ -85,19 +85,33 @@ func TestPlaybackLoopsOverRealDurationNotHeadroom(t *testing.T) {
 	}
 }
 
-func TestNewTrackHasFourDefaultDirections(t *testing.T) {
-	track := NewTrack("human_walk")
-	got := track.SortedDirectionKeys()
-	if len(got) != 4 {
-		t.Fatalf("new track has directions %v, want 4", got)
+// A new track has one direction: four by default left non-directional
+// assets (a torch) with three empty facings by accident.
+func TestNewTrackHasOneDirection(t *testing.T) {
+	track := NewTrack("torch")
+	if got := track.SortedDirectionKeys(); len(got) != 1 || got[0] != 0 || track.Directions[0] == nil {
+		t.Fatalf("new track has directions %v, want just [0]", got)
 	}
-	for i, key := range got {
-		if key != i {
-			t.Errorf("direction %d has key %d, want %d", i, key, i)
-		}
-		if track.Directions[key] == nil {
-			t.Errorf("direction %d is nil", key)
-		}
+}
+
+func TestAddStandardDirectionsAddsOnlyMissingFacings(t *testing.T) {
+	track := NewTrack("human_walk")
+	part := AddPart(track, NewSheetPart("body", "", "sheet"))
+	AddKeyframe(track.Directions[0], part.ID, 0)
+	AddDirection(track, 2)
+
+	added := AddStandardDirections(track)
+	if len(added) != 2 || added[0] != 1 || added[1] != 3 {
+		t.Errorf("added %v, want [1 3]", added)
+	}
+	if got := track.SortedDirectionKeys(); len(got) != 4 {
+		t.Errorf("directions %v, want 0-3", got)
+	}
+	if len(track.Directions[0].KeyframesFor(part.ID)) != 1 {
+		t.Error("direction 0 lost its keyframe")
+	}
+	if again := AddStandardDirections(track); len(again) != 0 {
+		t.Errorf("second call added %v, want nothing", again)
 	}
 }
 

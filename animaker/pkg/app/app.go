@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -34,7 +33,10 @@ type Application struct {
 	canvasWidget *ui.CanvasWidget
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
-	directionSel *widget.Select
+	directionTabs *ui.DirectionTabs
+	// addFacingsBtn adds the four standard facings; disabled once the track
+	// has them all.
+	addFacingsBtn *widget.Button
 	titleLabel   *widget.Label
 
 	playbackTicker *time.Ticker
@@ -85,7 +87,17 @@ func New(fyneApp fyne.App) *Application {
 func (a *Application) Run() {
 	a.Window = a.FyneApp.NewWindow("ANIFile Animation Maker")
 	a.Window.Resize(fyne.NewSize(1300, 850))
+	a.build()
 
+	go a.playbackLoop()
+	a.reportPreviousCrash()
+
+	a.Window.ShowAndRun()
+}
+
+// build creates the widgets, wires them up and fills a.Window, without
+// showing it - separate from Run so tests can drive the real UI.
+func (a *Application) build() {
 	a.canvasWidget = ui.NewCanvasWidget(a.Project)
 	a.timeline = ui.NewTimelineWidget(a.Project)
 	a.properties = ui.NewPropertiesPanel(a.Project)
@@ -101,6 +113,7 @@ func (a *Application) Run() {
 
 	menu := ui.BuildMenuBar(
 		a.onNewTrack,
+		a.onNewTrackFromRig,
 		a.onOpenTrack,
 		a.onSaveTrack,
 		a.onSaveAsTrack,
@@ -109,8 +122,10 @@ func (a *Application) Run() {
 		a.onUndo,
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
+		a.canvasWidget.ToggleOnion,
 		a.onZoom,
 		a.showAbout,
+		func() { ui.ShowShortcutsDialog(a.Window) },
 	)
 	a.Window.SetMainMenu(menu)
 
@@ -124,50 +139,65 @@ func (a *Application) Run() {
 	})
 	a.Window.SetOnClosed(a.onClose)
 	a.updateTitle()
-
-	go a.playbackLoop()
-	a.reportPreviousCrash()
-
-	a.Window.ShowAndRun()
 }
 
 func (a *Application) buildDirectionBar() fyne.CanvasObject {
 	a.titleLabel = widget.NewLabel(a.Project.CurrentTrack.Metadata.Name)
 	a.titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	a.directionSel = widget.NewSelect(nil, func(s string) {
-		key, err := strconv.Atoi(s)
-		if err != nil {
-			return
-		}
-		// The Select re-fires this on every programmatic SetSelected
-		// (undo, load, refreshDirectionSelect), which always names the
-		// direction already active - so only a real switch can prompt.
-		switched := key != a.Project.Playback.ActiveDirection
-		a.Project.SetActiveDirection(key)
-		a.refreshAll()
-		if switched {
-			a.offerTimingCopy(key)
-		}
-	})
+	a.directionTabs = ui.NewDirectionTabs()
+	a.directionTabs.OnSelect = a.switchDirection
+	// New tracks have one direction; a character needs the four facings,
+	// so that's one click rather than four trips through Add Direction.
+	a.addFacingsBtn = widget.NewButton("+ Up/Right/Down/Left", a.onAddStandardDirections)
 	a.refreshDirectionSelect()
 
-	addDirBtn := widget.NewButton("+ Add Direction", a.onAddDirection)
+	addDirBtn := widget.NewButton("+ Direction...", a.onAddDirection)
 
-	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel, addDirBtn)
+	return container.NewVBox(
+		container.NewHBox(a.titleLabel, layout.NewSpacer(), a.addFacingsBtn, addDirBtn),
+		a.directionTabs.Object(),
+	)
 }
 
+// switchDirection makes key the facing being edited, offering to copy
+// timing into it if it's empty.
+func (a *Application) switchDirection(key int) {
+	if _, ok := a.Project.CurrentTrack.Directions[key]; !ok || key == a.Project.Playback.ActiveDirection {
+		return
+	}
+	a.Project.SetActiveDirection(key)
+	a.refreshAll()
+	a.offerTimingCopy(key)
+}
+
+// onAddStandardDirections adds whichever of the four facings the track
+// lacks. Undoable; the active direction stays where it is.
+func (a *Application) onAddStandardDirections() {
+	snap := a.Project.TakeSnapshot()
+	if added := editor.AddStandardDirections(a.Project.CurrentTrack); len(added) == 0 {
+		return
+	}
+	a.Project.UndoStack.Push(snap)
+	a.Project.Dirty = true
+	a.refreshDirectionSelect()
+	a.refreshAll()
+}
+
+// refreshDirectionSelect rebuilds the direction tabs - their keyframe
+// counts change with every edit, so refreshAll calls it too.
 func (a *Application) refreshDirectionSelect() {
-	keys := a.Project.CurrentTrack.SortedDirectionKeys()
-	options := make([]string, len(keys))
-	for i, k := range keys {
-		options[i] = strconv.Itoa(k)
+	if a.directionTabs == nil {
+		return
 	}
-	a.directionSel.Options = options
-	if len(options) > 0 {
-		a.directionSel.SetSelected(strconv.Itoa(a.Project.Playback.ActiveDirection))
+	a.directionTabs.Refresh(a.Project.CurrentTrack, a.Project.Playback.ActiveDirection)
+	if a.addFacingsBtn != nil {
+		if a.Project.CurrentTrack.HasStandardDirections() {
+			a.addFacingsBtn.Disable()
+		} else {
+			a.addFacingsBtn.Enable()
+		}
 	}
-	a.directionSel.Refresh()
 }
 
 // offerTimingCopy prompts, on switching to a direction with no keyframes,
@@ -283,7 +313,7 @@ func (a *Application) wireCallbacks() {
 		if a.dragKf == nil {
 			return
 		}
-		a.dragKf.X, a.dragKf.Y = a.dragOrigX+dx, a.dragOrigY+dy
+		a.dragKf.X, a.dragKf.Y = editor.SnapPosition(a.dragOrigX+dx, a.dragOrigY+dy, subPixelHeld())
 		a.canvasWidget.Refresh()
 		a.properties.Refresh()
 	}
@@ -316,25 +346,7 @@ func (a *Application) wireCallbacks() {
 	// Double-clicking a row's name renames the part, so a rig built by
 	// dropping tiles (which names parts sprite_1, sprite_2...) can be
 	// relabelled "head", "left_arm", "legs" where the artist is looking.
-	a.timeline.OnPartRename = func(partIdx int) {
-		if partIdx < 0 || partIdx >= len(a.Project.CurrentTrack.Parts) {
-			return
-		}
-		current := a.Project.CurrentTrack.Parts[partIdx].Name
-		ui.ShowRenamePartDialog(a.Window, current, func(name string) error {
-			if strings.TrimSpace(name) == current {
-				return nil
-			}
-			snap := a.Project.TakeSnapshot()
-			if err := editor.RenamePart(a.Project.CurrentTrack, partIdx, name); err != nil {
-				return err
-			}
-			a.Project.UndoStack.Push(snap)
-			a.Project.Dirty = true
-			a.refreshAll()
-			return nil
-		})
-	}
+	a.timeline.OnPartRename = a.renamePart
 	a.timeline.OnKeyframeDeleted = func(partIdx, kfIdx int) {
 		dir, part := a.directionAndPart(partIdx)
 		if dir == nil {
@@ -423,6 +435,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnAddProp = a.onAddProp
 	a.properties.OnLoadPreviewSheet = a.onLoadPreviewSheet
 	a.properties.OnRemoveSheet = a.confirmRemoveSheet
+	a.properties.OnEditSheet = a.onEditSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
 	a.properties.OnError = a.showError
 	a.properties.OnPartDelete = a.confirmDeletePart
@@ -430,6 +443,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnKeyframeChanged = func() {
 		a.canvasWidget.Refresh()
 		a.timeline.Refresh()
+		a.refreshDirectionSelect() // an edit can create a keyframe: the counts change
 	}
 	a.properties.OnPartChanged = func() {
 		a.canvasWidget.Refresh()
@@ -439,6 +453,7 @@ func (a *Application) wireCallbacks() {
 	// first keyframe past the current bounds doesn't slide the canvas
 	// while the artist is still choosing where to drop.
 	a.properties.OnTileDragStart = func() { a.canvasWidget.SetViewFrozen(true) }
+	a.properties.OnTileDragMove = a.onTileDragMove
 	a.properties.OnTileDropped = a.onTileDropped
 	a.properties.OnTileTapped = a.onTileTapped
 }
@@ -461,23 +476,21 @@ func (a *Application) wireCallbacks() {
 //
 // Drops outside the canvas's bounds are ignored.
 func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.Position) {
-	// The drop ends the gesture, so the view unfreezes here however this
-	// returns - including the rejection paths below.
+	// The drop ends the gesture, so the view unfreezes and the preview
+	// goes here however this returns - including the rejection paths below.
 	defer a.canvasWidget.SetViewFrozen(false)
+	defer a.canvasWidget.ClearDropPreview()
 
 	if a.Project.ActiveDirection() == nil || sheetName == "" {
 		return
 	}
-
-	canvasAbsPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(a.canvasWidget)
-	canvasSize := a.canvasWidget.Size()
-	local := fyne.NewPos(absPos.X-canvasAbsPos.X, absPos.Y-canvasAbsPos.Y)
-	if local.X < 0 || local.Y < 0 || local.X > canvasSize.Width || local.Y > canvasSize.Height {
+	x, y, ok := a.canvasPoint(absPos)
+	if !ok {
 		return // dropped outside the canvas - not a placement
 	}
-	x, y := a.canvasWidget.LocalToAnimXY(local)
 
 	before := a.Project.TakeSnapshot()
+	parts := len(a.Project.CurrentTrack.Parts)
 	partIdx, kf := a.Project.DropTile(sheetName, row, col, x, y)
 	if kf == nil {
 		return // nothing changed, so no undo step (it would also clear redo)
@@ -487,18 +500,56 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	a.Project.Selection.KeyframeIndex = kf.Index
 	a.Project.Dirty = true
 	a.refreshAll()
+	// A drop that made a new part asks for its name straight away, so a rig
+	// is named as it's built rather than left as sheet_1, sheet_2... Esc
+	// keeps the generated name.
+	if len(a.Project.CurrentTrack.Parts) > parts {
+		a.renamePart(partIdx)
+	}
 }
 
-// onTileTapped re-points the selected keyframe at a different cell of the
-// palette's sheet. This is the counterpart to dragging: a click edits what
-// is already selected, a drag creates something new.
-func (a *Application) onTileTapped(row, col int) {
-	kf := a.Project.SelectedKeyframe()
-	if kf == nil {
+// onTileDragMove shows where a palette tile being dragged would land, as
+// a faint copy of the cell under the cursor - placed exactly as the drop
+// will place it.
+func (a *Application) onTileDragMove(sheetName string, row, col int, absPos fyne.Position) {
+	sheet := a.Project.LoadedSheets[sheetName]
+	x, y, ok := a.canvasPoint(absPos)
+	if sheet == nil || !ok {
+		a.canvasWidget.ClearDropPreview()
 		return
 	}
-	a.Project.RecordUndo()
-	kf.Row, kf.Col = row, col
+	a.canvasWidget.SetDropPreview(sheet, row, col, x, y)
+}
+
+// canvasPoint converts a window position into the animation's own X/Y,
+// snapped as a drop is (editor.SnapPosition); ok is false outside the
+// canvas.
+func (a *Application) canvasPoint(absPos fyne.Position) (x, y float32, ok bool) {
+	canvasAbsPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(a.canvasWidget)
+	canvasSize := a.canvasWidget.Size()
+	local := fyne.NewPos(absPos.X-canvasAbsPos.X, absPos.Y-canvasAbsPos.Y)
+	if local.X < 0 || local.Y < 0 || local.X > canvasSize.Width || local.Y > canvasSize.Height {
+		return 0, 0, false
+	}
+	x, y = a.canvasWidget.LocalToAnimXY(local)
+	x, y = editor.SnapPosition(x, y, subPixelHeld())
+	return x, y, true
+}
+
+// onTileTapped makes a clicked palette cell the selected part's frame at
+// the playhead, keeping its position (editor.Project.TapTile). This is the
+// counterpart to dragging: a click edits what is already selected, a drag
+// places something. A click that can't apply says why - it used to do
+// nothing at all unless a timeline marker happened to be selected.
+func (a *Application) onTileTapped(row, col int) {
+	before := a.Project.TakeSnapshot()
+	kf, err := a.Project.TapTile(a.Project.PaletteSheet, row, col)
+	if err != nil {
+		a.showError(err)
+		return // nothing changed, so no undo step (it would also clear redo)
+	}
+	a.Project.UndoStack.Push(before)
+	a.Project.Selection.KeyframeIndex = kf.Index
 	a.Project.Dirty = true
 	a.refreshAll()
 }
@@ -525,15 +576,122 @@ func (a *Application) registerShortcuts() {
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyY, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		a.onRedo()
 	})
-	// Esc deselects, so the next palette drop creates a new part instead
-	// of keying the selected one (see onTileDropped). Only reaches here
-	// when no text entry has focus, so it won't fight typing in a field.
-	canvas.SetOnTypedKey(func(e *fyne.KeyEvent) {
-		if e.Name == fyne.KeyEscape && a.Project.Selection.PartIndex >= 0 {
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift}, func(_ fyne.Shortcut) {
+		a.onSaveAsTrack()
+	})
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyI, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		a.onImportSpriteSheet()
+	})
+	// Draw order: Ctrl+] / Ctrl+[ one step forward / back, with Shift all
+	// the way to the front / back.
+	for _, z := range []struct {
+		key      fyne.KeyName
+		mod      fyne.KeyModifier
+		front    bool
+		absolute bool
+	}{
+		{fyne.KeyRightBracket, fyne.KeyModifierControl, true, false},
+		{fyne.KeyLeftBracket, fyne.KeyModifierControl, false, false},
+		{fyne.KeyRightBracket, fyne.KeyModifierControl | fyne.KeyModifierShift, true, true},
+		{fyne.KeyLeftBracket, fyne.KeyModifierControl | fyne.KeyModifierShift, false, true},
+	} {
+		z := z
+		canvas.AddShortcut(&desktop.CustomShortcut{KeyName: z.key, Modifier: z.mod}, func(_ fyne.Shortcut) {
+			a.onZOrder(z.front, z.absolute)
+		})
+	}
+	// Plain keys only reach here when no text entry has focus, so none of
+	// them fight typing in a field.
+	canvas.SetOnTypedKey(a.onTypedKey)
+}
+
+// onTypedKey handles the editor's single-key shortcuts (see
+// ui.ShortcutHelp for the list shown to the artist).
+func (a *Application) onTypedKey(e *fyne.KeyEvent) {
+	shift := modifierHeld(fyne.KeyModifierShift)
+	switch e.Name {
+	case fyne.KeyEscape:
+		// Deselect, so the next palette drop creates a new part instead
+		// of keying the selected one (see onTileDropped).
+		if a.Project.Selection.PartIndex >= 0 {
 			a.properties.SelectPart(-1)
 			a.refreshAll()
 		}
-	})
+	case fyne.KeySpace:
+		a.Project.TogglePlay()
+		a.refreshAll()
+	case fyne.KeyComma, fyne.KeyPeriod:
+		forward := e.Name == fyne.KeyPeriod
+		switch {
+		case shift && forward:
+			a.Project.StepForward()
+		case shift:
+			a.Project.StepBackward()
+		default:
+			a.Project.StepToKeyframe(forward)
+		}
+		a.refreshAll()
+	case fyne.KeyLeft, fyne.KeyRight, fyne.KeyUp, fyne.KeyDown:
+		step := float32(1)
+		if shift {
+			step = 10
+		}
+		d := map[fyne.KeyName][2]float32{
+			fyne.KeyLeft: {-step, 0}, fyne.KeyRight: {step, 0}, fyne.KeyUp: {0, -step}, fyne.KeyDown: {0, step},
+		}[e.Name]
+		a.editSelected(func(kf *editor.Keyframe) { kf.X += d[0]; kf.Y += d[1] })
+	case fyne.KeyDelete, fyne.KeyBackspace:
+		if partID, idx, ok := a.Project.KeyframeToDelete(); ok {
+			a.Project.RecordUndo()
+			_ = editor.DeleteKeyframe(a.Project.ActiveDirection(), partID, idx)
+			a.Project.Selection.KeyframeIndex = -1
+			a.Project.Dirty = true
+			a.refreshAll()
+		}
+	case fyne.KeyF2:
+		a.renamePart(a.Project.Selection.PartIndex)
+	case fyne.KeyO:
+		a.canvasWidget.ToggleOnion()
+	case fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4:
+		// The four standard facings, in the game's order: 1 = up (0).
+		a.switchDirection(int(e.Name[0] - '1'))
+	}
+}
+
+// editSelected applies one edit to the selected part's keyframe at the
+// playhead (editor.Project.EditTarget), as one undo step. Nothing happens
+// with no part selected.
+func (a *Application) editSelected(apply func(kf *editor.Keyframe)) {
+	if a.Project.SelectedPart() == nil {
+		return
+	}
+	a.Project.Playback.IsPlaying = false
+	a.Project.RecordUndo()
+	apply(a.Project.EditTarget())
+	a.Project.Dirty = true
+	a.refreshAll()
+}
+
+// onZOrder moves the selected part one step forward/back in draw order at
+// the playhead, or (absolute) in front of / behind every other part.
+func (a *Application) onZOrder(front, absolute bool) {
+	if !absolute {
+		step := float32(-1)
+		if front {
+			step = 1
+		}
+		a.editSelected(func(kf *editor.Keyframe) { kf.Z += step })
+		return
+	}
+	if z, ok := a.Project.ZOrderTarget(front); ok {
+		a.editSelected(func(kf *editor.Keyframe) { kf.Z = z })
+	}
+}
+
+// modifierHeld reports whether mod is held down right now.
+func modifierHeld(mod fyne.KeyModifier) bool {
+	d, ok := fyne.CurrentApp().Driver().(desktop.Driver)
+	return ok && d.CurrentKeyModifiers()&mod != 0
 }
 
 // -- Menu handlers --
@@ -624,46 +782,78 @@ func (a *Application) openTrack() {
 		}
 		filePath := reader.URI().Path()
 		reader.Close()
-
-		track, refs, err := file.LoadTrack(filePath)
-		if err != nil {
-			a.showError(fmt.Errorf("failed to load track: %w", err))
-			return
-		}
-
-		// The .anif names its sheets but doesn't contain them, so load
-		// them now - previously nothing did, and a reopened track drew
-		// nothing at all. Sheets already loaded this session are kept.
-		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
-		// Nested animations are always re-read, never taken from what
-		// was loaded before, so an .anif edited since shows as it is now.
-		anims := map[string]*editor.NestedAnim{}
-		problems = append(problems, file.LoadNestedAnimsFor(track, anims)...)
-		for name, s := range sheets {
-			a.Project.LoadedSheets[name] = s
-		}
-		if _, ok := a.Project.LoadedSheets[a.Project.PaletteSheet]; !ok {
-			a.Project.PaletteSheet = ""
-		}
-		for _, name := range track.ReferencedSheetNames() {
-			if _, ok := a.Project.LoadedSheets[name]; ok && a.Project.PaletteSheet == "" {
-				a.Project.PaletteSheet = name
-			}
-		}
-
-		a.Project.OpenTrack(track, filePath, anims)
-		missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
-
-		a.canvasWidget.SetProject(a.Project)
-		a.timeline.SetProject(a.Project)
-		a.properties.SetProject(a.Project)
-		a.refreshDirectionSelect()
-		a.refreshAll()
-		a.reportUnloadedSheets(missing, problems)
+		a.loadAndOpen(filePath, func(t *editor.Track) (*editor.Track, string) { return t, filePath })
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
 	fd.Resize(fyne.NewSize(600, 400))
 	fd.Show()
+}
+
+// loadAndOpen loads the .anif at filePath with its sheets and nested
+// animations, then opens the track as(track) returns - the file itself for
+// Open, a keyframe-free copy for New Track from Rig - with the save path
+// it gives ("" for a track not saved yet).
+func (a *Application) loadAndOpen(filePath string, as func(*editor.Track) (*editor.Track, string)) {
+	track, refs, err := file.LoadTrack(filePath)
+	if err != nil {
+		a.showError(fmt.Errorf("failed to load track: %w", err))
+		return
+	}
+
+	// The .anif names its sheets but doesn't contain them, so load
+	// them now - previously nothing did, and a reopened track drew
+	// nothing at all. Sheets already loaded this session are kept.
+	sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
+	// Nested animations are always re-read, never taken from what
+	// was loaded before, so an .anif edited since shows as it is now.
+	anims := map[string]*editor.NestedAnim{}
+	problems = append(problems, file.LoadNestedAnimsFor(track, anims)...)
+	for name, s := range sheets {
+		a.Project.LoadedSheets[name] = s
+	}
+	if _, ok := a.Project.LoadedSheets[a.Project.PaletteSheet]; !ok {
+		a.Project.PaletteSheet = ""
+	}
+	for _, name := range track.ReferencedSheetNames() {
+		if _, ok := a.Project.LoadedSheets[name]; ok && a.Project.PaletteSheet == "" {
+			a.Project.PaletteSheet = name
+		}
+	}
+
+	opened, savePath := as(track)
+	a.Project.OpenTrack(opened, savePath, anims)
+	a.Project.Dirty = savePath == "" // a new track is unsaved work
+	missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
+
+	a.canvasWidget.SetProject(a.Project)
+	a.timeline.SetProject(a.Project)
+	a.properties.SetProject(a.Project)
+	a.refreshDirectionSelect()
+	a.refreshAll()
+	a.reportUnloadedSheets(missing, problems)
+}
+
+// onNewTrackFromRig starts a track from an existing one's rig - its parts,
+// props, sheets and directions, without keyframes (editor.RigFrom) - so a
+// character's walk, idle and attack tracks agree on their parts and props.
+func (a *Application) onNewTrackFromRig() {
+	a.confirmDiscard(func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return
+			}
+			filePath := reader.URI().Path()
+			reader.Close()
+			ui.ShowNewTrackDialog(a.Window, func(name string) {
+				a.loadAndOpen(filePath, func(t *editor.Track) (*editor.Track, string) {
+					return editor.RigFrom(t, name), ""
+				})
+			})
+		}, a.Window)
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
+		fd.Resize(fyne.NewSize(600, 400))
+		fd.Show()
+	})
 }
 
 func (a *Application) onSaveTrack() {
@@ -756,35 +946,51 @@ func (a *Application) reportUnloadedSheets(missing, problems []string) {
 // complaint when import only filled LoadedSheets and changed nothing on
 // screen.
 func (a *Application) onImportSpriteSheet() {
-	ui.ShowImportSheetDialog(a.Window, existingSheetSettings, func(imp ui.SheetImport) {
-		img, err := file.LoadImage(imp.FilePath)
-		if err != nil {
-			a.showError(fmt.Errorf("failed to load image: %w", err))
-			return
-		}
-		tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
-		if tmpl.Cols() == 0 || tmpl.Rows() == 0 {
-			b := img.Bounds()
-			a.showError(fmt.Errorf("a %dx%d cell doesn't fit in this %dx%d image - check Cell Width and Cell Height",
-				imp.CellW, imp.CellH, b.Dx(), b.Dy()))
-			return
-		}
-		replaces := a.importReplaces(imp)
-		if len(replaces) == 0 {
+	ui.ShowImportSheetDialog(a.Window, existingSheetSettings, file.LoadImage, a.applySheetImport)
+}
+
+// onEditSheet reopens a loaded sheet's grid, pivot and name in the import
+// dialog, over its image - changing them used to mean finding the file and
+// importing it again.
+func (a *Application) onEditSheet(name string) {
+	s := a.Project.LoadedSheets[name]
+	if s == nil {
+		return
+	}
+	current := ui.SheetImport{Name: s.Name, CellW: s.CellW, CellH: s.CellH, PivotX: s.PivotX, PivotY: s.PivotY}
+	ui.ShowEditSheetDialog(a.Window, s.FilePath, s.Image, current, a.applySheetImport)
+}
+
+// applySheetImport slices the image as the import (or edit) dialog said,
+// asks before replacing a saved template or loaded sheet, and loads it.
+func (a *Application) applySheetImport(imp ui.SheetImport) {
+	img, err := file.LoadImage(imp.FilePath)
+	if err != nil {
+		a.showError(fmt.Errorf("failed to load image: %w", err))
+		return
+	}
+	tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
+	if tmpl.Cols() == 0 || tmpl.Rows() == 0 {
+		b := img.Bounds()
+		a.showError(fmt.Errorf("a %dx%d cell doesn't fit in this %dx%d image - check Cell Width and Cell Height",
+			imp.CellW, imp.CellH, b.Dx(), b.Dy()))
+		return
+	}
+	replaces := a.importReplaces(imp)
+	if len(replaces) == 0 {
+		a.importSheet(imp, tmpl)
+		return
+	}
+	msg := widget.NewLabel("This replaces:\n\n- " + strings.Join(replaces, "\n- ") +
+		"\n\nParts drawing from the old sheet will be re-sliced with the new settings.")
+	msg.Wrapping = fyne.TextWrapWord
+	d := dialog.NewCustomConfirm("Replace Existing Sheet?", "Replace", "Cancel", msg, func(ok bool) {
+		if ok {
 			a.importSheet(imp, tmpl)
-			return
 		}
-		msg := widget.NewLabel("This import replaces:\n\n- " + strings.Join(replaces, "\n- ") +
-			"\n\nParts drawing from the old sheet will be re-sliced with the new settings.")
-		msg.Wrapping = fyne.TextWrapWord
-		d := dialog.NewCustomConfirm("Replace Existing Sheet?", "Replace", "Cancel", msg, func(ok bool) {
-			if ok {
-				a.importSheet(imp, tmpl)
-			}
-		}, a.Window)
-		d.Resize(fyne.NewSize(520, 280))
-		d.Show()
-	})
+	}, a.Window)
+	d.Resize(fyne.NewSize(520, 280))
+	d.Show()
 }
 
 // existingSheetSettings prefills the import dialog from the .sprsh an image
@@ -1127,9 +1333,37 @@ func (a *Application) refreshAll() {
 	if a.titleLabel != nil {
 		a.titleLabel.SetText(a.Project.CurrentTrack.Metadata.Name)
 	}
+	a.refreshDirectionSelect()
 	a.updateTitle()
 }
 
 func (a *Application) onClose() {
 	close(a.playbackDone)
+}
+
+// subPixelHeld reports whether Alt is down: placing a part on the canvas
+// snaps to whole pixels unless it is (editor.SnapPosition).
+func subPixelHeld() bool { return modifierHeld(fyne.KeyModifierAlt) }
+
+// renamePart asks for a new name for the part, prefilled and selected so
+// typing replaces it. Undoable; refused names (empty, taken) reopen the
+// dialog with the error.
+func (a *Application) renamePart(partIdx int) {
+	if partIdx < 0 || partIdx >= len(a.Project.CurrentTrack.Parts) {
+		return
+	}
+	current := a.Project.CurrentTrack.Parts[partIdx].Name
+	ui.ShowRenamePartDialog(a.Window, current, func(name string) error {
+		if strings.TrimSpace(name) == current {
+			return nil
+		}
+		snap := a.Project.TakeSnapshot()
+		if err := editor.RenamePart(a.Project.CurrentTrack, partIdx, name); err != nil {
+			return err
+		}
+		a.Project.UndoStack.Push(snap)
+		a.Project.Dirty = true
+		a.refreshAll()
+		return nil
+	})
 }

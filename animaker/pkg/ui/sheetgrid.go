@@ -37,6 +37,10 @@ type SheetGridWidget struct {
 	// duration of the gesture.
 	OnDragStart func()
 
+	// OnDragMove fires on every movement of a picked-up tile with its
+	// absolute position, so the canvas can preview where it would land.
+	OnDragMove func(row, col int, absPos fyne.Position)
+
 	// OnTileTapped fires on a plain click (no drag). Clicking re-assigns
 	// the selected keyframe's cell, where dragging creates a whole new
 	// part — two different jobs, so two different gestures.
@@ -121,6 +125,9 @@ func (g *SheetGridWidget) Dragged(e *fyne.DragEvent) {
 		}
 	}
 	g.lastAbsPos = e.AbsolutePosition
+	if g.OnDragMove != nil {
+		g.OnDragMove(g.dragRow, g.dragCol, e.AbsolutePosition)
+	}
 }
 
 // DragEnd implements fyne.Draggable.
