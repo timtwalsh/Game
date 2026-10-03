@@ -163,7 +163,8 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 
 	hint := widget.NewLabel("Drag a tile onto the canvas: with a part selected it keys that part " +
 		"at the playhead; with nothing selected (Esc) it adds a new part. " +
-		"Click a tile to make it the selected part's frame at the playhead.")
+		"Click a tile to make it the selected part's frame at the playhead. " +
+		"Parts snap to whole pixels; hold Alt while dropping or dragging to place between them.")
 	hint.Wrapping = fyne.TextWrapWord
 
 	// Removes the sheet on show from the track - e.g. one imported by

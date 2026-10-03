@@ -3,6 +3,7 @@ package editor
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -210,4 +211,16 @@ func kfToResolved(kf *Keyframe) ResolvedTransform {
 
 func lerp(a, b, t float32) float32 {
 	return a + (b-a)*t
+}
+
+// SnapPosition rounds a canvas position to whole animation pixels, unless
+// subPixel. The canvas maps screen pixels to animation pixels by the zoom,
+// so a drop or drag at 4x lands on quarter pixels (12.75, -3.25) - blurry
+// for pixel art in the game, and not values anyone would type. Whole
+// pixels are the default; holding Alt asks for the exact point.
+func SnapPosition(x, y float32, subPixel bool) (float32, float32) {
+	if subPixel {
+		return x, y
+	}
+	return float32(math.Round(float64(x))), float32(math.Round(float64(y)))
 }

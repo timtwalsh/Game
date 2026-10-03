@@ -189,3 +189,22 @@ func times(kfs []*Keyframe) []uint32 {
 	}
 	return out
 }
+
+// Canvas positions snap to whole pixels by default: at 4x zoom a drop
+// otherwise lands on quarter pixels, which renders blurry in the game.
+func TestSnapPositionRoundsToWholePixelsUnlessSubPixel(t *testing.T) {
+	cases := [][4]float32{
+		{12.75, -3.25, 13, -3},
+		{12.25, -3.75, 12, -4},
+		{0.5, -0.5, 1, -1}, // halves round away from zero, symmetrically
+		{7, 9, 7, 9},
+	}
+	for _, c := range cases {
+		if x, y := SnapPosition(c[0], c[1], false); x != c[2] || y != c[3] {
+			t.Errorf("SnapPosition(%v, %v) = (%v, %v), want (%v, %v)", c[0], c[1], x, y, c[2], c[3])
+		}
+	}
+	if x, y := SnapPosition(12.75, -3.25, true); x != 12.75 || y != -3.25 {
+		t.Errorf("sub-pixel = (%v, %v), want the exact point", x, y)
+	}
+}

@@ -305,7 +305,7 @@ func (a *Application) wireCallbacks() {
 		if a.dragKf == nil {
 			return
 		}
-		a.dragKf.X, a.dragKf.Y = a.dragOrigX+dx, a.dragOrigY+dy
+		a.dragKf.X, a.dragKf.Y = editor.SnapPosition(a.dragOrigX+dx, a.dragOrigY+dy, subPixelHeld())
 		a.canvasWidget.Refresh()
 		a.properties.Refresh()
 	}
@@ -499,6 +499,7 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 		return // dropped outside the canvas - not a placement
 	}
 	x, y := a.canvasWidget.LocalToAnimXY(local)
+	x, y = editor.SnapPosition(x, y, subPixelHeld())
 
 	before := a.Project.TakeSnapshot()
 	partIdx, kf := a.Project.DropTile(sheetName, row, col, x, y)
@@ -1160,4 +1161,11 @@ func (a *Application) refreshAll() {
 
 func (a *Application) onClose() {
 	close(a.playbackDone)
+}
+
+// subPixelHeld reports whether Alt is down: placing a part on the canvas
+// snaps to whole pixels unless it is (editor.SnapPosition).
+func subPixelHeld() bool {
+	d, ok := fyne.CurrentApp().Driver().(desktop.Driver)
+	return ok && d.CurrentKeyModifiers()&fyne.KeyModifierAlt != 0
 }
