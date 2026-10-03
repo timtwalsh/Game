@@ -95,6 +95,31 @@ func TestNestedDirectionInheritsOrIsStatic(t *testing.T) {
 	}
 }
 
+// A torch saved with directions 0-3 but posed only in 0 (the old default
+// seeding) still shows when the parent faces an empty direction of it,
+// instead of playing that empty facing and drawing nothing.
+func TestNestedEmptyDirectionFallsBackToAPosedOne(t *testing.T) {
+	p, part := walkWithTorch(t)
+	torch := p.LoadedAnims[AnimKey("torch.anif")].Track
+	torch.Directions[1] = NewDirection() // exists, never posed
+
+	p.CurrentTrack.Directions[1] = NewDirection()
+	p.SetActiveDirection(1)
+	AddKeyframe(p.ActiveDirection(), part.ID, 0)
+	if got := p.FlattenNested(part); len(got) != 1 || got[0].Row != 0 {
+		t.Errorf("parent facing 1 (torch's 1 is empty): %+v, want direction 0's sprite", got)
+	}
+	if _, _, _, _, ok := p.NestedExtent(part); !ok {
+		t.Error("NestedExtent found nothing for an empty facing; want direction 0's extent")
+	}
+
+	// Nothing posed anywhere: nothing to draw, rather than a panic.
+	torch.Directions[0], torch.Directions[2] = NewDirection(), NewDirection()
+	if got := p.FlattenNested(part); len(got) != 0 {
+		t.Errorf("unposed torch drew %d sprites, want 0", len(got))
+	}
+}
+
 // Requested: a nested .anif as a prop - the part plays whichever animation
 // the prop is set to.
 func TestAnimPropSwapsTheNestedAnimation(t *testing.T) {
