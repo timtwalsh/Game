@@ -714,7 +714,9 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 		widget.NewLabel("X"), xEntry,
 		widget.NewLabel("Y"), yEntry,
 		widget.NewLabel("Z"), zEntry,
-		widget.NewLabel("Rotation"), rotEntry,
+		// The canvas can't draw rotation (see canvas.go), so say so rather
+		// than leave a field that seems to do nothing.
+		widget.NewLabel("Rotation (not previewed)"), rotEntry,
 	)
 	if kf != nil {
 		pp.keyframeBox.Add(widget.NewLabel(fmt.Sprintf("%s @ %dms  (row %d, col %d)", part.Name, kf.TimeMs, kf.Row, kf.Col)))

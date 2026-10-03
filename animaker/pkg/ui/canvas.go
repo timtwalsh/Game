@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"path/filepath"
 	"sort"
 
@@ -531,6 +532,9 @@ func (r *canvasRenderer) drawPart(d resolvedDraw, origin fyne.Position, selected
 	objs := []fyne.CanvasObject{img}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
+		if tick := rotationTick(d, origin, r.widget.zoom); tick != nil {
+			objs = append(objs, tick)
+		}
 	}
 	return objs
 }
@@ -570,6 +574,9 @@ func (r *canvasRenderer) drawNested(d resolvedDraw, origin fyne.Position, select
 	}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
+		if tick := rotationTick(d, origin, cw.zoom); tick != nil {
+			objs = append(objs, tick)
+		}
 	}
 	return objs
 }
@@ -606,4 +613,32 @@ func (r *canvasRenderer) buildGrid(size fyne.Size, origin fyne.Position) []fyne.
 		objs = append(objs, line)
 	}
 	return objs
+}
+
+// rotationTick is a selected part's rotation, drawn: a line from its pivot
+// pointing the way the part's "up" would after rotating. The preview can't
+// rotate the sprite itself, so this is how a non-zero rotation becomes
+// visible at all. nil for no rotation.
+func rotationTick(d resolvedDraw, origin fyne.Position, zoom float32) fyne.CanvasObject {
+	if d.tr.RotationDeg == 0 {
+		return nil
+	}
+	pivot := fyne.NewPos(origin.X+d.tr.X*zoom, origin.Y+d.tr.Y*zoom)
+	length := d.size.Height / 2
+	if d.size.Width/2 > length {
+		length = d.size.Width / 2
+	}
+	line := canvas.NewLine(color.RGBA{R: 255, G: 220, B: 60, A: 255})
+	line.StrokeWidth = 2
+	line.Position1 = pivot
+	line.Position2 = rotationTickEnd(pivot, length, d.tr.RotationDeg)
+	return line
+}
+
+// rotationTickEnd is where a tick of the given length from pivot ends for
+// a rotation of deg degrees, clockwise on screen (as raylib, the game's
+// renderer, rotates): 0 points straight up, 90 to the right.
+func rotationTickEnd(pivot fyne.Position, length, deg float32) fyne.Position {
+	rad := float64(deg) * math.Pi / 180
+	return fyne.NewPos(pivot.X+length*float32(math.Sin(rad)), pivot.Y-length*float32(math.Cos(rad)))
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"animaker/pkg/editor"
+	"math"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -132,6 +133,22 @@ func TestFloorToCeilToRoundOutward(t *testing.T) {
 		}
 		if got := ceilTo(tt.v, tt.q); got != tt.wantCeil {
 			t.Errorf("ceilTo(%v, %v) = %v, want %v", tt.v, tt.q, got, tt.wantCeil)
+		}
+	}
+}
+
+// The rotation tick points up at 0 and turns clockwise on screen, the way
+// the game's renderer rotates.
+func TestRotationTickEndTurnsClockwise(t *testing.T) {
+	p := fyne.NewPos(100, 100)
+	near := func(a, b fyne.Position) bool {
+		return math.Abs(float64(a.X-b.X)) < 0.01 && math.Abs(float64(a.Y-b.Y)) < 0.01
+	}
+	for deg, want := range map[float32]fyne.Position{
+		0: {X: 100, Y: 90}, 90: {X: 110, Y: 100}, 180: {X: 100, Y: 110}, -90: {X: 90, Y: 100},
+	} {
+		if got := rotationTickEnd(p, 10, deg); !near(got, want) {
+			t.Errorf("%v deg: end %v, want %v", deg, got, want)
 		}
 	}
 }
