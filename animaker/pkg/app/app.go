@@ -87,7 +87,17 @@ func New(fyneApp fyne.App) *Application {
 func (a *Application) Run() {
 	a.Window = a.FyneApp.NewWindow("ANIFile Animation Maker")
 	a.Window.Resize(fyne.NewSize(1300, 850))
+	a.build()
 
+	go a.playbackLoop()
+	a.reportPreviousCrash()
+
+	a.Window.ShowAndRun()
+}
+
+// build creates the widgets, wires them up and fills a.Window, without
+// showing it - separate from Run so tests can drive the real UI.
+func (a *Application) build() {
 	a.canvasWidget = ui.NewCanvasWidget(a.Project)
 	a.timeline = ui.NewTimelineWidget(a.Project)
 	a.properties = ui.NewPropertiesPanel(a.Project)
@@ -113,6 +123,7 @@ func (a *Application) Run() {
 		a.canvasWidget.ToggleGrid,
 		a.onZoom,
 		a.showAbout,
+		func() { ui.ShowShortcutsDialog(a.Window) },
 	)
 	a.Window.SetMainMenu(menu)
 
@@ -126,11 +137,6 @@ func (a *Application) Run() {
 	})
 	a.Window.SetOnClosed(a.onClose)
 	a.updateTitle()
-
-	go a.playbackLoop()
-	a.reportPreviousCrash()
-
-	a.Window.ShowAndRun()
 }
 
 func (a *Application) buildDirectionBar() fyne.CanvasObject {
@@ -553,15 +559,118 @@ func (a *Application) registerShortcuts() {
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyY, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		a.onRedo()
 	})
-	// Esc deselects, so the next palette drop creates a new part instead
-	// of keying the selected one (see onTileDropped). Only reaches here
-	// when no text entry has focus, so it won't fight typing in a field.
-	canvas.SetOnTypedKey(func(e *fyne.KeyEvent) {
-		if e.Name == fyne.KeyEscape && a.Project.Selection.PartIndex >= 0 {
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift}, func(_ fyne.Shortcut) {
+		a.onSaveAsTrack()
+	})
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyI, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		a.onImportSpriteSheet()
+	})
+	// Draw order: Ctrl+] / Ctrl+[ one step forward / back, with Shift all
+	// the way to the front / back.
+	for _, z := range []struct {
+		key      fyne.KeyName
+		mod      fyne.KeyModifier
+		front    bool
+		absolute bool
+	}{
+		{fyne.KeyRightBracket, fyne.KeyModifierControl, true, false},
+		{fyne.KeyLeftBracket, fyne.KeyModifierControl, false, false},
+		{fyne.KeyRightBracket, fyne.KeyModifierControl | fyne.KeyModifierShift, true, true},
+		{fyne.KeyLeftBracket, fyne.KeyModifierControl | fyne.KeyModifierShift, false, true},
+	} {
+		z := z
+		canvas.AddShortcut(&desktop.CustomShortcut{KeyName: z.key, Modifier: z.mod}, func(_ fyne.Shortcut) {
+			a.onZOrder(z.front, z.absolute)
+		})
+	}
+	// Plain keys only reach here when no text entry has focus, so none of
+	// them fight typing in a field.
+	canvas.SetOnTypedKey(a.onTypedKey)
+}
+
+// onTypedKey handles the editor's single-key shortcuts (see
+// ui.ShortcutHelp for the list shown to the artist).
+func (a *Application) onTypedKey(e *fyne.KeyEvent) {
+	shift := modifierHeld(fyne.KeyModifierShift)
+	switch e.Name {
+	case fyne.KeyEscape:
+		// Deselect, so the next palette drop creates a new part instead
+		// of keying the selected one (see onTileDropped).
+		if a.Project.Selection.PartIndex >= 0 {
 			a.properties.SelectPart(-1)
 			a.refreshAll()
 		}
-	})
+	case fyne.KeySpace:
+		a.Project.TogglePlay()
+		a.refreshAll()
+	case fyne.KeyComma, fyne.KeyPeriod:
+		forward := e.Name == fyne.KeyPeriod
+		switch {
+		case shift && forward:
+			a.Project.StepForward()
+		case shift:
+			a.Project.StepBackward()
+		default:
+			a.Project.StepToKeyframe(forward)
+		}
+		a.refreshAll()
+	case fyne.KeyLeft, fyne.KeyRight, fyne.KeyUp, fyne.KeyDown:
+		step := float32(1)
+		if shift {
+			step = 10
+		}
+		d := map[fyne.KeyName][2]float32{
+			fyne.KeyLeft: {-step, 0}, fyne.KeyRight: {step, 0}, fyne.KeyUp: {0, -step}, fyne.KeyDown: {0, step},
+		}[e.Name]
+		a.editSelected(func(kf *editor.Keyframe) { kf.X += d[0]; kf.Y += d[1] })
+	case fyne.KeyDelete, fyne.KeyBackspace:
+		if partID, idx, ok := a.Project.KeyframeToDelete(); ok {
+			a.Project.RecordUndo()
+			_ = editor.DeleteKeyframe(a.Project.ActiveDirection(), partID, idx)
+			a.Project.Selection.KeyframeIndex = -1
+			a.Project.Dirty = true
+			a.refreshAll()
+		}
+	case fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4:
+		// The four standard facings, in the game's order: 1 = up (0).
+		a.switchDirection(int(e.Name[0] - '1'))
+	}
+}
+
+// editSelected applies one edit to the selected part's keyframe at the
+// playhead (editor.Project.EditTarget), as one undo step. Nothing happens
+// with no part selected.
+func (a *Application) editSelected(apply func(kf *editor.Keyframe)) {
+	if a.Project.SelectedPart() == nil {
+		return
+	}
+	a.Project.Playback.IsPlaying = false
+	a.Project.RecordUndo()
+	apply(a.Project.EditTarget())
+	a.Project.Dirty = true
+	a.refreshAll()
+}
+
+// onZOrder moves the selected part one step forward/back in draw order at
+// the playhead, or (absolute) in front of / behind every other part.
+func (a *Application) onZOrder(front, absolute bool) {
+	if !absolute {
+		step := float32(-1)
+		if front {
+			step = 1
+		}
+		a.editSelected(func(kf *editor.Keyframe) { kf.Z += step })
+		return
+	}
+	if z, ok := a.Project.ZOrderTarget(front); ok {
+		a.editSelected(func(kf *editor.Keyframe) { kf.Z = z })
+	}
+}
+
+// modifierHeld reports whether mod is held down right now.
+func modifierHeld(mod fyne.KeyModifier) bool {
+	d, ok := fyne.CurrentApp().Driver().(desktop.Driver)
+	return ok && d.CurrentKeyModifiers()&mod != 0
 }
 
 // -- Menu handlers --
@@ -1165,7 +1274,4 @@ func (a *Application) onClose() {
 
 // subPixelHeld reports whether Alt is down: placing a part on the canvas
 // snaps to whole pixels unless it is (editor.SnapPosition).
-func subPixelHeld() bool {
-	d, ok := fyne.CurrentApp().Driver().(desktop.Driver)
-	return ok && d.CurrentKeyModifiers()&fyne.KeyModifierAlt != 0
-}
+func subPixelHeld() bool { return modifierHeld(fyne.KeyModifierAlt) }
