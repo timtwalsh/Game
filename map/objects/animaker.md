@@ -229,6 +229,14 @@ feedback after using the previous version:
     the old cell up until the new one: Row/Col already step. X/Y still
     lerp between the two keyframes, so a frame dropped at a different
     spot slides there over the gap.
+    - **Since 2026-10-03 (timtwalsh/Game#27): a new part starts at the
+      origin**, wherever it was dropped - the user: 0,0 is what's wanted
+      "90% of the time", since a rig's sheets are drawn on a shared grid.
+      The drag preview shows it there (`Project.DropMakesNewPart`). A
+      drop that keys the selected part still lands at the drop point;
+      the precise frame swap is a palette *click* (`TapTile`, #26),
+      which keeps the position, so #27's "drop keeps position" options
+      weren't needed.
 
 12. **Rename a part by double-clicking its timeline name** (2026-10-01),
     requested so a rig built from drops (`sprite_1`, `sprite_2`...) can

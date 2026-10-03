@@ -625,8 +625,8 @@ func (a *Application) wireCallbacks() {
 // onTileDropped handles a cell dragged out of the palette onto the canvas.
 // With a part selected, the cell becomes that part's next frame: a
 // keyframe at the playhead, at the drop point. With nothing selected it is
-// added to the rig as a new part, which is how a rig of several pieces
-// visible at once gets built. editor.Project.DropTile owns that rule.
+// added to the rig as a new part at the origin, which is how a rig of
+// several pieces visible at once gets built. editor.Project.DropTile owns that rule.
 //
 // Both behaviours were reported as wanted at different times: first
 // "I should be able to have all of the parts on a sheet simultaneously"
@@ -681,6 +681,9 @@ func (a *Application) onTileDragMove(sheetName string, row, col int, absPos fyne
 	if sheet == nil || !ok {
 		a.canvasWidget.ClearDropPreview()
 		return
+	}
+	if a.Project.DropMakesNewPart(sheetName) {
+		x, y = 0, 0 // a new part starts at the origin (DropTile)
 	}
 	a.canvasWidget.SetDropPreview(sheet, row, col, x, y)
 }

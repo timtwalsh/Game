@@ -22,7 +22,10 @@ import (
 //     as a new part, linked to whichever prop is currently set to that
 //     sheet (see PropForSheet), if any. That is how a rig of several
 //     simultaneously-visible pieces gets built — deselect (click empty
-//     canvas, or Esc) and drop.
+//     canvas, or Esc) and drop. A new part is placed at the origin, not
+//     where it was dropped (decided 2026-10-03): pieces of a rig are
+//     usually drawn on one shared grid, so 0,0 lines them up, and a drop
+//     by hand never would. Drag it from there.
 //
 // Returns (-1, nil) if there is no active direction or no sheet.
 func (p *Project) DropTile(sheetName string, row, col int, x, y float32) (int, *Keyframe) {
@@ -32,8 +35,8 @@ func (p *Project) DropTile(sheetName string, row, col int, x, y float32) (int, *
 	}
 	timeMs := p.Playback.ElapsedMs
 
-	if part := p.SelectedPart(); part != nil && part.Kind == PartKindSheet &&
-		p.partShowsSheet(part, sheetName) {
+	if !p.DropMakesNewPart(sheetName) {
+		part := p.SelectedPart()
 		kf, _ := EnsureKeyframe(dir, part.ID, timeMs)
 		kf.Row, kf.Col = row, col
 		kf.X, kf.Y = x, y
@@ -51,12 +54,19 @@ func (p *Project) DropTile(sheetName string, row, col int, x, y float32) (int, *
 	}
 	part := AddPart(track, NewSheetPart(UniquePartName(track, base), prop, sheetName))
 	kf := AddKeyframe(dir, part.ID, timeMs)
-	kf.Row, kf.Col = row, col
-	kf.X, kf.Y = x, y
+	kf.Row, kf.Col = row, col // at the origin: X, Y = 0, 0
 	// Stack new parts in front of what's already there, so a piece dropped
 	// later isn't hidden behind one dropped earlier.
 	kf.Z = float32(len(track.Parts))
 	return len(track.Parts) - 1, kf
+}
+
+// DropMakesNewPart reports whether dropping a cell of sheetName would add
+// a new part (placed at the origin) rather than key the selected one - for
+// the drag preview, which shows where the drop will land.
+func (p *Project) DropMakesNewPart(sheetName string) bool {
+	part := p.SelectedPart()
+	return part == nil || part.Kind != PartKindSheet || !p.partShowsSheet(part, sheetName)
 }
 
 // TapTile applies a palette cell clicked (not dragged) while a part is
