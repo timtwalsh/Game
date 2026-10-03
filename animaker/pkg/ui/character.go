@@ -155,8 +155,8 @@ func (cp *CharacterPanel) buildOpen(a *editor.CharAnim) {
 		"Not gameplay timing: when a hit lands is gameplay data, which `animaker lint` checks these against.")
 	markerHint.Wrapping = fyne.TextWrapWord
 	cp.openBox.Add(markerHint)
-	for i, m := range a.Markers {
-		cp.openBox.Add(cp.markerRow(a, i, m))
+	for _, m := range a.Markers {
+		cp.openBox.Add(cp.markerRow(a, m))
 	}
 	cp.openBox.Add(widget.NewButton("+ Add Marker at Playhead", func() { cp.addMarker(a) }))
 }
@@ -164,7 +164,7 @@ func (cp *CharacterPanel) buildOpen(a *editor.CharAnim) {
 // markerRow edits one marker's name and time. Edits apply when the field
 // loses focus or Enter is pressed, so typing doesn't re-sort the rows
 // mid-word.
-func (cp *CharacterPanel) markerRow(a *editor.CharAnim, i int, m editor.Marker) fyne.CanvasObject {
+func (cp *CharacterPanel) markerRow(a *editor.CharAnim, m editor.Marker) fyne.CanvasObject {
 	name := newEntry()
 	name.SetText(m.Name)
 	at := newEntry()
@@ -176,6 +176,12 @@ func (cp *CharacterPanel) markerRow(a *editor.CharAnim, i int, m editor.Marker) 
 			return
 		}
 		if strings.TrimSpace(name.Text) == m.Name && uint32(t) == m.TimeMs {
+			return
+		}
+		// Found again by value: this row may have been rebuilt away, and
+		// the markers re-sorted, since it was drawn.
+		i := a.MarkerIndex(m)
+		if i < 0 {
 			return
 		}
 		if err := a.SetMarker(name.Text, i, uint32(t)); err != nil {
@@ -190,6 +196,10 @@ func (cp *CharacterPanel) markerRow(a *editor.CharAnim, i int, m editor.Marker) 
 	name.onFocusLost = apply
 	at.onFocusLost = apply
 	remove := widget.NewButton("×", func() {
+		i := a.MarkerIndex(m)
+		if i < 0 {
+			return
+		}
 		a.RemoveMarker(i)
 		cp.changed()
 		cp.Refresh()

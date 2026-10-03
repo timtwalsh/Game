@@ -57,6 +57,9 @@ func TestCharAnimMarkers(t *testing.T) {
 	if got := a.MarkerTimes()["footstep"]; !reflect.DeepEqual(got, []uint32{0, 300}) {
 		t.Errorf("MarkerTimes footstep = %v", got)
 	}
+	if a.MarkerIndex(Marker{"dust", 250}) != 1 || a.MarkerIndex(Marker{"dust", 999}) != -1 {
+		t.Error("MarkerIndex")
+	}
 	a.RemoveMarker(1)
 	if len(a.Markers) != 2 || a.Markers[1].Name != "footstep" {
 		t.Errorf("after remove: %v", a.Markers)
