@@ -93,3 +93,37 @@ func TestOnionSkinDrawsNeighbouringPoses(t *testing.T) {
 		t.Errorf("%d ghosts while playing, want 0", got)
 	}
 }
+
+// A palette tile dragged over the canvas shows faintly where it would
+// land, placed by its pivot; clearing the preview removes it.
+func TestDropPreviewShowsWhereATileWouldLand(t *testing.T) {
+	test.NewTempApp(t)
+	p := editor.NewProject("t")
+	sheet := editor.NewSpriteSheetTemplate("r", "r.png", image.NewRGBA(image.Rect(0, 0, 16, 8)), 8, 8, 4, 8)
+	cw := NewCanvasWidget(p)
+	cw.SetZoom(2)
+	w := test.NewWindow(cw)
+	t.Cleanup(w.Close)
+	preview := func() *canvas.Image {
+		for _, o := range test.WidgetRenderer(cw).Objects() {
+			if img, ok := o.(*canvas.Image); ok && img.Translucency == dropPreviewTranslucency {
+				return img
+			}
+		}
+		return nil
+	}
+
+	cw.SetDropPreview(sheet, 0, 1, 10, 20)
+	img := preview()
+	if img == nil {
+		t.Fatal("no preview drawn")
+	}
+	origin := cw.originScreen()
+	if want := fyne.NewPos(origin.X+(10-4)*2, origin.Y+(20-8)*2); img.Position() != want {
+		t.Errorf("preview at %v, want %v (pivot on the drop point)", img.Position(), want)
+	}
+	cw.ClearDropPreview()
+	if preview() != nil {
+		t.Error("preview still drawn after ClearDropPreview")
+	}
+}

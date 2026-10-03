@@ -45,6 +45,7 @@ type PropertiesPanel struct {
 	// app.go is the one that knows about the canvas, so it handles the
 	// actual drop-to-keyframe logic.
 	OnTileDragStart func()
+	OnTileDragMove  func(sheetName string, row, col int, absPos fyne.Position)
 	OnTileDropped   func(sheetName string, row, col int, absPos fyne.Position)
 	OnTileTapped    func(row, col int)
 	OnImport        func()
@@ -213,6 +214,11 @@ func (pp *PropertiesPanel) ensureSheetGrid() {
 	pp.sheetGrid.OnDragStart = func() {
 		if pp.OnTileDragStart != nil {
 			pp.OnTileDragStart()
+		}
+	}
+	pp.sheetGrid.OnDragMove = func(row, col int, absPos fyne.Position) {
+		if pp.OnTileDragMove != nil {
+			pp.OnTileDragMove(pp.project.PaletteSheet, row, col, absPos)
 		}
 	}
 	pp.sheetGrid.OnTileDropped = func(row, col int, absPos fyne.Position) {
@@ -829,6 +835,15 @@ func (pp *PropertiesPanel) buildNudgeControls(beginEdit func() *editor.Keyframe)
 			pp.refreshKeyframe()
 		}
 	}
+	// To Front / To Back put the part in front of / behind every other
+	// part posed at the playhead (Ctrl+Shift+] / [ do the same).
+	zOrder := func(label string, front bool) *widget.Button {
+		return widget.NewButton(label, func() {
+			if z, ok := pp.project.ZOrderTarget(front); ok {
+				nudge(func(kf *editor.Keyframe) { kf.Z = z })()
+			}
+		})
+	}
 
 	xyPad := container.NewGridWithColumns(3,
 		layout.NewSpacer(),
@@ -847,13 +862,18 @@ func (pp *PropertiesPanel) buildNudgeControls(beginEdit func() *editor.Keyframe)
 		widget.NewButton("Back -", nudge(func(kf *editor.Keyframe) { kf.Z -= nudgeStepZ })),
 		widget.NewButton("Fwd +", nudge(func(kf *editor.Keyframe) { kf.Z += nudgeStepZ })),
 	)
+	zOrderRow := container.NewHBox(
+		widget.NewLabel("Draw order:"),
+		zOrder("To Back", false),
+		zOrder("To Front", true),
+	)
 	rotRow := container.NewHBox(
 		widget.NewLabel("Rot:"),
 		widget.NewButton("-", nudge(func(kf *editor.Keyframe) { kf.RotationDeg -= nudgeStepRot })),
 		widget.NewButton("+", nudge(func(kf *editor.Keyframe) { kf.RotationDeg += nudgeStepRot })),
 	)
 
-	return container.NewVBox(xyPad, zRow, rotRow)
+	return container.NewVBox(xyPad, zRow, zOrderRow, rotRow)
 }
 
 func (pp *PropertiesPanel) notifyKeyframeChanged() {

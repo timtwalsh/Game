@@ -2,6 +2,7 @@ package app
 
 import (
 	"animaker/pkg/editor"
+	"image"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -91,5 +92,31 @@ func TestZOrderShortcuts(t *testing.T) {
 	kf := a.Project.EditTarget()
 	if kf.TimeMs != 100 || kf.Z != 6 {
 		t.Errorf("bring to front: keyframe at %dms Z %v, want Z 6 at 100ms (in front of head's 5)", kf.TimeMs, kf.Z)
+	}
+}
+
+// A drop that adds a part asks for its name; one that keys the selected
+// part doesn't.
+func TestDropNewPartAsksForItsName(t *testing.T) {
+	a, _ := builtApp(t)
+	a.Project.LoadedSheets["sheet"] = editor.NewSpriteSheetTemplate("sheet", "s.png", image.NewRGBA(image.Rect(0, 0, 8, 8)), 8, 8, 0, 0)
+	a.Window.Resize(fyne.NewSize(1200, 800))
+	inCanvas := fyne.CurrentApp().Driver().AbsolutePositionForObject(a.canvasWidget).Add(fyne.NewPos(5, 5))
+	overlays := a.Window.Canvas().Overlays()
+
+	a.properties.SelectPart(-1)
+	a.onTileDropped("sheet", 0, 0, inCanvas)
+	if len(a.Project.CurrentTrack.Parts) != 3 {
+		t.Fatalf("%d parts after the drop, want 3", len(a.Project.CurrentTrack.Parts))
+	}
+	top := overlays.Top()
+	if top == nil {
+		t.Fatal("no rename dialog after a drop made a new part")
+	}
+	overlays.Remove(top)
+
+	a.onTileDropped("sheet", 0, 1, inCanvas) // the new part is selected: keys it
+	if overlays.Top() != nil {
+		t.Error("rename dialog after a drop that only keyed the selected part")
 	}
 }

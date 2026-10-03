@@ -109,6 +109,7 @@ var ShortcutHelp = [][2]string{
 	{"Delete", "Delete the selected keyframe, or the selected part's keyframe at the playhead"},
 	{"1 / 2 / 3 / 4", "Up / Right / Down / Left direction"},
 	{"Esc", "Deselect (the next palette drop adds a new part)"},
+	{"F2", "Rename the selected part (also: double-click its name in the timeline)"},
 	{"O", "Onion skin: show the selected part's neighbouring keyframe poses faintly"},
 	{"Ctrl+] / Ctrl+[", "Selected part forward / back in draw order"},
 	{"Ctrl+Shift+] / [", "Selected part to the front / back"},

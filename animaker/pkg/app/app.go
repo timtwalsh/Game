@@ -346,25 +346,7 @@ func (a *Application) wireCallbacks() {
 	// Double-clicking a row's name renames the part, so a rig built by
 	// dropping tiles (which names parts sprite_1, sprite_2...) can be
 	// relabelled "head", "left_arm", "legs" where the artist is looking.
-	a.timeline.OnPartRename = func(partIdx int) {
-		if partIdx < 0 || partIdx >= len(a.Project.CurrentTrack.Parts) {
-			return
-		}
-		current := a.Project.CurrentTrack.Parts[partIdx].Name
-		ui.ShowRenamePartDialog(a.Window, current, func(name string) error {
-			if strings.TrimSpace(name) == current {
-				return nil
-			}
-			snap := a.Project.TakeSnapshot()
-			if err := editor.RenamePart(a.Project.CurrentTrack, partIdx, name); err != nil {
-				return err
-			}
-			a.Project.UndoStack.Push(snap)
-			a.Project.Dirty = true
-			a.refreshAll()
-			return nil
-		})
-	}
+	a.timeline.OnPartRename = a.renamePart
 	a.timeline.OnKeyframeDeleted = func(partIdx, kfIdx int) {
 		dir, part := a.directionAndPart(partIdx)
 		if dir == nil {
@@ -470,6 +452,7 @@ func (a *Application) wireCallbacks() {
 	// first keyframe past the current bounds doesn't slide the canvas
 	// while the artist is still choosing where to drop.
 	a.properties.OnTileDragStart = func() { a.canvasWidget.SetViewFrozen(true) }
+	a.properties.OnTileDragMove = a.onTileDragMove
 	a.properties.OnTileDropped = a.onTileDropped
 	a.properties.OnTileTapped = a.onTileTapped
 }
@@ -492,24 +475,21 @@ func (a *Application) wireCallbacks() {
 //
 // Drops outside the canvas's bounds are ignored.
 func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.Position) {
-	// The drop ends the gesture, so the view unfreezes here however this
-	// returns - including the rejection paths below.
+	// The drop ends the gesture, so the view unfreezes and the preview
+	// goes here however this returns - including the rejection paths below.
 	defer a.canvasWidget.SetViewFrozen(false)
+	defer a.canvasWidget.ClearDropPreview()
 
 	if a.Project.ActiveDirection() == nil || sheetName == "" {
 		return
 	}
-
-	canvasAbsPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(a.canvasWidget)
-	canvasSize := a.canvasWidget.Size()
-	local := fyne.NewPos(absPos.X-canvasAbsPos.X, absPos.Y-canvasAbsPos.Y)
-	if local.X < 0 || local.Y < 0 || local.X > canvasSize.Width || local.Y > canvasSize.Height {
+	x, y, ok := a.canvasPoint(absPos)
+	if !ok {
 		return // dropped outside the canvas - not a placement
 	}
-	x, y := a.canvasWidget.LocalToAnimXY(local)
-	x, y = editor.SnapPosition(x, y, subPixelHeld())
 
 	before := a.Project.TakeSnapshot()
+	parts := len(a.Project.CurrentTrack.Parts)
 	partIdx, kf := a.Project.DropTile(sheetName, row, col, x, y)
 	if kf == nil {
 		return // nothing changed, so no undo step (it would also clear redo)
@@ -519,6 +499,40 @@ func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.
 	a.Project.Selection.KeyframeIndex = kf.Index
 	a.Project.Dirty = true
 	a.refreshAll()
+	// A drop that made a new part asks for its name straight away, so a rig
+	// is named as it's built rather than left as sheet_1, sheet_2... Esc
+	// keeps the generated name.
+	if len(a.Project.CurrentTrack.Parts) > parts {
+		a.renamePart(partIdx)
+	}
+}
+
+// onTileDragMove shows where a palette tile being dragged would land, as
+// a faint copy of the cell under the cursor - placed exactly as the drop
+// will place it.
+func (a *Application) onTileDragMove(sheetName string, row, col int, absPos fyne.Position) {
+	sheet := a.Project.LoadedSheets[sheetName]
+	x, y, ok := a.canvasPoint(absPos)
+	if sheet == nil || !ok {
+		a.canvasWidget.ClearDropPreview()
+		return
+	}
+	a.canvasWidget.SetDropPreview(sheet, row, col, x, y)
+}
+
+// canvasPoint converts a window position into the animation's own X/Y,
+// snapped as a drop is (editor.SnapPosition); ok is false outside the
+// canvas.
+func (a *Application) canvasPoint(absPos fyne.Position) (x, y float32, ok bool) {
+	canvasAbsPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(a.canvasWidget)
+	canvasSize := a.canvasWidget.Size()
+	local := fyne.NewPos(absPos.X-canvasAbsPos.X, absPos.Y-canvasAbsPos.Y)
+	if local.X < 0 || local.Y < 0 || local.X > canvasSize.Width || local.Y > canvasSize.Height {
+		return 0, 0, false
+	}
+	x, y = a.canvasWidget.LocalToAnimXY(local)
+	x, y = editor.SnapPosition(x, y, subPixelHeld())
+	return x, y, true
 }
 
 // onTileTapped makes a clicked palette cell the selected part's frame at
@@ -633,6 +647,8 @@ func (a *Application) onTypedKey(e *fyne.KeyEvent) {
 			a.Project.Dirty = true
 			a.refreshAll()
 		}
+	case fyne.KeyF2:
+		a.renamePart(a.Project.Selection.PartIndex)
 	case fyne.KeyO:
 		a.canvasWidget.ToggleOnion()
 	case fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4:
@@ -1311,3 +1327,26 @@ func (a *Application) onClose() {
 // subPixelHeld reports whether Alt is down: placing a part on the canvas
 // snaps to whole pixels unless it is (editor.SnapPosition).
 func subPixelHeld() bool { return modifierHeld(fyne.KeyModifierAlt) }
+
+// renamePart asks for a new name for the part, prefilled and selected so
+// typing replaces it. Undoable; refused names (empty, taken) reopen the
+// dialog with the error.
+func (a *Application) renamePart(partIdx int) {
+	if partIdx < 0 || partIdx >= len(a.Project.CurrentTrack.Parts) {
+		return
+	}
+	current := a.Project.CurrentTrack.Parts[partIdx].Name
+	ui.ShowRenamePartDialog(a.Window, current, func(name string) error {
+		if strings.TrimSpace(name) == current {
+			return nil
+		}
+		snap := a.Project.TakeSnapshot()
+		if err := editor.RenamePart(a.Project.CurrentTrack, partIdx, name); err != nil {
+			return err
+		}
+		a.Project.UndoStack.Push(snap)
+		a.Project.Dirty = true
+		a.refreshAll()
+		return nil
+	})
+}

@@ -42,6 +42,8 @@ type CanvasWidget struct {
 	// showOnion draws the selected part's neighbouring keyframe poses
 	// faintly behind it (ToggleOnion).
 	showOnion bool
+	// preview is a palette tile being dragged over the canvas, or nil.
+	preview *dropPreview
 
 	draggingPartIdx int // -1 = not dragging
 	// dragStartLocal is where the press began, widget-local. Drags report
@@ -520,6 +522,10 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 		selected := sel != nil && sel.PartIndex == d.partIdx
 		objs = append(objs, r.drawPart(d, origin, selected)...)
 	}
+	// A tile being dragged in from the palette, on top of everything.
+	if pv := r.dropPreviewImage(origin); pv != nil {
+		objs = append(objs, pv)
+	}
 
 	return objs
 }
@@ -693,4 +699,53 @@ func (r *canvasRenderer) onionGhosts(d resolvedDraw, e partExtent, origin fyne.P
 func (cw *CanvasWidget) ToggleOnion() {
 	cw.showOnion = !cw.showOnion
 	cw.Refresh()
+}
+
+// dropPreview is a palette tile being dragged over the canvas: which cell,
+// and the animation X/Y it would land at.
+type dropPreview struct {
+	sheet    *editor.SpriteSheetTemplate
+	row, col int
+	x, y     float32
+}
+
+// dropPreviewTranslucency is how faint the dragged tile's preview is.
+const dropPreviewTranslucency = 0.4
+
+// SetDropPreview shows where a dragged palette tile would land: the cell,
+// drawn faintly by its pivot at animation (x, y), exactly as a drop there
+// would place it.
+func (cw *CanvasWidget) SetDropPreview(sheet *editor.SpriteSheetTemplate, row, col int, x, y float32) {
+	cw.preview = &dropPreview{sheet: sheet, row: row, col: col, x: x, y: y}
+	cw.Refresh()
+}
+
+// ClearDropPreview removes the drag preview (the drag ended or left the
+// canvas).
+func (cw *CanvasWidget) ClearDropPreview() {
+	if cw.preview == nil {
+		return
+	}
+	cw.preview = nil
+	cw.Refresh()
+}
+
+// dropPreviewImage draws the drag preview, or nil without one.
+func (r *canvasRenderer) dropPreviewImage(origin fyne.Position) fyne.CanvasObject {
+	cw := r.widget
+	pv := cw.preview
+	if pv == nil || pv.sheet == nil {
+		return nil
+	}
+	cell, err := pv.sheet.CellImage(pv.row, pv.col)
+	if err != nil {
+		return nil
+	}
+	img := canvas.NewImageFromImage(cell) // its own: pooled images must stay solid
+	img.ScaleMode = canvas.ImageScalePixels
+	img.FillMode = canvas.ImageFillOriginal
+	img.Translucency = dropPreviewTranslucency
+	img.Resize(fyne.NewSize(float32(pv.sheet.CellW)*cw.zoom, float32(pv.sheet.CellH)*cw.zoom))
+	img.Move(fyne.NewPos(origin.X+(pv.x-pv.sheet.PivotX)*cw.zoom, origin.Y+(pv.y-pv.sheet.PivotY)*cw.zoom))
+	return img
 }
