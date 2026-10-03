@@ -6,6 +6,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -37,6 +38,9 @@ type SheetGridWidget struct {
 	// duration of the gesture.
 	OnDragStart func()
 
+	// hover highlights the tile under the mouse.
+	hover *hoverBox
+
 	// OnDragMove fires on every movement of a picked-up tile with its
 	// absolute position, so the canvas can preview where it would land.
 	OnDragMove func(row, col int, absPos fyne.Position)
@@ -63,7 +67,7 @@ const (
 )
 
 func NewSheetGridWidget() *SheetGridWidget {
-	g := &SheetGridWidget{}
+	g := &SheetGridWidget{hover: newHoverBox(true)}
 	g.ExtendBaseWidget(g)
 	return g
 }
@@ -71,6 +75,7 @@ func NewSheetGridWidget() *SheetGridWidget {
 // SetSheet swaps which sheet is displayed. A nil sheet renders empty.
 func (g *SheetGridWidget) SetSheet(sheet *editor.SpriteSheetTemplate) {
 	g.sheet = sheet
+	g.hover.hide()
 	g.Refresh()
 }
 
@@ -252,5 +257,38 @@ func (r *sheetGridRenderer) buildObjects() []fyne.CanvasObject {
 			objs = append(objs, ci, outline)
 		}
 	}
-	return objs
+	return append(objs, g.hover.rect)
+}
+
+// -- Hover: the tile under the mouse is highlighted, with a hand cursor,
+// so it's clear what a click or drag would pick up.
+
+var _ desktop.Hoverable = (*SheetGridWidget)(nil)
+var _ desktop.Cursorable = (*SheetGridWidget)(nil)
+
+func (g *SheetGridWidget) MouseIn(e *desktop.MouseEvent) { g.MouseMoved(e) }
+
+func (g *SheetGridWidget) MouseMoved(e *desktop.MouseEvent) {
+	if !g.hasCells() {
+		g.hover.hide()
+		return
+	}
+	scale := g.displayScale()
+	cw, ch := float32(g.sheet.CellW)*scale, float32(g.sheet.CellH)*scale
+	if e.Position.X < 0 || e.Position.Y < 0 ||
+		e.Position.X >= cw*float32(g.sheet.Cols()) || e.Position.Y >= ch*float32(g.sheet.Rows()) {
+		g.hover.hide()
+		return
+	}
+	row, col := g.cellAt(e.Position)
+	g.hover.show(fyne.NewPos(float32(col)*cw, float32(row)*ch), fyne.NewSize(cw, ch))
+}
+
+func (g *SheetGridWidget) MouseOut() { g.hover.hide() }
+
+func (g *SheetGridWidget) Cursor() desktop.Cursor {
+	if g.hasCells() {
+		return desktop.PointerCursor
+	}
+	return desktop.DefaultCursor
 }
