@@ -34,9 +34,6 @@ type Application struct {
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
 	directionTabs *ui.DirectionTabs
-	// addFacingsBtn adds the four standard facings; disabled once the track
-	// has them all.
-	addFacingsBtn *widget.Button
 	titleLabel   *widget.Label
 
 	playbackTicker *time.Ticker
@@ -147,17 +144,191 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 
 	a.directionTabs = ui.NewDirectionTabs()
 	a.directionTabs.OnSelect = a.switchDirection
-	// New tracks have one direction; a character needs the four facings,
-	// so that's one click rather than four trips through Add Direction.
-	a.addFacingsBtn = widget.NewButton("+ Up/Right/Down/Left", a.onAddStandardDirections)
+	a.directionTabs.MenuFor = a.directionMenu
 	a.refreshDirectionSelect()
 
-	addDirBtn := widget.NewButton("+ Direction...", a.onAddDirection)
+	// Adding, deleting and re-keying directions all live in one menu: this
+	// button opens it for the active direction, right-clicking a tab for
+	// that one.
+	var menuBtn *widget.Button
+	menuBtn = widget.NewButton("Directions ▾", func() {
+		a.directionTabs.ShowMenuBelow(a.Project.Playback.ActiveDirection, menuBtn)
+	})
 
 	return container.NewVBox(
-		container.NewHBox(a.titleLabel, layout.NewSpacer(), a.addFacingsBtn, addDirBtn),
+		container.NewHBox(a.titleLabel, layout.NewSpacer(), menuBtn),
 		a.directionTabs.Object(),
 	)
+}
+
+// directionMenu is what can be done to direction key, and to the track's
+// directions as a whole. Shown for the active direction by the Directions
+// button, and for any tab on right-click. Directions are named by compass
+// point for the track's direction count (editor.FacingName).
+func (a *Application) directionMenu(key int) *fyne.Menu {
+	track := a.Project.CurrentTrack
+	n := track.Facings()
+	name := editor.FacingName(key, n)
+
+	// Change to: every other direction this track's count has.
+	var changeItems []*fyne.MenuItem
+	for to := 0; to < n; to++ {
+		if to == key {
+			continue
+		}
+		to := to
+		item := fyne.NewMenuItem(editor.FacingName(to, n), func() { a.changeDirectionKey(key, to) })
+		if d, ok := track.Directions[to]; ok && d.TotalKeyframes() > 0 {
+			item.Label += " (posed)"
+			item.Disabled = true
+		}
+		changeItems = append(changeItems, item)
+	}
+	change := fyne.NewMenuItem("Change "+name+" to", nil)
+	change.ChildMenu = fyne.NewMenu("", changeItems...)
+	change.Disabled = len(changeItems) == 0
+
+	del := fyne.NewMenuItem("Delete "+name+"...", func() { a.confirmDeleteDirection(key) })
+	del.Disabled = len(track.Directions) <= 1
+
+	// How many directions: 1, 4, 8 or 16.
+	var countItems []*fyne.MenuItem
+	for _, c := range editor.DirectionCounts {
+		c := c
+		item := fyne.NewMenuItem(fmt.Sprintf("%d", c), func() { a.setDirectionCount(c) })
+		item.Checked = c == n
+		countItems = append(countItems, item)
+	}
+	count := fyne.NewMenuItem("Directions", nil)
+	count.ChildMenu = fyne.NewMenu("", countItems...)
+
+	// Directions this count has but the track doesn't (deleted, or removed
+	// as empty), to add back.
+	var addItems []*fyne.MenuItem
+	for _, k := range track.MissingFacings() {
+		k := k
+		addItems = append(addItems, fyne.NewMenuItem(editor.FacingName(k, n), func() { a.addDirection(k) }))
+	}
+	add := fyne.NewMenuItem("Add Direction", nil)
+	add.ChildMenu = fyne.NewMenu("", addItems...)
+	add.Disabled = len(addItems) == 0
+
+	removeEmpty := fyne.NewMenuItem("Remove Empty Directions", a.onRemoveEmptyDirections)
+	if empty := track.EmptyDirections(); len(empty) == 0 || len(empty) == len(track.Directions) && len(empty) == 1 {
+		removeEmpty.Disabled = true
+	}
+
+	return fyne.NewMenu("",
+		change, del,
+		fyne.NewMenuItemSeparator(),
+		count, add, removeEmpty,
+	)
+}
+
+// setDirectionCount changes how many directions the track has
+// (editor.Project.SetDirectionCount): directions keep their facing, and
+// any with keyframes that the new count can't face are removed only after
+// asking. Undoable.
+func (a *Application) setDirectionCount(n int) {
+	snap := a.Project.TakeSnapshot()
+	apply := func(dropPosed bool) {
+		if _, err := a.Project.SetDirectionCount(n, dropPosed); err != nil {
+			a.showError(err)
+			return
+		}
+		a.Project.UndoStack.Push(snap)
+		a.refreshDirectionSelect()
+		a.refreshAll()
+	}
+	lost, err := a.Project.SetDirectionCount(n, false)
+	switch {
+	case err != nil:
+		a.showError(err)
+		return
+	case len(lost) == 0:
+		if a.Project.Dirty {
+			a.Project.UndoStack.Push(snap)
+		}
+		a.refreshDirectionSelect()
+		a.refreshAll()
+		return
+	}
+	from := a.Project.CurrentTrack.Facings()
+	names := make([]string, len(lost))
+	for i, k := range lost {
+		names[i] = editor.FacingName(k, from)
+	}
+	msg := fmt.Sprintf("A %d-direction track can't face %s, which have keyframes. "+
+		"Change to %d directions and delete them?\n\nYou can undo this with Ctrl+Z.", n, strings.Join(names, ", "), n)
+	dialog.ShowConfirm("Fewer Directions", msg, func(ok bool) {
+		if ok {
+			apply(true)
+		}
+	}, a.Window)
+}
+
+// addDirection adds back one of the track's missing directions, empty.
+func (a *Application) addDirection(k int) {
+	a.Project.RecordUndo()
+	editor.AddDirection(a.Project.CurrentTrack, k)
+	a.refreshDirectionSelect()
+	a.refreshAll()
+}
+
+// confirmDeleteDirection deletes a direction - straight away if it's
+// empty, after asking if it has keyframes. Undoable either way.
+func (a *Application) confirmDeleteDirection(key int) {
+	dir := a.Project.CurrentTrack.Directions[key]
+	if dir == nil {
+		return
+	}
+	del := func() {
+		snap := a.Project.TakeSnapshot()
+		if err := a.Project.DeleteDirection(key); err != nil {
+			a.showError(err)
+			return
+		}
+		a.Project.UndoStack.Push(snap)
+		a.refreshDirectionSelect()
+		a.refreshAll()
+	}
+	n := dir.TotalKeyframes()
+	if n == 0 {
+		del()
+		return
+	}
+	msg := fmt.Sprintf("Delete the %s direction and its %d keyframes?\n\nThe parts stay - they belong to every "+
+		"direction. You can undo this with Ctrl+Z.", editor.FacingName(key, a.Project.CurrentTrack.Facings()), n)
+	dialog.ShowConfirm("Delete Direction", msg, func(ok bool) {
+		if ok {
+			del()
+		}
+	}, a.Window)
+}
+
+// changeDirectionKey moves a direction's keyframes to another key, e.g. a
+// facing posed as Up that should have been Right. Undoable.
+func (a *Application) changeDirectionKey(from, to int) {
+	snap := a.Project.TakeSnapshot()
+	if err := a.Project.ChangeDirectionKey(from, to); err != nil {
+		a.showError(err)
+		return
+	}
+	a.Project.UndoStack.Push(snap)
+	a.refreshDirectionSelect()
+	a.refreshAll()
+}
+
+// onRemoveEmptyDirections tidies a track saved with the old four-direction
+// default: every direction with no keyframes goes, keeping at least one.
+func (a *Application) onRemoveEmptyDirections() {
+	snap := a.Project.TakeSnapshot()
+	if removed := a.Project.RemoveEmptyDirections(); len(removed) == 0 {
+		return
+	}
+	a.Project.UndoStack.Push(snap)
+	a.refreshDirectionSelect()
+	a.refreshAll()
 }
 
 // switchDirection makes key the facing being edited, offering to copy
@@ -171,19 +342,6 @@ func (a *Application) switchDirection(key int) {
 	a.offerTimingCopy(key)
 }
 
-// onAddStandardDirections adds whichever of the four facings the track
-// lacks. Undoable; the active direction stays where it is.
-func (a *Application) onAddStandardDirections() {
-	snap := a.Project.TakeSnapshot()
-	if added := editor.AddStandardDirections(a.Project.CurrentTrack); len(added) == 0 {
-		return
-	}
-	a.Project.UndoStack.Push(snap)
-	a.Project.Dirty = true
-	a.refreshDirectionSelect()
-	a.refreshAll()
-}
-
 // refreshDirectionSelect rebuilds the direction tabs - their keyframe
 // counts change with every edit, so refreshAll calls it too.
 func (a *Application) refreshDirectionSelect() {
@@ -191,13 +349,6 @@ func (a *Application) refreshDirectionSelect() {
 		return
 	}
 	a.directionTabs.Refresh(a.Project.CurrentTrack, a.Project.Playback.ActiveDirection)
-	if a.addFacingsBtn != nil {
-		if a.Project.CurrentTrack.HasStandardDirections() {
-			a.addFacingsBtn.Disable()
-		} else {
-			a.addFacingsBtn.Enable()
-		}
-	}
 }
 
 // offerTimingCopy prompts, on switching to a direction with no keyframes,
@@ -214,7 +365,7 @@ func (a *Application) offerTimingCopy(key int) {
 	if len(sources) == 0 {
 		return
 	}
-	ui.ShowCopyTimingDialog(a.Window, key, sources, func(src int) {
+	ui.ShowCopyTimingDialog(a.Window, key, sources, track.Facings(), func(src int) {
 		a.Project.RecordUndo()
 		editor.CopyKeyframeTimes(track, src, key)
 		a.Project.Dirty = true
@@ -653,8 +804,8 @@ func (a *Application) onTypedKey(e *fyne.KeyEvent) {
 	case fyne.KeyO:
 		a.canvasWidget.ToggleOnion()
 	case fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4:
-		// The four standard facings, in the game's order: 1 = up (0).
-		a.switchDirection(int(e.Name[0] - '1'))
+		// N, E, S, W - whichever key faces that way on this track.
+		a.switchDirection(editor.MapDirection(int(e.Name[0]-'1'), 4, a.Project.CurrentTrack.Facings()))
 	}
 }
 
@@ -1201,17 +1352,6 @@ func (a *Application) addPart(part *editor.Part) bool {
 	a.properties.SelectPart(len(track.Parts) - 1)
 	a.Project.Dirty = true
 	return true
-}
-
-func (a *Application) onAddDirection() {
-	track := a.Project.CurrentTrack
-	exists := func(key int) bool { _, ok := track.Directions[key]; return ok }
-	ui.ShowAddDirectionDialog(a.Window, exists, func(key int) {
-		a.Project.RecordUndo()
-		editor.AddDirection(a.Project.CurrentTrack, key)
-		a.refreshDirectionSelect()
-		a.refreshAll()
-	})
 }
 
 func (a *Application) onAddProp() {

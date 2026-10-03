@@ -65,11 +65,11 @@ func TestNestedDirectionPickers(t *testing.T) {
 	if part.DirectionMode != editor.NestedDirStatic {
 		t.Fatalf("mode = %v, want static", part.DirectionMode)
 	}
-	plays := findSelect(t, pp.partLinkBox, "0 (up)")
+	plays := findSelect(t, pp.partLinkBox, "N")
 	if plays == nil {
 		t.Fatal("no static direction picker")
 	}
-	plays.SetSelected("3 (left)")
+	plays.SetSelected("W")
 	if part.StaticDirection != 3 {
 		t.Errorf("static direction = %d, want 3", part.StaticDirection)
 	}
@@ -79,11 +79,11 @@ func TestNestedDirectionPickers(t *testing.T) {
 	// showing.
 	mode = findSelect(t, pp.partLinkBox, "Static")
 	mode.SetSelected("Per keyframe")
-	kfDir := findSelect(t, pp.keyframeBox, "3 (left)")
+	kfDir := findSelect(t, pp.keyframeBox, "W")
 	if kfDir == nil {
 		t.Fatal("no per-keyframe Direction picker (or it wasn't seeded with 3)")
 	}
-	kfDir.SetSelected("1 (right)")
+	kfDir.SetSelected("E")
 	if got := p.ActiveDirection().KeyframesFor(part.ID)[0].Direction; got != 1 {
 		t.Errorf("keyframe direction = %d, want 1", got)
 	}

@@ -29,7 +29,9 @@ func (t *DarkEditorTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVari
 	case theme.ColorNamePrimary:
 		return color.RGBA{R: 100, G: 160, B: 255, A: 255}
 	case theme.ColorNameHover:
-		return color.RGBA{R: 60, G: 60, B: 70, A: 255}
+		// Clearly lighter than ColorNameButton (55,55,65): at (60,60,70) a
+		// hovered button looked the same as any other.
+		return color.RGBA{R: 95, G: 100, B: 125, A: 255}
 	case theme.ColorNameSelection:
 		return color.RGBA{R: 50, G: 100, B: 180, A: 128}
 	case theme.ColorNameSeparator:

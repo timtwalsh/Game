@@ -245,47 +245,6 @@ func number(s string) error {
 
 func formatFloat(f float32) string { return strconv.FormatFloat(float64(f), 'f', -1, 32) }
 
-// ShowAddDirectionDialog displays a dialog for adding a new direction.
-// Directions are keyed by a whole number 0 or above (0=up, 1=right, 2=down,
-// 3=left by the game's own convention; more for diagonals or extra
-// facings). exists reports a key the track already has; Add stays
-// disabled for that, or for anything that isn't such a number.
-func ShowAddDirectionDialog(win fyne.Window, exists func(key int) bool, onCreate func(key int)) {
-	keyEntry := newEntry()
-	keyEntry.SetPlaceHolder("0=up, 1=right, 2=down, 3=left, ...")
-	keyEntry.Validator = func(s string) error {
-		k, err := strconv.Atoi(strings.TrimSpace(s))
-		switch {
-		case err != nil || k < 0:
-			return errors.New("a whole number, 0 or above")
-		case exists != nil && exists(k):
-			return fmt.Errorf("direction %d already exists", k)
-		}
-		return nil
-	}
-
-	form := dialog.NewForm(
-		"Add Direction",
-		"Add", "Cancel",
-		[]*widget.FormItem{
-			{Text: "Direction (int)", Widget: keyEntry},
-		},
-		func(confirmed bool) {
-			if !confirmed || onCreate == nil {
-				return
-			}
-			key, err := strconv.Atoi(strings.TrimSpace(keyEntry.Text))
-			if err != nil {
-				return
-			}
-			onCreate(key)
-		},
-		win,
-	)
-	form.Resize(fyne.NewSize(400, 180))
-	form.Show()
-}
-
 // ShowAddPropDialog displays a dialog for declaring a new prop on the
 // track. The default is a pick-list of imported sheets, not free text: a
 // default naming no loaded sheet makes every part linked to the prop draw
@@ -464,17 +423,17 @@ func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name st
 // direction's keyframe times. sources must be non-empty; its first entry
 // is preselected (direction 0 whenever it has keyframes). onCopy runs only
 // if the artist chooses to copy.
-func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy func(src int)) {
+func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, facings int, onCopy func(src int)) {
 	options := make([]string, len(sources))
 	for i, k := range sources {
-		options[i] = directionName(k)
+		options[i] = editor.FacingName(k, facings)
 	}
 	srcSelect := widget.NewSelect(options, nil)
 	srcSelect.SetSelected(options[0])
 
 	msg := widget.NewLabel(fmt.Sprintf("The %s direction has no keyframes yet. Copy the keyframe times "+
 		"from another direction as a starting point? Only the timing is copied: every "+
-		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", directionName(target)))
+		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", editor.FacingName(target, facings)))
 	msg.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(

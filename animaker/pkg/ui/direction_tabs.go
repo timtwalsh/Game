@@ -10,8 +10,8 @@ import (
 )
 
 // DirectionTabs is the direction bar's row of facings: one button per
-// direction of the track, named the way the game numbers them ("Up",
-// "Right"...) rather than as bare ints, each with its keyframe count so
+// direction of the track, named by compass point (N, NE, E...) rather than
+// as bare ints, each with its keyframe count so
 // unposed facings stand out without visiting them (they're also drawn in
 // the warning colour). The active one is highlighted.
 //
@@ -20,6 +20,10 @@ import (
 // PropertiesPanel.refreshPartList.
 type DirectionTabs struct {
 	box *fyne.Container
+
+	// MenuFor builds the menu for a direction (right-click on its tab, or
+	// the Directions button for the active one).
+	MenuFor func(key int) *fyne.Menu
 
 	// OnSelect fires when the artist clicks a direction other than the
 	// active one.
@@ -40,6 +44,7 @@ func (dt *DirectionTabs) Object() fyne.CanvasObject { return dt.box }
 // Refresh rebuilds the tabs from the track's directions.
 func (dt *DirectionTabs) Refresh(track *editor.Track, active int) {
 	keys := track.SortedDirectionKeys()
+	facings := track.Facings()
 	cols := len(keys)
 	if cols > directionTabColumns {
 		cols = directionTabColumns
@@ -51,11 +56,11 @@ func (dt *DirectionTabs) Refresh(track *editor.Track, active int) {
 	for _, k := range keys {
 		key := k
 		n := track.Directions[key].TotalKeyframes()
-		btn := widget.NewButton(DirectionTabLabel(key, n), func() {
+		btn := newDirTab(DirectionTabLabel(key, facings, n), func() {
 			if key != active && dt.OnSelect != nil {
 				dt.OnSelect(key)
 			}
-		})
+		}, func(e *fyne.PointEvent) { dt.showMenu(key, e.AbsolutePosition) })
 		switch {
 		case key == active:
 			btn.Importance = widget.HighImportance
@@ -68,24 +73,45 @@ func (dt *DirectionTabs) Refresh(track *editor.Track, active int) {
 	dt.box.Refresh()
 }
 
-// directionName is a facing's name in the game's convention, or "Dir N"
-// for any other key (diagonals, extra facings).
-func directionName(k int) string {
-	switch k {
-	case 0:
-		return "Up"
-	case 1:
-		return "Right"
-	case 2:
-		return "Down"
-	case 3:
-		return "Left"
+// showMenu pops up the direction menu for key (MenuFor) at an absolute
+// position - a right-click on its tab, or the Directions button.
+func (dt *DirectionTabs) showMenu(key int, at fyne.Position) {
+	if dt.MenuFor == nil {
+		return
 	}
-	return fmt.Sprintf("Dir %d", k)
+	if c := fyne.CurrentApp().Driver().CanvasForObject(dt.box); c != nil {
+		widget.ShowPopUpMenuAtPosition(dt.MenuFor(key), c, at)
+	}
 }
 
-// DirectionTabLabel is a tab's text: the facing's name and how many
-// keyframes it has, so "(0)" marks a facing not posed yet.
-func DirectionTabLabel(k, keyframes int) string {
-	return fmt.Sprintf("%s (%d)", directionName(k), keyframes)
+// ShowMenuBelow pops up key's menu under obj - for the Directions button,
+// which acts on the active direction.
+func (dt *DirectionTabs) ShowMenuBelow(key int, obj fyne.CanvasObject) {
+	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(obj)
+	dt.showMenu(key, pos.AddXY(0, obj.Size().Height))
+}
+
+// dirTab is a direction tab: a button that also opens the direction's
+// menu on right-click (delete, change key...).
+type dirTab struct {
+	widget.Button
+	onSecondary func(*fyne.PointEvent)
+}
+
+var _ fyne.SecondaryTappable = (*dirTab)(nil)
+
+func newDirTab(label string, onTap func(), onSecondary func(*fyne.PointEvent)) *dirTab {
+	b := &dirTab{onSecondary: onSecondary}
+	b.Text, b.OnTapped = label, onTap
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *dirTab) TappedSecondary(e *fyne.PointEvent) { b.onSecondary(e) }
+
+// DirectionTabLabel is a tab's text: the facing's compass name (key k of
+// an n-direction track) and how many keyframes it has, so "(0)" marks a
+// facing not posed yet.
+func DirectionTabLabel(k, n, keyframes int) string {
+	return fmt.Sprintf("%s (%d)", editor.FacingName(k, n), keyframes)
 }

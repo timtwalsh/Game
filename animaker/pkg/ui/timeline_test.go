@@ -72,10 +72,10 @@ func TestZoomAnchorOffsetKeepsTheAnchoredTimeOnScreen(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			viewportX := c.contentX - c.offsetX
-			timeBefore := (c.contentX - timelineLabelWidth) * c.oldMs
+			timeBefore := (c.contentX - timelineZeroX) * c.oldMs
 
 			newOffset := zoomAnchorOffset(c.contentX, c.offsetX, c.oldMs, c.newMs)
-			timeAfter := (newOffset + viewportX - timelineLabelWidth) * c.newMs
+			timeAfter := (newOffset + viewportX - timelineZeroX) * c.newMs
 
 			if math.Abs(float64(timeAfter-timeBefore)) > 0.01 {
 				t.Errorf("time under the cursor moved from %vms to %vms", timeBefore, timeAfter)
@@ -88,9 +88,9 @@ func TestZoomAnchorOffsetKeepsTheAnchoredTimeOnScreen(t *testing.T) {
 // extrapolating to negative time.
 func TestZoomAnchorOffsetInTheLabelColumnPinsTimeZero(t *testing.T) {
 	off := zoomAnchorOffset(50, 0, 2, 1)
-	// Time 0 sits at timelineLabelWidth in content space; with the anchor
-	// at viewport x 50, offset = labelWidth - 50.
-	if want := float32(timelineLabelWidth - 50); off != want {
+	// Time 0 sits at timelineZeroX in content space; with the anchor
+	// at viewport x 50, offset = timelineZeroX - 50.
+	if want := float32(timelineZeroX - 50); off != want {
 		t.Errorf("offset = %v, want %v", off, want)
 	}
 }
@@ -215,5 +215,20 @@ func TestTimelineDragsSnap(t *testing.T) {
 	s.scrubTo(s.xForTime(604))
 	if scrubbed != 600 {
 		t.Errorf("click near 600ms scrubbed to %d, want 600", scrubbed)
+	}
+}
+
+// Requested: a click just left of "0ms" lands on 0, and a keyframe at 0
+// isn't cut in half by the name column.
+func TestTimelineHasRoomBeforeZero(t *testing.T) {
+	s := newScrubArea(editor.NewProject("t"))
+	if x0 := s.xForTime(0); x0-timelineMarkerSize/2 < timelineLabelWidth {
+		t.Errorf("a marker at 0ms starts at x=%v, inside the name column (ends %v)", x0-timelineMarkerSize/2, timelineLabelWidth)
+	}
+	var got []uint32
+	s.OnScrub = func(ms uint32) { got = append(got, ms) }
+	s.Tapped(&fyne.PointEvent{Position: fyne.NewPos(timelineLabelWidth+2, 5)})
+	if len(got) != 1 || got[0] != 0 {
+		t.Errorf("click in the start pad scrubbed to %v, want [0]", got)
 	}
 }

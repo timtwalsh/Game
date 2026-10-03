@@ -10,16 +10,16 @@ import (
 )
 
 func TestDirectionTabLabelNamesTheFacing(t *testing.T) {
-	cases := map[[2]int]string{
-		{0, 0}: "Up (0)",
-		{1, 5}: "Right (5)",
-		{2, 1}: "Down (1)",
-		{3, 0}: "Left (0)",
-		{7, 2}: "Dir 7 (2)",
+	cases := map[[3]int]string{
+		{0, 4, 0}:  "N (0)",
+		{1, 4, 5}:  "E (5)",
+		{1, 8, 2}:  "NE (2)",
+		{3, 16, 1}: "ENE (1)",
+		{0, 1, 3}:  "All (3)",
 	}
 	for in, want := range cases {
-		if got := DirectionTabLabel(in[0], in[1]); got != want {
-			t.Errorf("DirectionTabLabel(%d, %d) = %q, want %q", in[0], in[1], got, want)
+		if got := DirectionTabLabel(in[0], in[1], in[2]); got != want {
+			t.Errorf("DirectionTabLabel%v = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -45,10 +45,10 @@ func TestDirectionTabsShowEachFacing(t *testing.T) {
 	}
 	btns := make([]*widget.Button, 4)
 	for i, o := range grid.Objects {
-		btns[i] = o.(*widget.Button)
+		btns[i] = &o.(*dirTab).Button
 	}
-	if btns[0].Text != "Up (1)" || btns[1].Text != "Right (0)" {
-		t.Errorf("tabs = %q, %q, want Up (1), Right (0)", btns[0].Text, btns[1].Text)
+	if btns[0].Text != "N (1)" || btns[1].Text != "E (0)" {
+		t.Errorf("tabs = %q, %q, want N (1), E (0)", btns[0].Text, btns[1].Text)
 	}
 	if btns[2].Importance != widget.HighImportance {
 		t.Error("active direction (Down) isn't highlighted")

@@ -489,8 +489,9 @@ feedback after using the previous version:
     one commit each). Walked each artist journey through the code.
     - **Directions**: new tracks start with **one direction (0)**, not
       four - a torch meant to be non-directional had three empty facings
-      by accident. "+ Up/Right/Down/Left" adds the standard facings
-      (`AddStandardDirections`). The direction bar is a row of tabs
+      by accident. "+ Up/Right/Down/Left" added the standard facings
+      (`AddStandardDirections`; replaced by the direction count in entry
+      25). The direction bar is a row of tabs
       named by facing with keyframe counts, unposed ones in the warning
       colour (`ui.DirectionTabs`). A nested animation's empty direction
       now falls back to a posed one (`pickDirection`), which is what
@@ -530,6 +531,43 @@ feedback after using the previous version:
       cell-to-direction mapping on sheets (#40, design).
     - `Application.build` is split out of `Run` so app tests drive the
       real UI (`pkg/app/shortcuts_test.go`, `rig_test.go`).
+25. **Directions: compass facings, counts, delete and re-key; hover
+    states** (2026-10-03; timtwalsh/Game#44, #46, plus two follow-ups
+    from hands-on use).
+    - **Direction keys now match the game.** The spec had claimed
+      0=up/1=right/2=down/3=left was the game's convention; the game is
+      8-way (`client/prediction.go`: 0=N, 1=NE, 2=E ... 7=NW). A track
+      now declares `DirectionCount` N = 1, 4, 8 or 16 (saved as
+      `directions` in `[metadata]`), keys `0..N-1` clockwise from north
+      (`editor/facings.go`). 8 is the game's numbering; 4 is what files
+      always used, so a file without the count is read by its keys
+      (`Track.Facings`). Names come from the 16-point compass
+      (`FacingName`: N, NNE, NE, ENE ...; "All" for a 1-direction track).
+      `LoadTrack` refuses a count it doesn't know or a key outside it.
+    - **Nested inherit maps by facing** (`MapDirection`, via
+      `Part.NestedDirectionAt(parentDir, parentN, childN, ...)`), so a
+      4-direction torch held by an 8-direction character turns
+      sensibly; a facing exactly between two goes to the sideways one
+      (E/W). The engine should use the same rule.
+    - **Direction menu** (`app.directionMenu`): right-click a direction
+      tab (`ui.dirTab`), or "Directions ▾" for the active one.
+      *Change to* lists the track's other directions by name (posed ones
+      disabled) and moves the keyframes unchanged
+      (`Project.ChangeDirectionKey`). *Delete* asks only if posed, never
+      the last one (`Project.DeleteDirection`). *Directions > 1/4/8/16*
+      (`Project.SetDirectionCount`) keeps each direction's facing (4 to
+      8 moves E from key 1 to 2) and asks before dropping posed ones the
+      new count can't face. *Add Direction* offers missing ones by name;
+      *Remove Empty Directions* keeps at least one. All undoable. Keys
+      1-4 pick N/E/S/W (the nearest the track has).
+    - **Timeline start pad**: time 0 sits 14px right of the name column
+      (`timelineZeroX`); a click in that gap lands on 0.
+    - **Hover states** (`ui.hoverBox`): palette tiles, canvas parts,
+      timeline markers (resize cursor), part names, the row delete x,
+      and import-preview cells highlight under the mouse with a fitting
+      cursor. Each widget moves one highlight rectangle rather than
+      redrawing on every mouse move. The theme's hover colour was nearly
+      the button colour, so Fyne buttons barely reacted; it's lighter now.
 
 ## Shape
 
