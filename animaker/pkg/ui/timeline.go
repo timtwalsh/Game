@@ -16,6 +16,12 @@ const (
 	timelineRulerHeight = 24
 	timelineRowHeight   = 28
 	timelineLabelWidth  = 120
+	// timelineStartPadPx is empty ruler before time 0, so a keyframe at 0ms
+	// isn't cut in half by the name column and a click just left of "0ms"
+	// still lands on 0 (timeForX clamps it).
+	timelineStartPadPx = 14
+	// timelineZeroX is where time 0 sits in the scroll area's content.
+	timelineZeroX = timelineLabelWidth + timelineStartPadPx
 	timelineMarkerSize  = 10
 	timelineTailPx      = 40 // empty space after the last tick, so the end isn't flush
 
@@ -67,14 +73,15 @@ func clampMsPerPx(v float32) float32 {
 // animation time under contentX at the same place on screen when the zoom
 // changes from oldMsPerPx to newMsPerPx. Without it, zooming re-anchors on
 // the timeline's left edge and whatever you were looking at slides away.
-// An anchor inside the label column is treated as time 0.
+// An anchor left of time 0 (the label column or the start pad) is
+// treated as time 0.
 func zoomAnchorOffset(contentX, offsetX, oldMsPerPx, newMsPerPx float32) float32 {
 	viewportX := contentX - offsetX
-	t := (contentX - timelineLabelWidth) * oldMsPerPx
+	t := (contentX - timelineZeroX) * oldMsPerPx
 	if t < 0 {
 		t = 0
 	}
-	return timelineLabelWidth + t/newMsPerPx - viewportX
+	return timelineZeroX + t/newMsPerPx - viewportX
 }
 
 type timelineDragMode int
@@ -144,7 +151,7 @@ func (s *scrubArea) totalMs() uint32 {
 }
 
 func (s *scrubArea) widthForDuration() float32 {
-	return timelineLabelWidth + float32(s.totalMs())/s.msPerPixel + timelineTailPx
+	return timelineZeroX + float32(s.totalMs())/s.msPerPixel + timelineTailPx
 }
 
 // parts is the rig's shared part list — every part gets a row in every
@@ -170,11 +177,11 @@ func (s *scrubArea) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (s *scrubArea) xForTime(timeMs uint32) float32 {
-	return timelineLabelWidth + float32(timeMs)/s.msPerPixel
+	return timelineZeroX + float32(timeMs)/s.msPerPixel
 }
 
 func (s *scrubArea) timeForX(x float32) uint32 {
-	rel := x - timelineLabelWidth
+	rel := x - timelineZeroX
 	if rel < 0 {
 		rel = 0
 	}
@@ -805,7 +812,7 @@ func (tw *TimelineWidget) zoomAround(contentX, msPerPx float32) {
 
 // zoomToFit sizes the zoom so the whole editable range fills the panel.
 func (tw *TimelineWidget) zoomToFit() {
-	avail := tw.scroll.Size().Width - timelineLabelWidth - timelineTailPx
+	avail := tw.scroll.Size().Width - timelineZeroX - timelineTailPx
 	if avail <= 0 {
 		return
 	}
