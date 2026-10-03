@@ -125,3 +125,36 @@ func (p *Project) RemoveProp(idx int) error {
 	p.Dirty = true
 	return nil
 }
+
+// SetPropDefault changes the named prop's default value - previously the
+// only way was to delete the prop and add it again, which is refused
+// while parts use it. The value must be of the prop's own kind and
+// loaded: an imported sheet for a sheet prop, a loaded animation for an
+// .anif prop. Changing kind would leave its linked parts unable to draw
+// it, and a preview-only sheet is never saved, so neither is accepted.
+// Undoable; reports whether anything changed.
+func (p *Project) SetPropDefault(name, value string) (bool, error) {
+	pd := p.CurrentTrack.FindProp(name)
+	switch {
+	case pd == nil:
+		return false, fmt.Errorf("there's no prop called %q", name)
+	case pd.Default == value:
+		return false, nil
+	case pd.IsAnimProp() != IsAnimValue(value):
+		if pd.IsAnimProp() {
+			return false, fmt.Errorf("prop %q holds animations, so its default must be an .anif", name)
+		}
+		return false, fmt.Errorf("prop %q holds sprite sheets, so its default must be a sheet", name)
+	case IsAnimValue(value) && p.LoadedAnims[AnimKey(value)] == nil:
+		return false, fmt.Errorf("%q isn't loaded - use Import Animation first", value)
+	case !IsAnimValue(value) && p.LoadedSheets[value] == nil:
+		return false, fmt.Errorf("no imported sheet is called %q", value)
+	}
+	p.RecordUndo()
+	if IsAnimValue(value) {
+		value = AnimKey(value)
+	}
+	pd.Default = value
+	p.Dirty = true
+	return true, nil
+}

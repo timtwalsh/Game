@@ -130,7 +130,7 @@ func (pp *PropertiesPanel) Build(directionBar fyne.CanvasObject) fyne.CanvasObje
 	pp.rigScroll = container.NewVScroll(pp.rigBox)
 
 	propsHint := widget.NewLabel("A prop is a swappable art slot (e.g. hair). Its value is a sheet; " +
-		"parts linked to it draw from that sheet. Tick \"Swappable art\" when importing to make one.")
+		"parts linked to it draw from that sheet. Tick \"Swappable art\" when importing to make one; pick its default below.")
 	propsHint.Wrapping = fyne.TextWrapWord
 	propsArea := container.NewVScroll(container.NewVBox(
 		container.NewHBox(newSectionHeader("PROPS (schema)"), addPropBtn), propsHint, pp.schemaBox,
@@ -1079,11 +1079,29 @@ func (pp *PropertiesPanel) refreshSchema() {
 	pp.schemaBox.RemoveAll()
 	for i, prop := range pp.project.CurrentTrack.Props {
 		idx := i
-		def := prop.Default
+		name := prop.Name
+		// The default is a pick-list of values of the prop's own kind, so it
+		// can be changed after the prop is made (Project.SetPropDefault).
+		// Preview-only sheets aren't offered: they're never saved.
+		values := sheetPickerOptions(pp.project.LoadedSheetNames(), prop.Default)
+		labels := values
 		if prop.IsAnimProp() {
-			def = filepath.Base(def)
+			values = sheetPickerOptions(pp.project.LoadedAnimPaths(), prop.Default)
+			labels = AnimLabels(values)
 		}
-		label := widget.NewLabel(fmt.Sprintf("%s -> %s", prop.Name, def))
+		defSelect := widget.NewSelect(labels, nil)
+		defSelect.SetSelected(labelFor(labels, values, prop.Default))
+		// Assigned after SetSelected, which would re-fire it.
+		defSelect.OnChanged = func(label string) {
+			changed, err := pp.project.SetPropDefault(name, valueFor(labels, values, label))
+			if err != nil && pp.OnError != nil {
+				pp.OnError(err)
+			}
+			if (changed || err != nil) && pp.OnPropsChanged != nil {
+				pp.OnPropsChanged() // on an error too, to put the picker back
+			}
+		}
+		label := widget.NewLabel(name + ":")
 		delBtn := widget.NewButton("x", func() {
 			if err := pp.project.RemoveProp(idx); err != nil {
 				if pp.OnError != nil {
@@ -1096,7 +1114,7 @@ func (pp *PropertiesPanel) refreshSchema() {
 			}
 		})
 		delBtn.Importance = widget.DangerImportance
-		pp.schemaBox.Add(container.NewBorder(nil, nil, nil, delBtn, label))
+		pp.schemaBox.Add(container.NewBorder(nil, nil, label, delBtn, defSelect))
 	}
 	pp.schemaBox.Refresh()
 }
