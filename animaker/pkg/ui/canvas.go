@@ -11,6 +11,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -44,6 +45,9 @@ type CanvasWidget struct {
 	showOnion bool
 	// preview is a palette tile being dragged over the canvas, or nil.
 	preview *dropPreview
+	// hover outlines the part under the mouse (hoverPartIdx, -1 for none).
+	hover        *hoverBox
+	hoverPartIdx int
 
 	draggingPartIdx int // -1 = not dragging
 	// dragStartLocal is where the press began, widget-local. Drags report
@@ -72,7 +76,8 @@ type CanvasWidget struct {
 }
 
 func NewCanvasWidget(project *editor.Project) *CanvasWidget {
-	cw := &CanvasWidget{project: project, zoom: 4.0, showGrid: true, draggingPartIdx: -1}
+	cw := &CanvasWidget{project: project, zoom: 4.0, showGrid: true, draggingPartIdx: -1,
+		hoverPartIdx: -1}
 	cw.ExtendBaseWidget(cw)
 	return cw
 }
@@ -522,6 +527,19 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 		selected := sel != nil && sel.PartIndex == d.partIdx
 		objs = append(objs, r.drawPart(d, origin, selected)...)
 	}
+	// The hovered part's outline follows it as the animation plays.
+	h := cw.hoverOutline()
+	h.on = false
+	h.rect.Hide()
+	for _, d := range draws {
+		if d.partIdx == cw.hoverPartIdx {
+			h.on = true
+			h.rect.Move(d.rect)
+			h.rect.Resize(d.size)
+			h.rect.Show()
+		}
+	}
+	objs = append(objs, h.rect)
 	// A tile being dragged in from the palette, on top of everything.
 	if pv := r.dropPreviewImage(origin); pv != nil {
 		objs = append(objs, pv)
@@ -748,4 +766,56 @@ func (r *canvasRenderer) dropPreviewImage(origin fyne.Position) fyne.CanvasObjec
 	img.Resize(fyne.NewSize(float32(pv.sheet.CellW)*cw.zoom, float32(pv.sheet.CellH)*cw.zoom))
 	img.Move(fyne.NewPos(origin.X+(pv.x-pv.sheet.PivotX)*cw.zoom, origin.Y+(pv.y-pv.sheet.PivotY)*cw.zoom))
 	return img
+}
+
+// -- Hover: the part under the mouse is outlined, with a hand cursor, so
+// it's clear what a click would select (and, once selected, drag).
+
+var _ desktop.Hoverable = (*CanvasWidget)(nil)
+var _ desktop.Cursorable = (*CanvasWidget)(nil)
+
+func (cw *CanvasWidget) MouseIn(e *desktop.MouseEvent) { cw.MouseMoved(e) }
+
+func (cw *CanvasWidget) MouseMoved(e *desktop.MouseEvent) {
+	idx := -1
+	if cw.draggingPartIdx < 0 { // mid-drag, the part is plainly the one held
+		idx = cw.hitTest(e.Position)
+	}
+	if idx == cw.hoverPartIdx {
+		return
+	}
+	cw.hoverPartIdx = idx
+	cw.placeHover()
+}
+
+func (cw *CanvasWidget) MouseOut() {
+	cw.hoverPartIdx = -1
+	cw.hoverOutline().hide()
+}
+
+func (cw *CanvasWidget) Cursor() desktop.Cursor {
+	if cw.hoverPartIdx >= 0 {
+		return desktop.PointerCursor
+	}
+	return desktop.DefaultCursor
+}
+
+// placeHover moves the hover outline onto hoverPartIdx without redrawing
+// the rest of the canvas.
+func (cw *CanvasWidget) placeHover() {
+	for _, d := range cw.resolvedDraws() {
+		if d.partIdx == cw.hoverPartIdx {
+			cw.hoverOutline().show(d.rect, d.size)
+			return
+		}
+	}
+	cw.hoverOutline().hide()
+}
+
+// hoverOutline is the hover box, made on first use.
+func (cw *CanvasWidget) hoverOutline() *hoverBox {
+	if cw.hover == nil {
+		cw.hover = newHoverBox(false)
+	}
+	return cw.hover
 }

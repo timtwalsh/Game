@@ -115,6 +115,9 @@ type scrubArea struct {
 	// snapMarkMs is the other-part keyframe time a retime drag has snapped
 	// onto, drawn as a guide line; -1 when it isn't on one.
 	snapMarkMs int64
+	// hoverPart/hoverKf is the keyframe marker under the mouse (-1 for
+	// none), outlined so it's clear what a click or drag would take.
+	hoverPart, hoverKf int
 
 	OnScrub            func(timeMs uint32)
 	OnKeyframeSelected func(partIdx, kfIdx int)
@@ -134,7 +137,7 @@ type scrubArea struct {
 }
 
 func newScrubArea(project *editor.Project) *scrubArea {
-	s := &scrubArea{project: project, msPerPixel: timelineDefaultMsPerPx, snapMarkMs: -1}
+	s := &scrubArea{project: project, msPerPixel: timelineDefaultMsPerPx, snapMarkMs: -1, hoverPart: -1, hoverKf: -1}
 	s.ExtendBaseWidget(s)
 	return s
 }
@@ -375,13 +378,17 @@ const timelineDeleteWidth = 18
 type rowDeleteButton struct {
 	widget.BaseWidget
 	glyph *canvas.Text
+	// bg turns red under the mouse, so it's clear the x is a button.
+	bg    *canvas.Rectangle
 	onTap func()
 }
 
 var _ fyne.Tappable = (*rowDeleteButton)(nil)
+var _ desktop.Hoverable = (*rowDeleteButton)(nil)
+var _ desktop.Cursorable = (*rowDeleteButton)(nil)
 
 func newRowDeleteButton(onTap func()) *rowDeleteButton {
-	b := &rowDeleteButton{onTap: onTap}
+	b := &rowDeleteButton{onTap: onTap, bg: canvas.NewRectangle(color.Transparent)}
 	b.glyph = canvas.NewText("\u00d7", ColorDelete)
 	b.glyph.TextSize = 14
 	b.glyph.TextStyle = fyne.TextStyle{Bold: true}
@@ -389,7 +396,11 @@ func newRowDeleteButton(onTap func()) *rowDeleteButton {
 	return b
 }
 
-func (b *rowDeleteButton) Tapped(*fyne.PointEvent) { b.onTap() }
+func (b *rowDeleteButton) Tapped(*fyne.PointEvent)         { b.onTap() }
+func (b *rowDeleteButton) MouseIn(*desktop.MouseEvent)     { setFill(b.bg, ColorDeleteHover) }
+func (b *rowDeleteButton) MouseMoved(*desktop.MouseEvent)  {}
+func (b *rowDeleteButton) MouseOut()                       { setFill(b.bg, color.Transparent) }
+func (b *rowDeleteButton) Cursor() desktop.Cursor          { return desktop.PointerCursor }
 
 func (b *rowDeleteButton) CreateRenderer() fyne.WidgetRenderer {
 	return &rowDeleteRenderer{b: b}
@@ -398,13 +409,25 @@ func (b *rowDeleteButton) CreateRenderer() fyne.WidgetRenderer {
 type rowDeleteRenderer struct{ b *rowDeleteButton }
 
 func (r *rowDeleteRenderer) Layout(size fyne.Size) {
+	r.b.bg.Resize(size)
 	m := r.b.glyph.MinSize()
 	r.b.glyph.Move(fyne.NewPos((size.Width-m.Width)/2, (size.Height-m.Height)/2))
 }
-func (r *rowDeleteRenderer) MinSize() fyne.Size           { return r.b.glyph.MinSize() }
-func (r *rowDeleteRenderer) Refresh()                     { r.b.glyph.Refresh() }
-func (r *rowDeleteRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.b.glyph} }
-func (r *rowDeleteRenderer) Destroy()                     {}
+func (r *rowDeleteRenderer) MinSize() fyne.Size { return r.b.glyph.MinSize() }
+func (r *rowDeleteRenderer) Refresh()           { r.b.glyph.Refresh() }
+func (r *rowDeleteRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.b.bg, r.b.glyph}
+}
+func (r *rowDeleteRenderer) Destroy() {}
+
+// setFill changes a rectangle's fill and redraws just it.
+func setFill(r *canvas.Rectangle, c color.Color) {
+	if r.FillColor == c {
+		return
+	}
+	r.FillColor = c
+	canvas.Refresh(r)
+}
 
 // partLabel is a part's name in the timeline's label column. Click selects
 // the part; double-click renames it. It's its own widget, rather than the
@@ -414,16 +437,25 @@ func (r *rowDeleteRenderer) Destroy()                     {}
 // the name, where nothing else happens, pay that delay.
 type partLabel struct {
 	widget.BaseWidget
-	text        *canvas.Text
+	text *canvas.Text
+	// bg lights up under the mouse, so the name reads as clickable.
+	bg          *canvas.Rectangle
 	onTap       func()
 	onDoubleTap func()
 }
 
 var _ fyne.Tappable = (*partLabel)(nil)
 var _ fyne.DoubleTappable = (*partLabel)(nil)
+var _ desktop.Hoverable = (*partLabel)(nil)
+var _ desktop.Cursorable = (*partLabel)(nil)
+
+func (l *partLabel) MouseIn(*desktop.MouseEvent)    { setFill(l.bg, ColorHoverFill) }
+func (l *partLabel) MouseMoved(*desktop.MouseEvent) {}
+func (l *partLabel) MouseOut()                      { setFill(l.bg, color.Transparent) }
+func (l *partLabel) Cursor() desktop.Cursor         { return desktop.PointerCursor }
 
 func newPartLabel(onTap, onDoubleTap func()) *partLabel {
-	l := &partLabel{onTap: onTap, onDoubleTap: onDoubleTap}
+	l := &partLabel{onTap: onTap, onDoubleTap: onDoubleTap, bg: canvas.NewRectangle(color.Transparent)}
 	l.text = canvas.NewText("", ColorSectionHeader)
 	l.text.TextSize = 11
 	l.ExtendBaseWidget(l)
@@ -447,11 +479,14 @@ func (l *partLabel) CreateRenderer() fyne.WidgetRenderer {
 type partLabelRenderer struct{ label *partLabel }
 
 func (r *partLabelRenderer) Layout(size fyne.Size) {
+	r.label.bg.Resize(size)
 	r.label.text.Move(fyne.NewPos(4, size.Height/2-8))
 }
-func (r *partLabelRenderer) MinSize() fyne.Size           { return r.label.text.MinSize() }
-func (r *partLabelRenderer) Refresh()                     { r.label.text.Refresh() }
-func (r *partLabelRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.label.text} }
+func (r *partLabelRenderer) MinSize() fyne.Size { return r.label.text.MinSize() }
+func (r *partLabelRenderer) Refresh()           { r.label.text.Refresh() }
+func (r *partLabelRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.label.bg, r.label.text}
+}
 func (r *partLabelRenderer) Destroy()                     {}
 
 // -- Renderer --
@@ -548,6 +583,14 @@ func (r *scrubAreaRenderer) buildObjects() []fyne.CanvasObject {
 			marker.Resize(fyne.NewSize(timelineMarkerSize, timelineMarkerSize))
 			marker.Move(fyne.NewPos(x-timelineMarkerSize/2, rowY+timelineRowHeight/2-timelineMarkerSize/2-1))
 			objs = append(objs, marker)
+			if rowIdx == s.hoverPart && ki == s.hoverKf {
+				ring := canvas.NewRectangle(color.Transparent)
+				ring.StrokeColor = ColorHoverStroke
+				ring.StrokeWidth = 1.5
+				ring.Resize(fyne.NewSize(timelineMarkerSize+6, timelineMarkerSize+6))
+				ring.Move(marker.Position().SubtractXY(3, 3))
+				objs = append(objs, ring)
+			}
 		}
 	}
 
@@ -874,4 +917,44 @@ func (tw *TimelineWidget) buildInfoText() string {
 	// parked in the empty space where the next keyframe goes.
 	return fmt.Sprintf("Direction: %s   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d   |   Ctrl+wheel to zoom, drag a marker to retime (snaps; Alt for free)",
 		directionName(tw.project.Playback.ActiveDirection), tw.project.Playback.ElapsedMs, total, partCount)
+}
+
+// -- Hover: the keyframe marker under the mouse is ringed, and the cursor
+// shows a marker can be dragged sideways to retime it (a hand while
+// timing is locked, when a drag scrubs instead).
+
+var _ desktop.Hoverable = (*scrubArea)(nil)
+var _ desktop.Cursorable = (*scrubArea)(nil)
+
+func (s *scrubArea) MouseIn(e *desktop.MouseEvent) { s.MouseMoved(e) }
+
+func (s *scrubArea) MouseMoved(e *desktop.MouseEvent) {
+	part, kf := -1, -1
+	if s.dragMode == dragNone {
+		if p, k, ok := s.hitTestMarker(e.Position); ok {
+			part, kf = p, k
+		}
+	}
+	s.setHover(part, kf)
+}
+
+func (s *scrubArea) MouseOut() { s.setHover(-1, -1) }
+
+func (s *scrubArea) setHover(part, kf int) {
+	if part == s.hoverPart && kf == s.hoverKf {
+		return
+	}
+	s.hoverPart, s.hoverKf = part, kf
+	s.Refresh()
+}
+
+func (s *scrubArea) Cursor() desktop.Cursor {
+	switch {
+	case s.hoverPart < 0:
+		return desktop.DefaultCursor
+	case s.timingLocked:
+		return desktop.PointerCursor
+	default:
+		return desktop.HResizeCursor
+	}
 }

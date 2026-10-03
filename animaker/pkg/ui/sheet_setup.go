@@ -8,6 +8,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -24,6 +25,9 @@ type SheetSetupPreview struct {
 	cellW, cellH   int
 	pivotX, pivotY float32
 
+	// hover highlights the cell under the mouse.
+	hover *hoverBox
+
 	// OnPivotPicked reports a click as a pivot, in cell pixels.
 	OnPivotPicked func(x, y float32)
 }
@@ -38,7 +42,7 @@ const (
 )
 
 func NewSheetSetupPreview(img image.Image) *SheetSetupPreview {
-	p := &SheetSetupPreview{img: img}
+	p := &SheetSetupPreview{img: img, hover: newHoverBox(true)}
 	p.ExtendBaseWidget(p)
 	return p
 }
@@ -46,6 +50,7 @@ func NewSheetSetupPreview(img image.Image) *SheetSetupPreview {
 // SetGrid updates the grid and pivot drawn. Non-positive cell sizes (a
 // half-typed field) draw no grid.
 func (p *SheetSetupPreview) SetGrid(cellW, cellH int, pivotX, pivotY float32) {
+	p.hover.hide() // the cells under it may have changed size
 	p.cellW, p.cellH, p.pivotX, p.pivotY = cellW, cellH, pivotX, pivotY
 	p.Refresh()
 }
@@ -168,6 +173,7 @@ func (r *sheetSetupRenderer) rebuild() {
 			marks++
 		}
 	}
+	r.objects = append(r.objects, p.hover.rect)
 }
 
 func (r *sheetSetupRenderer) Layout(fyne.Size)            {}
@@ -209,3 +215,31 @@ func SuggestCellSize(imgW, imgH int) (cellW, cellH int) {
 func DefaultPivot(cellW, cellH int) (x, y float32) {
 	return float32(cellW / 2), float32(cellH)
 }
+
+// -- Hover: the cell under the mouse is highlighted, with a crosshair
+// cursor, since a click there places the pivot.
+
+var _ desktop.Hoverable = (*SheetSetupPreview)(nil)
+var _ desktop.Cursorable = (*SheetSetupPreview)(nil)
+
+func (p *SheetSetupPreview) MouseIn(e *desktop.MouseEvent) { p.MouseMoved(e) }
+
+func (p *SheetSetupPreview) MouseMoved(e *desktop.MouseEvent) {
+	if p.img == nil {
+		return
+	}
+	b := p.img.Bounds()
+	cols, rows := SheetGridSize(b.Dx(), b.Dy(), p.cellW, p.cellH)
+	s := p.scale()
+	col, row := int(e.Position.X/s)/max(p.cellW, 1), int(e.Position.Y/s)/max(p.cellH, 1)
+	if e.Position.X < 0 || e.Position.Y < 0 || col >= cols || row >= rows {
+		p.hover.hide()
+		return
+	}
+	cw, ch := float32(p.cellW)*s, float32(p.cellH)*s
+	p.hover.show(fyne.NewPos(float32(col)*cw, float32(row)*ch), fyne.NewSize(cw, ch))
+}
+
+func (p *SheetSetupPreview) MouseOut() { p.hover.hide() }
+
+func (p *SheetSetupPreview) Cursor() desktop.Cursor { return desktop.CrosshairCursor }
