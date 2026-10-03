@@ -79,4 +79,6 @@ families should come from a `families.toml` instead of command-line globs
 10. **Prop-schema linter: yes, filed as #24.** One open point: how a "family"
     of tracks is defined. The recommendation is an explicit glob per family,
     because splitting on the first `_` breaks names like `city_guard_*`.
+    **Settled 2026-10-03 (#42):** a family is an `.anichar`'s animation
+    list; `animaker lint human.anichar` checks it. Globs still work.
     Spec open questions 1–3 are still unresolved.

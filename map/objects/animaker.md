@@ -568,6 +568,29 @@ feedback after using the previous version:
       cursor. Each widget moves one highlight rectangle rather than
       redrawing on every mouse move. The theme's hover colour was nearly
       the button colour, so Fyne buttons barely reacted; it's lighter now.
+26. **`.anichar`: a character's animations by name** (2026-10-03;
+    timtwalsh/Game#42). An optional manifest naming a character's
+    `.anif`s (`walk` -> `human_walk.anif`) with a play mode
+    (loop/once/hold) and named markers each; the spec's "no character
+    manifest" decision was narrowed rather than reversed - the rig and
+    props stay in each track (option A), and no asset carries
+    transitions (the engine's state machine owns them).
+    - Model `editor/character.go` (`Character`, `CharAnim`, `PlayMode`,
+      `Marker`); file `file/anichar.go` (markers are one time or a list,
+      decoded by hand; `.anif` paths relative to the `.anichar`).
+    - Lint: a glob matching `.anichar` files checks each character - its
+      animations are the family (settling review decision 10), and
+      markers past their track's end are errors (`lint/character.go`).
+    - Editor (`app/character.go`, `ui/character.go`): File > New / Open /
+      Close Character puts a character panel above the palette. Clicking
+      an animation opens its track (through `confirmDiscard`); Add
+      Animation makes `<character>_<name>.anif` beside the `.anichar`
+      from the open animation's rig, or empty, or adds an existing
+      `.anif`; rename and remove (the `.anif` stays on disk). The open
+      animation's mode and markers are edited in the panel, and markers
+      are drawn as named lines on the timeline (`TimelineWidget.SetMarkers`).
+      The manifest saves on every change - it holds no poses, so it never
+      joins the track's unsaved work or its undo history.
 
 ## Shape
 
@@ -719,7 +742,11 @@ feedback after using the previous version:
   time on load.
 - `pkg/lint/` — `animaker lint <glob>...` (dispatched from `main.go`
   before the GUI starts): checks a family of tracks agree on their props
-  and that nested bindings name real props.
+  and that nested bindings name real props; an `.anichar` is checked as
+  its own family, plus its markers (`character.go`).
+- `.anichar` (entry 26): `editor/character.go`, `file/anichar.go`,
+  `app/character.go` (open/add/select, saves on every change),
+  `ui/character.go` (the panel and its dialogs).
 - `pkg/applog/` — per-session log files and crash reporting.
 
 ## Known gaps (not bugs)
@@ -745,6 +772,13 @@ Deliberate scope cuts, not oversights:
   isn't saved with the track. (Retiming snaps since entry 24.)
 - **The onion skin covers sheet parts only**; a nested part shows no
   ghosts.
+- **`.anichar` gaps** (entry 26): markers are edited as fields in the
+  character panel, not dragged on the timeline (they're drawn there);
+  rig or prop changes in one animation aren't offered to the character's
+  others yet (lint catches the drift); lint can't yet check a
+  controller's required names or markers against gameplay timing, since
+  neither controllers nor gameplay timing data exist in the engine;
+  character edits have no undo.
 - `docs/ANI_MAKER_SPEC.md`'s "Open questions" (how one prop fans out to
   multiple physical sheets; the sword "bent state"; hit-spark events)
   now carry the owner's answers there: separate parts get separate
@@ -864,6 +898,12 @@ fallback (confirmed to fail on the old `pickDirection`),
 `timeline_test.go`; and `pkg/app/shortcuts_test.go` / `rig_test.go`,
 which build the real UI via `Application.build` and drive keys, drops
 and New Track from Rig.
+
+Added with entry 26: `pkg/editor/character_test.go` (names, order,
+markers), `pkg/file/anichar_test.go` (round trip, the issue's example
+file, bad input refused), `pkg/lint/character_test.go`, and
+`pkg/app/character_test.go` (add from rig, select, markers on the
+timeline, close).
 
 ## See
 

@@ -21,6 +21,10 @@ type selectAllEntry struct {
 	// cleared when focus moves on: one stretch of typing in one field is
 	// one edit, which is what an undo step should take back.
 	inBurst bool
+
+	// onFocusLost, if set, runs after the entry loses focus - for fields
+	// that apply on leaving rather than on every keystroke.
+	onFocusLost func()
 }
 
 // newEntry is the editor's text entry; use it instead of widget.NewEntry
@@ -40,6 +44,9 @@ func (e *selectAllEntry) FocusGained() {
 func (e *selectAllEntry) FocusLost() {
 	e.Entry.FocusLost()
 	e.inBurst = false
+	if e.onFocusLost != nil {
+		e.onFocusLost()
+	}
 }
 
 // startEdit reports whether a change is the first of a new editing burst

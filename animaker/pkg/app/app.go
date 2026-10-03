@@ -34,6 +34,14 @@ type Application struct {
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
 	directionTabs *ui.DirectionTabs
+	// The .anichar open beside the track, if any (character.go), and the
+	// left column it shares with the palette.
+	character      *editor.Character
+	characterPath  string
+	characterPanel *ui.CharacterPanel
+	characterView  fyne.CanvasObject
+	palettePanel   fyne.CanvasObject
+	leftColumn     *fyne.Container
 	titleLabel   *widget.Label
 
 	playbackTicker *time.Ticker
@@ -103,15 +111,20 @@ func (a *Application) build() {
 
 	directionBar := a.buildDirectionBar()
 	canvasScroll := container.NewScroll(a.canvasWidget)
-	palettePanel := a.properties.BuildPalette()
+	a.palettePanel = a.properties.BuildPalette()
+	a.buildCharacterPanel()
+	a.leftColumn = container.NewStack(a.palettePanel)
 	propertiesPanel := a.properties.Build(directionBar)
 	timelinePanel := a.timeline.Build()
-	mainLayout := ui.BuildMainLayout(palettePanel, canvasScroll, propertiesPanel, timelinePanel)
+	mainLayout := ui.BuildMainLayout(a.leftColumn, canvasScroll, propertiesPanel, timelinePanel)
 
 	menu := ui.BuildMenuBar(
 		a.onNewTrack,
 		a.onNewTrackFromRig,
 		a.onOpenTrack,
+		a.onNewCharacter,
+		a.onOpenCharacter,
+		a.onCloseCharacter,
 		a.onSaveTrack,
 		a.onSaveAsTrack,
 		a.onImportSpriteSheet,
@@ -900,7 +913,11 @@ func (a *Application) updateTitle() {
 	if a.Project.Dirty {
 		mark = "*"
 	}
-	a.Window.SetTitle("ANIFile Animation Maker — " + mark + a.Project.CurrentTrack.Metadata.Name)
+	char := ""
+	if a.character != nil {
+		char = a.character.Name + " › "
+	}
+	a.Window.SetTitle("ANIFile Animation Maker — " + char + mark + a.Project.CurrentTrack.Metadata.Name)
 }
 
 func (a *Application) onNewTrack() {
@@ -908,18 +925,22 @@ func (a *Application) onNewTrack() {
 }
 
 func (a *Application) newTrack() {
-	ui.ShowNewTrackDialog(a.Window, func(name string) {
-		// Loop and speed are the artist's playback preferences, not part
-		// of a track, so they carry over to the new one.
-		prev := a.Project.Playback
-		a.Project = editor.NewProject(name)
-		a.Project.Playback.LoopEnabled, a.Project.Playback.SpeedFactor = prev.LoopEnabled, prev.SpeedFactor
-		a.canvasWidget.SetProject(a.Project)
-		a.timeline.SetProject(a.Project)
-		a.properties.SetProject(a.Project)
-		a.refreshDirectionSelect()
-		a.refreshAll()
-	})
+	ui.ShowNewTrackDialog(a.Window, a.openNewTrack)
+}
+
+// openNewTrack replaces the open track with a new, empty one.
+func (a *Application) openNewTrack(name string) {
+	// Loop and speed are the artist's playback preferences, not part
+	// of a track, so they carry over to the new one.
+	prev := a.Project.Playback
+	a.Project = editor.NewProject(name)
+	a.Project.Playback.LoopEnabled, a.Project.Playback.SpeedFactor = prev.LoopEnabled, prev.SpeedFactor
+	a.canvasWidget.SetProject(a.Project)
+	a.timeline.SetProject(a.Project)
+	a.properties.SetProject(a.Project)
+	a.refreshDirectionSelect()
+	a.refreshAll()
+	a.refreshCharacter()
 }
 
 func (a *Application) onOpenTrack() {
@@ -943,12 +964,12 @@ func (a *Application) openTrack() {
 // loadAndOpen loads the .anif at filePath with its sheets and nested
 // animations, then opens the track as(track) returns - the file itself for
 // Open, a keyframe-free copy for New Track from Rig - with the save path
-// it gives ("" for a track not saved yet).
-func (a *Application) loadAndOpen(filePath string, as func(*editor.Track) (*editor.Track, string)) {
+// it gives ("" for a track not saved yet). It reports whether it opened.
+func (a *Application) loadAndOpen(filePath string, as func(*editor.Track) (*editor.Track, string)) bool {
 	track, refs, err := file.LoadTrack(filePath)
 	if err != nil {
 		a.showError(fmt.Errorf("failed to load track: %w", err))
-		return
+		return false
 	}
 
 	// The .anif names its sheets but doesn't contain them, so load
@@ -981,7 +1002,9 @@ func (a *Application) loadAndOpen(filePath string, as func(*editor.Track) (*edit
 	a.properties.SetProject(a.Project)
 	a.refreshDirectionSelect()
 	a.refreshAll()
+	a.refreshCharacter()
 	a.reportUnloadedSheets(missing, problems)
+	return true
 }
 
 // onNewTrackFromRig starts a track from an existing one's rig - its parts,
@@ -1059,6 +1082,7 @@ func (a *Application) saveToPath(path string) bool {
 	a.Project.SavePath = path
 	a.Project.Dirty = false
 	a.updateTitle()
+	a.refreshCharacter() // Save As may have made it, or stopped it being, one of the character's
 	return true
 }
 
