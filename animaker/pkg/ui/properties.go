@@ -65,6 +65,8 @@ type PropertiesPanel struct {
 	OnLoadPreviewSheet func(propName string)
 	// OnRemoveSheet asks app.go to remove an imported sheet; it confirms.
 	OnRemoveSheet func(sheetName string)
+	// OnEditSheet asks app.go to reopen a sheet's grid and pivot settings.
+	OnEditSheet func(sheetName string)
 }
 
 func NewPropertiesPanel(project *editor.Project) *PropertiesPanel {
@@ -176,9 +178,15 @@ func (pp *PropertiesPanel) BuildPalette() fyne.CanvasObject {
 		}
 	})
 	removeBtn.Importance = widget.DangerImportance
+	// Reopens the sheet on show's cell size and pivot over its image.
+	editBtn := widget.NewButton("Edit...", func() {
+		if pp.OnEditSheet != nil && pp.project.PaletteSheet != "" {
+			pp.OnEditSheet(pp.project.PaletteSheet)
+		}
+	})
 
 	header := container.NewVBox(
-		container.NewBorder(nil, nil, nil, removeBtn, pp.paletteSelect),
+		container.NewBorder(nil, nil, nil, container.NewHBox(editBtn, removeBtn), pp.paletteSelect),
 		pp.paletteLabel,
 	)
 	return container.NewBorder(header, hint, nil, nil, container.NewScroll(pp.sheetGrid))

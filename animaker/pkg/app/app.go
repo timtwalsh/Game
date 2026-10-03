@@ -435,6 +435,7 @@ func (a *Application) wireCallbacks() {
 	a.properties.OnAddProp = a.onAddProp
 	a.properties.OnLoadPreviewSheet = a.onLoadPreviewSheet
 	a.properties.OnRemoveSheet = a.confirmRemoveSheet
+	a.properties.OnEditSheet = a.onEditSheet
 	a.properties.OnPropsChanged = func() { a.refreshAll() }
 	a.properties.OnError = a.showError
 	a.properties.OnPartDelete = a.confirmDeletePart
@@ -945,35 +946,51 @@ func (a *Application) reportUnloadedSheets(missing, problems []string) {
 // complaint when import only filled LoadedSheets and changed nothing on
 // screen.
 func (a *Application) onImportSpriteSheet() {
-	ui.ShowImportSheetDialog(a.Window, existingSheetSettings, func(imp ui.SheetImport) {
-		img, err := file.LoadImage(imp.FilePath)
-		if err != nil {
-			a.showError(fmt.Errorf("failed to load image: %w", err))
-			return
-		}
-		tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
-		if tmpl.Cols() == 0 || tmpl.Rows() == 0 {
-			b := img.Bounds()
-			a.showError(fmt.Errorf("a %dx%d cell doesn't fit in this %dx%d image - check Cell Width and Cell Height",
-				imp.CellW, imp.CellH, b.Dx(), b.Dy()))
-			return
-		}
-		replaces := a.importReplaces(imp)
-		if len(replaces) == 0 {
+	ui.ShowImportSheetDialog(a.Window, existingSheetSettings, file.LoadImage, a.applySheetImport)
+}
+
+// onEditSheet reopens a loaded sheet's grid, pivot and name in the import
+// dialog, over its image - changing them used to mean finding the file and
+// importing it again.
+func (a *Application) onEditSheet(name string) {
+	s := a.Project.LoadedSheets[name]
+	if s == nil {
+		return
+	}
+	current := ui.SheetImport{Name: s.Name, CellW: s.CellW, CellH: s.CellH, PivotX: s.PivotX, PivotY: s.PivotY}
+	ui.ShowEditSheetDialog(a.Window, s.FilePath, s.Image, current, a.applySheetImport)
+}
+
+// applySheetImport slices the image as the import (or edit) dialog said,
+// asks before replacing a saved template or loaded sheet, and loads it.
+func (a *Application) applySheetImport(imp ui.SheetImport) {
+	img, err := file.LoadImage(imp.FilePath)
+	if err != nil {
+		a.showError(fmt.Errorf("failed to load image: %w", err))
+		return
+	}
+	tmpl := editor.NewSpriteSheetTemplate(imp.Name, imp.FilePath, img, imp.CellW, imp.CellH, imp.PivotX, imp.PivotY)
+	if tmpl.Cols() == 0 || tmpl.Rows() == 0 {
+		b := img.Bounds()
+		a.showError(fmt.Errorf("a %dx%d cell doesn't fit in this %dx%d image - check Cell Width and Cell Height",
+			imp.CellW, imp.CellH, b.Dx(), b.Dy()))
+		return
+	}
+	replaces := a.importReplaces(imp)
+	if len(replaces) == 0 {
+		a.importSheet(imp, tmpl)
+		return
+	}
+	msg := widget.NewLabel("This replaces:\n\n- " + strings.Join(replaces, "\n- ") +
+		"\n\nParts drawing from the old sheet will be re-sliced with the new settings.")
+	msg.Wrapping = fyne.TextWrapWord
+	d := dialog.NewCustomConfirm("Replace Existing Sheet?", "Replace", "Cancel", msg, func(ok bool) {
+		if ok {
 			a.importSheet(imp, tmpl)
-			return
 		}
-		msg := widget.NewLabel("This import replaces:\n\n- " + strings.Join(replaces, "\n- ") +
-			"\n\nParts drawing from the old sheet will be re-sliced with the new settings.")
-		msg.Wrapping = fyne.TextWrapWord
-		d := dialog.NewCustomConfirm("Replace Existing Sheet?", "Replace", "Cancel", msg, func(ok bool) {
-			if ok {
-				a.importSheet(imp, tmpl)
-			}
-		}, a.Window)
-		d.Resize(fyne.NewSize(520, 280))
-		d.Show()
-	})
+	}, a.Window)
+	d.Resize(fyne.NewSize(520, 280))
+	d.Show()
 }
 
 // existingSheetSettings prefills the import dialog from the .sprsh an image
