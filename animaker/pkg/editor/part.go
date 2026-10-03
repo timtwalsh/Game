@@ -219,3 +219,21 @@ func CheckNewPart(t *Track, part *Part) error {
 	}
 	return nil
 }
+
+// RigFrom makes a new track named name with src's rig and none of its
+// animation: the same parts (names, kinds, prop links, fixed sheets,
+// nested animations and bindings, and IDs), props with their defaults,
+// reference box and directions - but no keyframes in any direction.
+//
+// For a character's family of tracks (walk, idle, attack): starting each
+// from one rig keeps their parts and prop schema in agreement, which is
+// what `animaker lint` otherwise has to catch after the fact. It copies
+// structure only, never authored poses.
+func RigFrom(src *Track, name string) *Track {
+	t := src.DeepCopy()
+	t.Metadata.Name = name
+	for k := range t.Directions {
+		t.Directions[k] = NewDirection()
+	}
+	return t
+}

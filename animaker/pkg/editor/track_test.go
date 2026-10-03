@@ -248,3 +248,36 @@ func TestDeletePartKeepsSelectionOnTheSamePart(t *testing.T) {
 		t.Errorf("a failed delete moved the selection to %d", p.Selection.PartIndex)
 	}
 }
+
+// New Track from Rig: the parts, props and directions carry over, the
+// keyframes don't, and the source is untouched.
+func TestRigFromCopiesStructureNotPoses(t *testing.T) {
+	src := NewTrack("human_walk")
+	AddStandardDirections(src)
+	EnsureProp(src, "hair", "hair_short")
+	body := AddPart(src, NewSheetPart("body", "", "body_sheet"))
+	hair := AddPart(src, NewSheetPart("hair", "hair", "hair_short"))
+	AddKeyframe(src.Directions[2], body.ID, 0).X = 5
+	AddKeyframe(src.Directions[2], hair.ID, 100)
+
+	rig := RigFrom(src, "human_idle")
+	if rig.Metadata.Name != "human_idle" || len(rig.Parts) != 2 || len(rig.Props) != 1 || len(rig.Directions) != 4 {
+		t.Fatalf("rig = %q, %d parts, %d props, %d directions; want human_idle, 2, 1, 4",
+			rig.Metadata.Name, len(rig.Parts), len(rig.Props), len(rig.Directions))
+	}
+	if rig.Parts[1].ID != hair.ID || rig.Parts[1].GoverningProp != "hair" {
+		t.Errorf("hair part = %+v, want the same ID and prop link", *rig.Parts[1])
+	}
+	for k, d := range rig.Directions {
+		if d.TotalKeyframes() != 0 {
+			t.Errorf("direction %d has %d keyframes, want none", k, d.TotalKeyframes())
+		}
+	}
+	if src.Directions[2].TotalKeyframes() != 2 {
+		t.Error("RigFrom changed the source track")
+	}
+	// New parts still get fresh IDs.
+	if p := AddPart(rig, NewSheetPart("arm", "", "s")); p.ID == body.ID || p.ID == hair.ID {
+		t.Errorf("new part reused ID %d", p.ID)
+	}
+}

@@ -113,6 +113,7 @@ func (a *Application) build() {
 
 	menu := ui.BuildMenuBar(
 		a.onNewTrack,
+		a.onNewTrackFromRig,
 		a.onOpenTrack,
 		a.onSaveTrack,
 		a.onSaveAsTrack,
@@ -761,46 +762,78 @@ func (a *Application) openTrack() {
 		}
 		filePath := reader.URI().Path()
 		reader.Close()
-
-		track, refs, err := file.LoadTrack(filePath)
-		if err != nil {
-			a.showError(fmt.Errorf("failed to load track: %w", err))
-			return
-		}
-
-		// The .anif names its sheets but doesn't contain them, so load
-		// them now - previously nothing did, and a reopened track drew
-		// nothing at all. Sheets already loaded this session are kept.
-		sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
-		// Nested animations are always re-read, never taken from what
-		// was loaded before, so an .anif edited since shows as it is now.
-		anims := map[string]*editor.NestedAnim{}
-		problems = append(problems, file.LoadNestedAnimsFor(track, anims)...)
-		for name, s := range sheets {
-			a.Project.LoadedSheets[name] = s
-		}
-		if _, ok := a.Project.LoadedSheets[a.Project.PaletteSheet]; !ok {
-			a.Project.PaletteSheet = ""
-		}
-		for _, name := range track.ReferencedSheetNames() {
-			if _, ok := a.Project.LoadedSheets[name]; ok && a.Project.PaletteSheet == "" {
-				a.Project.PaletteSheet = name
-			}
-		}
-
-		a.Project.OpenTrack(track, filePath, anims)
-		missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
-
-		a.canvasWidget.SetProject(a.Project)
-		a.timeline.SetProject(a.Project)
-		a.properties.SetProject(a.Project)
-		a.refreshDirectionSelect()
-		a.refreshAll()
-		a.reportUnloadedSheets(missing, problems)
+		a.loadAndOpen(filePath, func(t *editor.Track) (*editor.Track, string) { return t, filePath })
 	}, a.Window)
 	fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
 	fd.Resize(fyne.NewSize(600, 400))
 	fd.Show()
+}
+
+// loadAndOpen loads the .anif at filePath with its sheets and nested
+// animations, then opens the track as(track) returns - the file itself for
+// Open, a keyframe-free copy for New Track from Rig - with the save path
+// it gives ("" for a track not saved yet).
+func (a *Application) loadAndOpen(filePath string, as func(*editor.Track) (*editor.Track, string)) {
+	track, refs, err := file.LoadTrack(filePath)
+	if err != nil {
+		a.showError(fmt.Errorf("failed to load track: %w", err))
+		return
+	}
+
+	// The .anif names its sheets but doesn't contain them, so load
+	// them now - previously nothing did, and a reopened track drew
+	// nothing at all. Sheets already loaded this session are kept.
+	sheets, missing, problems := file.LoadSheetsForTrack(filePath, refs, track.ReferencedSheetNames())
+	// Nested animations are always re-read, never taken from what
+	// was loaded before, so an .anif edited since shows as it is now.
+	anims := map[string]*editor.NestedAnim{}
+	problems = append(problems, file.LoadNestedAnimsFor(track, anims)...)
+	for name, s := range sheets {
+		a.Project.LoadedSheets[name] = s
+	}
+	if _, ok := a.Project.LoadedSheets[a.Project.PaletteSheet]; !ok {
+		a.Project.PaletteSheet = ""
+	}
+	for _, name := range track.ReferencedSheetNames() {
+		if _, ok := a.Project.LoadedSheets[name]; ok && a.Project.PaletteSheet == "" {
+			a.Project.PaletteSheet = name
+		}
+	}
+
+	opened, savePath := as(track)
+	a.Project.OpenTrack(opened, savePath, anims)
+	a.Project.Dirty = savePath == "" // a new track is unsaved work
+	missing = slices.DeleteFunc(missing, a.Project.SheetFromNested)
+
+	a.canvasWidget.SetProject(a.Project)
+	a.timeline.SetProject(a.Project)
+	a.properties.SetProject(a.Project)
+	a.refreshDirectionSelect()
+	a.refreshAll()
+	a.reportUnloadedSheets(missing, problems)
+}
+
+// onNewTrackFromRig starts a track from an existing one's rig - its parts,
+// props, sheets and directions, without keyframes (editor.RigFrom) - so a
+// character's walk, idle and attack tracks agree on their parts and props.
+func (a *Application) onNewTrackFromRig() {
+	a.confirmDiscard(func() {
+		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return
+			}
+			filePath := reader.URI().Path()
+			reader.Close()
+			ui.ShowNewTrackDialog(a.Window, func(name string) {
+				a.loadAndOpen(filePath, func(t *editor.Track) (*editor.Track, string) {
+					return editor.RigFrom(t, name), ""
+				})
+			})
+		}, a.Window)
+		fd.SetFilter(storage.NewExtensionFileFilter([]string{".anif"}))
+		fd.Resize(fyne.NewSize(600, 400))
+		fd.Show()
+	})
 }
 
 func (a *Application) onSaveTrack() {

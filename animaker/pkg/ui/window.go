@@ -40,6 +40,7 @@ func BuildMainLayout(
 // here — see the direction bar and PropertiesPanel's PARTS/PROPS sections.
 func BuildMenuBar(
 	onNew func(),
+	onNewFromRig func(),
 	onOpen func(),
 	onSave func(),
 	onSaveAs func(),
@@ -63,6 +64,7 @@ func BuildMenuBar(
 
 	fileMenu := fyne.NewMenu("File",
 		item("New Track", onNew, fyne.KeyN, ctrl),
+		fyne.NewMenuItem("New Track from Rig...", onNewFromRig),
 		fyne.NewMenuItemSeparator(),
 		item("Open...", onOpen, fyne.KeyO, ctrl),
 		item("Save", onSave, fyne.KeyS, ctrl),
