@@ -6,6 +6,7 @@ import "testing"
 // cells over 600ms, in directions 0 and 2 (direction 2 uses row 1).
 func torchAnim(path string) *NestedAnim {
 	t := NewTrack("torch")
+	AddStandardDirections(t)
 	flame := AddPart(t, NewSheetPart("flame", "", "fire"))
 	for _, d := range []int{0, 2} {
 		a := AddKeyframe(t.Directions[d], flame.ID, 0)
@@ -27,6 +28,7 @@ func torchAnim(path string) *NestedAnim {
 func walkWithTorch(t *testing.T) (*Project, *Part) {
 	t.Helper()
 	p := NewProject("walk_torch")
+	AddStandardDirections(p.CurrentTrack)
 	torch := torchAnim("torch.anif")
 	p.LoadedAnims[torch.Path] = torch
 	part := AddPart(p.CurrentTrack, NewNestedAniPart("torch_1", torch.Path))
@@ -251,6 +253,7 @@ func TestNestedDrawOrderIgnoresChildZScale(t *testing.T) {
 	}}
 
 	p := NewProject("walk")
+	AddStandardDirections(p.CurrentTrack)
 	p.LoadedAnims[torch.Path] = torch
 	p.LoadedAnims[holderAnim.Path] = holderAnim
 	part := AddPart(p.CurrentTrack, NewNestedAniPart("held", holderAnim.Path))

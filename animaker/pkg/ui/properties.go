@@ -560,14 +560,14 @@ func (pp *PropertiesPanel) buildNestedDirection(part *editor.Part) {
 }
 
 // nestedDirectionKeys lists the directions the part's nested animation
-// has, or the four defaults if it isn't loaded.
+// has, or the four standard facings if it isn't loaded.
 func (pp *PropertiesPanel) nestedDirectionKeys(part *editor.Part) []int {
 	if anim := pp.project.ResolveNestedAnim(part); anim != nil {
 		if keys := anim.Track.SortedDirectionKeys(); len(keys) > 0 {
 			return keys
 		}
 	}
-	return editor.DefaultDirectionKeys
+	return editor.StandardDirectionKeys
 }
 
 // directionLabel names a direction key the way the game numbers them.

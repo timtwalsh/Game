@@ -4,6 +4,7 @@ import "testing"
 
 func TestCopyKeyframeTimesCopiesOnlyTiming(t *testing.T) {
 	track := NewTrack("t")
+	AddStandardDirections(track)
 	body := AddPart(track, NewSheetPart("body", "", "sheet"))
 	head := AddPart(track, NewSheetPart("head", "", "sheet"))
 	up := track.Directions[0]
@@ -37,6 +38,7 @@ func TestCopyKeyframeTimesCopiesOnlyTiming(t *testing.T) {
 
 func TestTimingSourcesSkipsEmptyAndTarget(t *testing.T) {
 	track := NewTrack("t")
+	AddStandardDirections(track)
 	part := AddPart(track, NewSheetPart("body", "", "sheet"))
 	AddKeyframe(track.Directions[0], part.ID, 0)
 	AddKeyframe(track.Directions[3], part.ID, 0)

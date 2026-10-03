@@ -88,6 +88,7 @@ func TestAddKeyframeAtExistingTimeReturnsExistingNotDuplicate(t *testing.T) {
 // part in one facing must not touch any other.
 func TestKeyframesAreIndependentPerDirection(t *testing.T) {
 	track := NewTrack("human_walk")
+	AddStandardDirections(track)
 	part := AddPart(track, NewSheetPart("Body", "", "body"))
 
 	AddKeyframe(track.Directions[0], part.ID, 0).X = 10
@@ -126,6 +127,7 @@ func TestResolveActiveSheetNamePrecedence(t *testing.T) {
 
 func TestDeepCopyIsIndependent(t *testing.T) {
 	track := NewTrack("human_walk")
+	AddStandardDirections(track)
 	part := AddPart(track, NewSheetPart("Hair", "hair", ""))
 	AddKeyframe(track.Directions[2], part.ID, 0)
 
@@ -158,6 +160,7 @@ func TestDirectionTotalDurationMsIsMaxAcrossParts(t *testing.T) {
 // rather than leaving them orphaned for a later part to inherit.
 func TestPartsAreSharedAcrossDirections(t *testing.T) {
 	track := NewTrack("human_walk")
+	AddStandardDirections(track)
 	body := AddPart(track, NewSheetPart("Body", "", "body"))
 	hair := AddPart(track, NewSheetPart("Hair", "", "hair"))
 
@@ -199,6 +202,7 @@ func TestPartsAreSharedAcrossDirections(t *testing.T) {
 // track's; only the keyframe selection is direction-specific.
 func TestSetActiveDirectionKeepsPartSelection(t *testing.T) {
 	p := NewProject("test")
+	AddStandardDirections(p.CurrentTrack)
 	AddPart(p.CurrentTrack, NewSheetPart("Body", "", "body"))
 	p.Selection.PartIndex = 0
 	p.Selection.KeyframeIndex = 3

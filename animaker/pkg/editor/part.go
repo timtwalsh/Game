@@ -119,6 +119,30 @@ func AddDirection(t *Track, key int) *Direction {
 	return d
 }
 
+// AddStandardDirections adds whichever of the four standard facings (0-3)
+// the track doesn't have yet, and returns the keys it added.
+func AddStandardDirections(t *Track) []int {
+	var added []int
+	for _, k := range StandardDirectionKeys {
+		if _, ok := t.Directions[k]; !ok {
+			AddDirection(t, k)
+			added = append(added, k)
+		}
+	}
+	return added
+}
+
+// HasStandardDirections reports whether the track has all four standard
+// facings.
+func (t *Track) HasStandardDirections() bool {
+	for _, k := range StandardDirectionKeys {
+		if _, ok := t.Directions[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // RemoveDirection deletes a direction by key.
 func RemoveDirection(t *Track, key int) {
 	delete(t.Directions, key)

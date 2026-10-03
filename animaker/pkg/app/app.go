@@ -35,6 +35,9 @@ type Application struct {
 	timeline     *ui.TimelineWidget
 	properties   *ui.PropertiesPanel
 	directionSel *widget.Select
+	// addFacingsBtn adds the four standard facings; disabled once the track
+	// has them all.
+	addFacingsBtn *widget.Button
 	titleLabel   *widget.Label
 
 	playbackTicker *time.Ticker
@@ -150,11 +153,28 @@ func (a *Application) buildDirectionBar() fyne.CanvasObject {
 			a.offerTimingCopy(key)
 		}
 	})
+	// New tracks have one direction; a character needs the four facings,
+	// so that's one click rather than four trips through Add Direction.
+	a.addFacingsBtn = widget.NewButton("+ Up/Right/Down/Left", a.onAddStandardDirections)
 	a.refreshDirectionSelect()
 
 	addDirBtn := widget.NewButton("+ Add Direction", a.onAddDirection)
 
-	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel, addDirBtn)
+	return container.NewHBox(a.titleLabel, widget.NewSeparator(), widget.NewLabel("Direction:"), a.directionSel,
+		a.addFacingsBtn, addDirBtn)
+}
+
+// onAddStandardDirections adds whichever of the four facings the track
+// lacks. Undoable; the active direction stays where it is.
+func (a *Application) onAddStandardDirections() {
+	snap := a.Project.TakeSnapshot()
+	if added := editor.AddStandardDirections(a.Project.CurrentTrack); len(added) == 0 {
+		return
+	}
+	a.Project.UndoStack.Push(snap)
+	a.Project.Dirty = true
+	a.refreshDirectionSelect()
+	a.refreshAll()
 }
 
 func (a *Application) refreshDirectionSelect() {
@@ -168,6 +188,13 @@ func (a *Application) refreshDirectionSelect() {
 		a.directionSel.SetSelected(strconv.Itoa(a.Project.Playback.ActiveDirection))
 	}
 	a.directionSel.Refresh()
+	if a.addFacingsBtn != nil {
+		if a.Project.CurrentTrack.HasStandardDirections() {
+			a.addFacingsBtn.Disable()
+		} else {
+			a.addFacingsBtn.Enable()
+		}
+	}
 }
 
 // offerTimingCopy prompts, on switching to a direction with no keyframes,

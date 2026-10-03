@@ -496,8 +496,8 @@ feedback after using the previous version:
   - `track.go` — `Track`/`Direction`/`Part`/`Keyframe`/`PropDef`/
     `PropBinding` types (the rig itself). `Track.Directions` is
     `map[int]*Direction` — plain ints, not free-form names, matching the
-    game's own direction convention, and `NewTrack` seeds all four
-    (0-3) as empty directions. **`Track.Parts` is the rig, shared by
+    game's own direction convention. `NewTrack` seeds only direction
+    0; `AddStandardDirections` adds the four facings (0-3) on request. **`Track.Parts` is the rig, shared by
     every direction; `Direction` holds only `Keyframes` keyed by
     `Part.ID`** — see history entry 7 under
     [Why this shape](#why-this-shape) before changing this.
@@ -739,7 +739,7 @@ rejection; partial trailing cells dropped.
 `pkg/editor/timeline_test.go` — the scrub-deadlock regression (seek and
 add a second keyframe past a lone 0ms one), `EditableDurationMs` always
 leading the last keyframe, playback still looping over the *real*
-duration, and the four default directions.
+duration, new tracks having only direction 0, and `AddStandardDirections` adding just the missing facings.
 `pkg/ui/canvas_test.go` — canvas geometry, which is easy to break
 silently: the view always contains the origin and reference box, grows
 for negative coordinates, stays identical across a scrub, and
