@@ -45,7 +45,7 @@ func TestDirectionTabsShowEachFacing(t *testing.T) {
 	}
 	btns := make([]*widget.Button, 4)
 	for i, o := range grid.Objects {
-		btns[i] = o.(*widget.Button)
+		btns[i] = &o.(*dirTab).Button
 	}
 	if btns[0].Text != "Up (1)" || btns[1].Text != "Right (0)" {
 		t.Errorf("tabs = %q, %q, want Up (1), Right (0)", btns[0].Text, btns[1].Text)

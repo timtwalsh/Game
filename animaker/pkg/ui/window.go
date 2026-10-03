@@ -108,6 +108,7 @@ var ShortcutHelp = [][2]string{
 	{"Arrows", "Nudge the selected part 1px (Shift: 10px), keying it at the playhead"},
 	{"Delete", "Delete the selected keyframe, or the selected part's keyframe at the playhead"},
 	{"1 / 2 / 3 / 4", "Up / Right / Down / Left direction"},
+	{"Right-click a direction tab", "Change its key, delete it, add facings, remove empty directions"},
 	{"Esc", "Deselect (the next palette drop adds a new part)"},
 	{"F2", "Rename the selected part (also: double-click its name in the timeline)"},
 	{"O", "Onion skin: show the selected part's neighbouring keyframe poses faintly"},

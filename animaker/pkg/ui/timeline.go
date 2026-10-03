@@ -916,7 +916,7 @@ func (tw *TimelineWidget) buildInfoText() string {
 	// "120ms / 0ms" would otherwise look like a bug rather than a playhead
 	// parked in the empty space where the next keyframe goes.
 	return fmt.Sprintf("Direction: %s   |   Playhead: %dms   |   Animation length: %dms   |   Parts: %d   |   Ctrl+wheel to zoom, drag a marker to retime (snaps; Alt for free)",
-		directionName(tw.project.Playback.ActiveDirection), tw.project.Playback.ElapsedMs, total, partCount)
+		DirectionName(tw.project.Playback.ActiveDirection), tw.project.Playback.ElapsedMs, total, partCount)
 }
 
 // -- Hover: the keyframe marker under the mouse is ringed, and the cursor

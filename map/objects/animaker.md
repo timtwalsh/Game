@@ -530,6 +530,29 @@ feedback after using the previous version:
       cell-to-direction mapping on sheets (#40, design).
     - `Application.build` is split out of `Run` so app tests drive the
       real UI (`pkg/app/shortcuts_test.go`, `rig_test.go`).
+25. **Directions can be deleted and re-keyed; hover states** (2026-10-03;
+    timtwalsh/Game#44, plus two follow-ups from hands-on use).
+    - **Direction menu** (`app.directionMenu`): right-click a direction
+      tab (`ui.dirTab`), or the "Directions ▾" button for the active
+      one. Change to (Up/Right/Down/Left, posed targets disabled, or any
+      number) moves the direction's keyframes unchanged
+      (`Project.ChangeDirectionKey`; an empty target is just replaced).
+      Delete asks first only if the direction has keyframes
+      (`Project.DeleteDirection`, never the last one; the active
+      direction moves to the nearest remaining). Remove Empty Directions
+      tidies files saved with the old 0-3 default, keeping at least one
+      (`Project.RemoveEmptyDirections`). All undoable. Nested parts are
+      unaffected: their static/per-keyframe directions name the *nested*
+      track's facings. The menu also holds the add actions, replacing
+      the two add buttons.
+    - **Timeline start pad**: time 0 sits 14px right of the name column
+      (`timelineZeroX`); a click in that gap lands on 0.
+    - **Hover states** (`ui.hoverBox`): palette tiles, canvas parts,
+      timeline markers (resize cursor), part names, the row delete x,
+      and import-preview cells highlight under the mouse with a fitting
+      cursor. Each widget moves one highlight rectangle rather than
+      redrawing on every mouse move. The theme's hover colour was nearly
+      the button colour, so Fyne buttons barely reacted; it's lighter now.
 
 ## Shape
 

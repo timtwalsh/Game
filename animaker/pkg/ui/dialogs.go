@@ -251,22 +251,34 @@ func formatFloat(f float32) string { return strconv.FormatFloat(float64(f), 'f',
 // facings). exists reports a key the track already has; Add stays
 // disabled for that, or for anything that isn't such a number.
 func ShowAddDirectionDialog(win fyne.Window, exists func(key int) bool, onCreate func(key int)) {
+	ShowDirectionKeyDialog(win, "Add Direction", "Add", func(k int) error {
+		if exists != nil && exists(k) {
+			return fmt.Errorf("direction %d already exists", k)
+		}
+		return nil
+	}, onCreate)
+}
+
+// ShowDirectionKeyDialog asks for a direction key - a whole number 0 or
+// above. check may refuse a key (the confirm button stays disabled with
+// its message showing); onOK gets the key entered.
+func ShowDirectionKeyDialog(win fyne.Window, title, confirm string, check func(key int) error, onCreate func(key int)) {
 	keyEntry := newEntry()
 	keyEntry.SetPlaceHolder("0=up, 1=right, 2=down, 3=left, ...")
 	keyEntry.Validator = func(s string) error {
 		k, err := strconv.Atoi(strings.TrimSpace(s))
-		switch {
-		case err != nil || k < 0:
+		if err != nil || k < 0 {
 			return errors.New("a whole number, 0 or above")
-		case exists != nil && exists(k):
-			return fmt.Errorf("direction %d already exists", k)
+		}
+		if check != nil {
+			return check(k)
 		}
 		return nil
 	}
 
 	form := dialog.NewForm(
-		"Add Direction",
-		"Add", "Cancel",
+		title,
+		confirm, "Cancel",
 		[]*widget.FormItem{
 			{Text: "Direction (int)", Widget: keyEntry},
 		},
@@ -467,14 +479,14 @@ func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name st
 func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, onCopy func(src int)) {
 	options := make([]string, len(sources))
 	for i, k := range sources {
-		options[i] = directionName(k)
+		options[i] = DirectionName(k)
 	}
 	srcSelect := widget.NewSelect(options, nil)
 	srcSelect.SetSelected(options[0])
 
 	msg := widget.NewLabel(fmt.Sprintf("The %s direction has no keyframes yet. Copy the keyframe times "+
 		"from another direction as a starting point? Only the timing is copied: every "+
-		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", directionName(target)))
+		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", DirectionName(target)))
 	msg.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
