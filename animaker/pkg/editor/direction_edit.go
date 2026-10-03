@@ -49,8 +49,8 @@ func (p *Project) ChangeDirectionKey(from, to int) error {
 		return fmt.Errorf("there's no direction %d", from)
 	case from == to:
 		return nil
-	case to < 0:
-		return errors.New("a direction is a whole number, 0 or above")
+	case to < 0 || to >= t.Facings():
+		return fmt.Errorf("a %d-direction track's directions are 0-%d", t.Facings(), t.Facings()-1)
 	}
 	if existing, ok := t.Directions[to]; ok && existing.TotalKeyframes() > 0 {
 		return fmt.Errorf("direction %d already has %d keyframes - delete it first, or change it to another direction",

@@ -36,16 +36,16 @@ v1 was a flipbook editor: one whole-character sprite per keyframe, single timeli
 ```
 Track (= one .anif file, one named motion — "human_walk.anif")
 ├── Parts ([]*Part — "Body", "Hair", "Arm_Left", ... — the rig, shared by every Direction)
-└── Directions (map[int]*Direction — 0=up, 1=right, 2=down, 3=left by convention)
+└── Directions (map[int]*Direction — DirectionCount N of 1/4/8/16; keys 0..N-1 clockwise from N)
     └── Direction
         └── Keyframes (map[Part.ID][]*Keyframe — how this facing poses each part)
 ```
 
 - **Track = one file, one motion.** `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif`, `human_hurt.anif`, `base_wood_torch.anif` are each their own `Track`. There is no wrapping "character" file — see [Props](#props) for why, and what that costs.
-- **Direction is first-class, not a prop, and is a plain int, not a name.** Direction keys are `int` (matching the game's own 0=up/1=right/2=down/3=left convention, decided 2026-09-18 — originally spec'd as free-form strings like `"up"`, changed once actual editor use showed a plain int was simpler to work with); a non-directional thing (a treasure chest) just uses key `0`.
+- **Direction is first-class, not a prop, and is a plain int, not a name.** A track declares how many directions it has, `DirectionCount` N = 1, 4, 8 or 16 (16 is the limit), and its keys are `0..N-1` clockwise from north: key k faces k×360/N degrees. Each is named from the 16-point compass (N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW), so a 4-direction track's keys are N/E/S/W and an 8-direction track's are N, NE, E … NW. **8 is exactly the game's own facing** (`client/prediction.go`: 0=N, 1=NE, 2=E … 7=NW), and 4 is exactly what tracks always used (0=up, 1=right, 2=down, 3=left), so files without a recorded count are read by their keys. A non-directional thing (a treasure chest) has N=1 and just key `0`. (Corrected 2026-10-03, #46: this section used to claim 0=up/1=right/2=down/3=left *was* the game's convention, which never matched the game's 8-way numbering.) Anything consuming a track maps a facing to the nearest direction the track has, by angle; a facing exactly between two (NE on a 4-direction track) goes to the sideways one (E/W).
 - **Parts belong to the Track; Directions hold only keyframes.** The rig's slot list is declared once on the `Track` and exists in every direction. What differs per facing is the *keyframes*, which each `Direction` stores keyed by `Part.ID` — art commonly differs enough by facing (back of the head vs. front of it) that sharing one timeline across directions doesn't hold up, but the slot list itself does hold up. Switching direction in the editor therefore only changes which canvas and keyframes you see. A part with no keyframes in a given direction simply isn't drawn there; posing it in each facing is the artist's work, and which facings they pose is their call. (Corrected 2026-09-19: Parts previously lived *inside* each Direction, which meant importing a sheet produced a part visible only in direction 0 and forced the artist to maintain four parallel copies of the same slot list.)
 - **A Track carries a reference box, not a working area.** `RefBoxWidth`/`RefBoxHeight` (48x64 by default) size a character-sized guide the editor draws from the origin down-right, so parts can be placed relative to a real body footprint. It is *only* a guide: the coordinate space is unbounded and parts may sit at negative coordinates above or left of the origin (a raised sword, a trailing cape). These replaced the `CanvasWidth`/`CanvasHeight` "working area" of 2026-09-18, which implied a bound that never actually existed and forced the editor's canvas to clip rather than grow. Files written with the old `canvas_width`/`canvas_height` keys load with the defaults.
-- **Posing is the artist's to manage.** A new Track starts with a single direction, 0 (changed 2026-10-03: seeding all four left non-directional assets like a torch with three empty facings by accident); the editor adds the four standard facings (0-3) in one step when the artist asks. The editor shares *structure* across directions freely (the part list, each part's sheet binding, the props) but never invents *authored content*: it does not copy keyframes between facings, so an animation may legitimately be posed in only some of them.
+- **Posing is the artist's to manage.** A new Track starts with a single direction, 0 (changed 2026-10-03: seeding all four left non-directional assets like a torch with three empty facings by accident); the artist sets the direction count (1/4/8/16) when the animation needs facings, and the editor moves existing directions to keep their facing. The editor shares *structure* across directions freely (the part list, each part's sheet binding, the props) but never invents *authored content*: it does not copy keyframes between facings, so an animation may legitimately be posed in only some of them.
 - **A palette drop keys the selected part, or creates a part when nothing is selected.** A rig is normally several pieces visible at once, so dropping a cell from the sheet palette onto the canvas with nothing selected *adds* a part (decided 2026-09-24, after dragging repeatedly produced extra keyframes on a single part instead of a rig). With a part selected, the drop instead becomes that part's keyframe at the playhead, so swapping frames of one sprite over time is just scrub-and-drop (decided 2026-10-01, after always-new-part turned each frame into its own part). A cell from a different sheet than the selected part's always makes a new part. Esc or clicking empty canvas deselects. The other jobs have their own gestures: drag a part already on the canvas to move it — which keys it at the playhead if it isn't keyed there yet (decided 2026-10-01; an explicit "New Keyframe" first was required before, and a drag anywhere else silently did nothing) — click a palette tile to re-cell the selected keyframe, and drag a timeline marker to retime it. These are editor interaction rules, not data-model constraints — nothing about `Track.Parts` requires them.
 - **Parts are free-form per Track.** No fixed schema/template of "every character always has exactly these 10 parts" — each `.anif` declares whatever named parts it needs.
 - **Keyframes share tick times within a Direction.** All Parts in one Direction are evaluated against the same timeline positions — "keyframe 3" means the same instant for every part. This was chosen for simplicity over independent per-part timing, and it pays off at runtime: resolving "current segment + interpolation fraction" happens once per instance per frame, not once per part.
@@ -57,7 +57,8 @@ type Track struct {
     RefBoxWidth  int                  // character-sized placement guide drawn from the origin
     RefBoxHeight int                  // (a guide only - the coordinate space is unbounded)
     Parts        []*Part              // the rig, shared by every Direction
-    Directions   map[int]*Direction   // 0=up, 1=right, 2=down, 3=left by convention; any int works
+    DirectionCount int                // 1, 4, 8 or 16; 0 in older files (read by their keys)
+    Directions   map[int]*Direction   // keys 0..DirectionCount-1, clockwise from north
 }
 
 type Direction struct {
@@ -169,6 +170,7 @@ name = "human_walk"
 version = "1.0"
 ref_box_width = 48
 ref_box_height = 64
+directions = 4        # 1, 4, 8 or 16; keys 0..N-1 clockwise from north
 
 [[props]]
 name = "hair"
@@ -203,8 +205,8 @@ nested_ani_path = "base_wood_torch.anif"
   passthrough_from = "direction"   # torch turns with the character
 
 # Direction table keys are the string form of the int key (TOML table
-# headers must be strings) - "2" here is direction 2 = "down" by
-# convention. Converted to/from int at the Save/LoadTrack boundary.
+# headers must be strings) - "2" here is direction 2 = S on this
+# 4-direction track. Converted to/from int at the Save/LoadTrack boundary.
 # A direction holds only keyframes; each names the part it poses.
 [directions.2]
   [[directions.2.keyframes]]
@@ -283,7 +285,7 @@ This session is editor + data model only — no game-side loader is being built 
 ```go
 type AnimatedInstance struct {
     Track     *Track
-    Direction int                // set by movement/facing logic (0=up/1=right/2=down/3=left)
+    Facing    int                // the game's 8-way facing (0=N … 7=NW), mapped to the track's nearest direction
     ElapsedMs uint32             // playback position within Track's active Direction
     Props     map[string]string  // "hair":"long_blonde", "arms":"chainmail", ...
     // + cached resolved sheet/row/col per part — recomputed only when Props change,
@@ -351,7 +353,7 @@ I think spark/visuals are managed by the artist, there is probably space to figu
 
 Grounding the abstract model in the concrete case that shaped it:
 
-- `human_walk.anif` — a `Track`. Declares props `hair`, `arms`, `legs`, `head`, `body`. Has 4 `Directions` (keys `0`/`1`/`2`/`3` = up/right/down/left), each independently authored with `Parts`: `Body`, `Head`, `Hair`, `Arm_Left`, `Arm_Right`, `Leg_Left`, `Leg_Right`.
+- `human_walk.anif` — a `Track`. Declares props `hair`, `arms`, `legs`, `head`, `body`. Has 4 `Directions` (keys `0`/`1`/`2`/`3` = N/E/S/W), each independently authored with `Parts`: `Body`, `Head`, `Hair`, `Arm_Left`, `Arm_Right`, `Leg_Left`, `Leg_Right`.
 - `Hair` is a Sheet part, `governing_prop = "hair"`. Its keyframes reference cells of whichever sheet the `hair` prop currently names.
 - A hairstyle content library ships `human_hair_v2_template.sprsh` — cell size and pivot fixed once. A sheet named `long_blonde` and another named `short_spikey` both conform to it: same cell size, same pivot, same `(row, col)` meaning per pose (`idle-0`, `idle-1`, `flinch`, `running-0`...`running-3`, laid out as columns = direction, rows = animation+frame). `human_walk.anif`'s `Hair` keyframes for a given walk frame reference, say, `(row=4, col=2)` — whatever hairstyle is currently equipped, that cell is used.
 - An artist authoring `human_burning.anif`'s `Hair` keyframes can deliberately reference the same cell used for "flinch" elsewhere (reuse, not automation) if it looks right for a burning reaction — nothing forces a 1:1 mapping between Track names and cell rows.

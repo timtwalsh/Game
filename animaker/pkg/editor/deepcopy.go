@@ -5,12 +5,13 @@ package editor
 // original.
 func (t *Track) DeepCopy() *Track {
 	dst := &Track{
-		Metadata:     t.Metadata,
-		Props:        append([]PropDef(nil), t.Props...),
-		RefBoxWidth:  t.RefBoxWidth,
-		RefBoxHeight: t.RefBoxHeight,
-		Parts:        make([]*Part, len(t.Parts)),
-		Directions:   make(map[int]*Direction, len(t.Directions)),
+		Metadata:       t.Metadata,
+		Props:          append([]PropDef(nil), t.Props...),
+		RefBoxWidth:    t.RefBoxWidth,
+		RefBoxHeight:   t.RefBoxHeight,
+		DirectionCount: t.DirectionCount,
+		Parts:          make([]*Part, len(t.Parts)),
+		Directions:     make(map[int]*Direction, len(t.Directions)),
 	}
 	for i, p := range t.Parts {
 		dst.Parts[i] = p.deepCopy()

@@ -119,28 +119,21 @@ func AddDirection(t *Track, key int) *Direction {
 	return d
 }
 
-// AddStandardDirections adds whichever of the four standard facings (0-3)
-// the track doesn't have yet, and returns the keys it added.
+// AddStandardDirections makes a 1- or 4-direction track a 4-direction one
+// (N, E, S, W - keys 0-3), adding whichever of those it lacks, and returns
+// the keys added. Directions already there keep their keyframes: on a
+// 1-direction track the one direction becomes N. For other counts use
+// Project.SetDirectionCount, which moves keys to match.
 func AddStandardDirections(t *Track) []int {
+	t.DirectionCount = 4
 	var added []int
-	for _, k := range StandardDirectionKeys {
+	for k := 0; k < 4; k++ {
 		if _, ok := t.Directions[k]; !ok {
 			AddDirection(t, k)
 			added = append(added, k)
 		}
 	}
 	return added
-}
-
-// HasStandardDirections reports whether the track has all four standard
-// facings.
-func (t *Track) HasStandardDirections() bool {
-	for _, k := range StandardDirectionKeys {
-		if _, ok := t.Directions[k]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // RemoveDirection deletes a direction by key.

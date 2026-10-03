@@ -10,8 +10,8 @@ import (
 )
 
 // DirectionTabs is the direction bar's row of facings: one button per
-// direction of the track, named the way the game numbers them ("Up",
-// "Right"...) rather than as bare ints, each with its keyframe count so
+// direction of the track, named by compass point (N, NE, E...) rather than
+// as bare ints, each with its keyframe count so
 // unposed facings stand out without visiting them (they're also drawn in
 // the warning colour). The active one is highlighted.
 //
@@ -44,6 +44,7 @@ func (dt *DirectionTabs) Object() fyne.CanvasObject { return dt.box }
 // Refresh rebuilds the tabs from the track's directions.
 func (dt *DirectionTabs) Refresh(track *editor.Track, active int) {
 	keys := track.SortedDirectionKeys()
+	facings := track.Facings()
 	cols := len(keys)
 	if cols > directionTabColumns {
 		cols = directionTabColumns
@@ -55,7 +56,7 @@ func (dt *DirectionTabs) Refresh(track *editor.Track, active int) {
 	for _, k := range keys {
 		key := k
 		n := track.Directions[key].TotalKeyframes()
-		btn := newDirTab(DirectionTabLabel(key, n), func() {
+		btn := newDirTab(DirectionTabLabel(key, facings, n), func() {
 			if key != active && dt.OnSelect != nil {
 				dt.OnSelect(key)
 			}
@@ -108,24 +109,9 @@ func newDirTab(label string, onTap func(), onSecondary func(*fyne.PointEvent)) *
 
 func (b *dirTab) TappedSecondary(e *fyne.PointEvent) { b.onSecondary(e) }
 
-// DirectionName is a facing's name in the game's convention, or "Dir N"
-// for any other key (diagonals, extra facings).
-func DirectionName(k int) string {
-	switch k {
-	case 0:
-		return "Up"
-	case 1:
-		return "Right"
-	case 2:
-		return "Down"
-	case 3:
-		return "Left"
-	}
-	return fmt.Sprintf("Dir %d", k)
-}
-
-// DirectionTabLabel is a tab's text: the facing's name and how many
-// keyframes it has, so "(0)" marks a facing not posed yet.
-func DirectionTabLabel(k, keyframes int) string {
-	return fmt.Sprintf("%s (%d)", DirectionName(k), keyframes)
+// DirectionTabLabel is a tab's text: the facing's compass name (key k of
+// an n-direction track) and how many keyframes it has, so "(0)" marks a
+// facing not posed yet.
+func DirectionTabLabel(k, n, keyframes int) string {
+	return fmt.Sprintf("%s (%d)", editor.FacingName(k, n), keyframes)
 }

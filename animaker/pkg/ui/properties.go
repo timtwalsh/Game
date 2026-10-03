@@ -542,10 +542,10 @@ func (pp *PropertiesPanel) buildNestedDirection(part *editor.Part) {
 	modeSelect := widget.NewSelect(nestedDirModeLabels, nil)
 	modeSelect.SetSelected(nestedDirModeLabels[part.DirectionMode])
 
-	keys := pp.nestedDirectionKeys(part)
-	labels := directionLabels(keys)
+	keys, n := pp.nestedDirectionKeys(part)
+	labels := directionLabels(keys, n)
 	staticSelect := widget.NewSelect(labels, nil)
-	staticSelect.SetSelected(directionLabel(part.StaticDirection))
+	staticSelect.SetSelected(editor.FacingName(part.StaticDirection, n))
 
 	// Assigned after the SetSelected calls above, which would re-fire them.
 	modeSelect.OnChanged = func(label string) {
@@ -575,35 +575,22 @@ func (pp *PropertiesPanel) buildNestedDirection(part *editor.Part) {
 }
 
 // nestedDirectionKeys lists the directions the part's nested animation
-// has, or the four standard facings if it isn't loaded.
-func (pp *PropertiesPanel) nestedDirectionKeys(part *editor.Part) []int {
+// has, and its direction count, for naming them; for an animation that
+// isn't loaded, the four N/E/S/W keys.
+func (pp *PropertiesPanel) nestedDirectionKeys(part *editor.Part) ([]int, int) {
 	if anim := pp.project.ResolveNestedAnim(part); anim != nil {
 		if keys := anim.Track.SortedDirectionKeys(); len(keys) > 0 {
-			return keys
+			return keys, anim.Track.Facings()
 		}
 	}
-	return editor.StandardDirectionKeys
+	return []int{0, 1, 2, 3}, 4
 }
 
-// directionLabel names a direction key the way the game numbers them.
-func directionLabel(k int) string {
-	switch k {
-	case 0:
-		return "0 (up)"
-	case 1:
-		return "1 (right)"
-	case 2:
-		return "2 (down)"
-	case 3:
-		return "3 (left)"
-	}
-	return strconv.Itoa(k)
-}
-
-func directionLabels(keys []int) []string {
+// directionLabels names keys of an n-direction track by compass point.
+func directionLabels(keys []int, n int) []string {
 	labels := make([]string, len(keys))
 	for i, k := range keys {
-		labels[i] = directionLabel(k)
+		labels[i] = editor.FacingName(k, n)
 	}
 	return labels
 }
@@ -743,10 +730,10 @@ func (pp *PropertiesPanel) refreshKeyframe() {
 	}
 	pp.keyframeBox.Add(grid)
 	if part.Kind == editor.PartKindNestedAni && part.DirectionMode == editor.NestedDirPerKeyframe {
-		keys := pp.nestedDirectionKeys(part)
-		labels := directionLabels(keys)
+		keys, n := pp.nestedDirectionKeys(part)
+		labels := directionLabels(keys, n)
 		dirSelect := widget.NewSelect(labels, nil)
-		dirSelect.SetSelected(directionLabel(pose.Direction))
+		dirSelect.SetSelected(editor.FacingName(pose.Direction, n))
 		// Assigned after SetSelected, which would re-fire it.
 		dirSelect.OnChanged = func(label string) {
 			if k, ok := directionKeyFor(keys, labels, label); ok {

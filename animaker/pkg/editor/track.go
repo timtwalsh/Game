@@ -17,6 +17,11 @@ type Track struct {
 	// is actually placed rather than bounding it — see pkg/ui/canvas.go.
 	RefBoxWidth, RefBoxHeight int
 
+	// DirectionCount is how many directions the track has: 1, 4, 8 or 16,
+	// keys 0..N-1 clockwise from north (see facings.go). 0 means not
+	// recorded (an older file) - use Facings(), which judges by the keys.
+	DirectionCount int
+
 	// Parts is the rig: the slot list ("Body", "Hair", "Arm_Left") shared
 	// by every direction. A part exists on the Track, not inside one
 	// facing, so importing a sheet or renaming a part is immediately true
@@ -178,15 +183,18 @@ func ParseNestedDirMode(s string) NestedDirMode {
 
 // NestedDirectionAt is the direction a nested part asks its animation to
 // play, given the parent's direction and the part's resolved transform at
-// this moment (whose Direction is the per-keyframe value).
-func (p *Part) NestedDirectionAt(parentDir int, tr ResolvedTransform) int {
+// this moment (whose Direction is the per-keyframe value). Static and
+// per-keyframe values are already the nested track's own keys; an
+// inherited one is mapped by facing from the parent's parentN directions to
+// the nested track's childN (MapDirection).
+func (p *Part) NestedDirectionAt(parentDir, parentN, childN int, tr ResolvedTransform) int {
 	switch p.DirectionMode {
 	case NestedDirStatic:
 		return p.StaticDirection
 	case NestedDirPerKeyframe:
 		return tr.Direction
 	}
-	return parentDir
+	return MapDirection(parentDir, parentN, childN)
 }
 
 // PropBinding configures one prop on a nested Part: either mirror one of
@@ -223,25 +231,22 @@ const (
 	DefaultRefBoxHeight = 64
 )
 
-// StandardDirectionKeys are the four facings of the game's own convention.
-// A track gets them only when the artist asks (AddStandardDirections).
-var StandardDirectionKeys = []int{0, 1, 2, 3} // 0=up, 1=right, 2=down, 3=left
-
-// NewTrack creates a track with a single direction, 0, and no parts.
+// NewTrack creates a one-direction track with no parts.
 //
-// One, not the four standard facings: many assets (a torch, a chest, an
-// effect) are non-directional, and seeding four left them with three empty
-// facings by accident - which a nested animation then played as nothing.
-// Adding facings is a deliberate step (AddStandardDirections).
+// One direction, not four: many assets (a torch, a chest, an effect) are
+// non-directional, and seeding four left them with three empty facings by
+// accident - which a nested animation then played as nothing. Adding
+// facings is a deliberate step (Project.SetDirectionCount).
 func NewTrack(name string) *Track {
 	dirs := map[int]*Direction{0: NewDirection()}
 	return &Track{
-		Metadata:     TrackMetadata{Name: name, Version: "1.0"},
-		Props:        []PropDef{},
-		RefBoxWidth:  DefaultRefBoxWidth,
-		RefBoxHeight: DefaultRefBoxHeight,
-		Parts:        []*Part{},
-		Directions:   dirs,
+		DirectionCount: 1,
+		Metadata:       TrackMetadata{Name: name, Version: "1.0"},
+		Props:          []PropDef{},
+		RefBoxWidth:    DefaultRefBoxWidth,
+		RefBoxHeight:   DefaultRefBoxHeight,
+		Parts:          []*Part{},
+		Directions:     dirs,
 	}
 }
 

@@ -38,6 +38,10 @@ type tomlTrackMeta struct {
 	Version      string `toml:"version"`
 	RefBoxWidth  int    `toml:"ref_box_width"`
 	RefBoxHeight int    `toml:"ref_box_height"`
+	// Directions is how many directions the track has (1, 4, 8, 16); keys
+	// are 0..N-1 clockwise from north. Absent in older files, which are
+	// judged by their keys (Track.Facings).
+	Directions int `toml:"directions,omitempty"`
 }
 
 type tomlPropDef struct {
@@ -126,6 +130,7 @@ func SaveTrack(t *editor.Track, path string, sheets []SheetRef) error {
 		Metadata: tomlTrackMeta{
 			Name: t.Metadata.Name, Version: t.Metadata.Version,
 			RefBoxWidth: t.RefBoxWidth, RefBoxHeight: t.RefBoxHeight,
+			Directions: t.Facings(),
 		},
 		Directions: make(map[string]tomlDirection, len(t.Directions)),
 	}
@@ -238,10 +243,11 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	}
 
 	t := &editor.Track{
-		Metadata:     editor.TrackMetadata{Name: tt.Metadata.Name, Version: tt.Metadata.Version},
-		RefBoxWidth:  tt.Metadata.RefBoxWidth,
-		RefBoxHeight: tt.Metadata.RefBoxHeight,
-		Directions:   make(map[int]*editor.Direction, len(tt.Directions)),
+		Metadata:       editor.TrackMetadata{Name: tt.Metadata.Name, Version: tt.Metadata.Version},
+		RefBoxWidth:    tt.Metadata.RefBoxWidth,
+		RefBoxHeight:   tt.Metadata.RefBoxHeight,
+		DirectionCount: tt.Metadata.Directions,
+		Directions:     make(map[int]*editor.Direction, len(tt.Directions)),
 	}
 	// Also catches tracks written before these keys existed (or under their
 	// old canvas_width/canvas_height names), which decode as zero.
@@ -313,6 +319,18 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 
 	if len(t.Directions) == 0 {
 		t.Directions[0] = editor.NewDirection()
+	}
+	// The count must be one the editor knows, and every key must face one
+	// of its directions - otherwise the key's facing is a guess.
+	if n := tt.Metadata.Directions; n != 0 {
+		if !editor.ValidDirectionCount(n) {
+			return nil, nil, fmt.Errorf("directions = %d: a track has 1, 4, 8 or 16 directions", n)
+		}
+		for k := range t.Directions {
+			if k < 0 || k >= n {
+				return nil, nil, fmt.Errorf("direction %d is outside 0-%d for a %d-direction track", k, n-1, n)
+			}
+		}
 	}
 
 	return t, refs, nil

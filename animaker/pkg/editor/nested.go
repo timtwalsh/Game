@@ -134,7 +134,7 @@ func (p *Project) FlattenNested(part *Part) []FlatSprite {
 	if dir := p.ActiveDirection(); dir != nil {
 		tr = dir.ValueAt(part.ID, p.Playback.ElapsedMs)
 	}
-	want := part.NestedDirectionAt(p.Playback.ActiveDirection, tr)
+	want := part.NestedDirectionAt(p.Playback.ActiveDirection, p.CurrentTrack.Facings(), anim.Track.Facings(), tr)
 	sprites := p.flatten(anim, want, parentProps, part.NestedBindings, p.NestedClockMs(), 1)
 	sort.SliceStable(sprites, func(i, j int) bool { return drawsBefore(sprites[i], sprites[j]) })
 	return sprites
@@ -194,7 +194,7 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 			if child == nil {
 				continue
 			}
-			childWant := part.NestedDirectionAt(dirKey, tr)
+			childWant := part.NestedDirectionAt(dirKey, t.Facings(), child.Track.Facings(), tr)
 			for _, s := range p.flatten(child, childWant, props, part.NestedBindings, clockMs, depth+1) {
 				s.X += tr.X
 				s.Y += tr.Y
@@ -269,7 +269,7 @@ func (p *Project) NestedExtent(part *Part) (minX, minY, maxX, maxY float32, ok b
 		}
 	}
 	if len(wants) == 0 {
-		wants[part.NestedDirectionAt(p.Playback.ActiveDirection, ResolvedTransform{})] = true
+		wants[part.NestedDirectionAt(p.Playback.ActiveDirection, p.CurrentTrack.Facings(), anim.Track.Facings(), ResolvedTransform{})] = true
 	}
 
 	first := true
@@ -332,11 +332,15 @@ func (p *Project) SetNestedDirectionMode(part *Part, mode NestedDirMode) {
 	if part.DirectionMode == mode {
 		return
 	}
+	parentN, childN := p.CurrentTrack.Facings(), p.CurrentTrack.Facings()
+	if anim := p.ResolveNestedAnim(part); anim != nil {
+		childN = anim.Track.Facings()
+	}
 	switch mode {
 	case NestedDirPerKeyframe:
 		for parentDir, d := range p.CurrentTrack.Directions {
 			for _, kf := range d.KeyframesFor(part.ID) {
-				kf.Direction = part.NestedDirectionAt(parentDir, kfToResolved(kf))
+				kf.Direction = part.NestedDirectionAt(parentDir, parentN, childN, kfToResolved(kf))
 			}
 		}
 	case NestedDirStatic:
@@ -344,7 +348,7 @@ func (p *Project) SetNestedDirectionMode(part *Part, mode NestedDirMode) {
 		if d := p.ActiveDirection(); d != nil {
 			tr = d.ValueAt(part.ID, p.Playback.ElapsedMs)
 		}
-		part.StaticDirection = part.NestedDirectionAt(p.Playback.ActiveDirection, tr)
+		part.StaticDirection = part.NestedDirectionAt(p.Playback.ActiveDirection, parentN, childN, tr)
 	}
 	part.DirectionMode = mode
 	p.Dirty = true
