@@ -39,6 +39,9 @@ type CanvasWidget struct {
 	project  *editor.Project
 	zoom     float32
 	showGrid bool
+	// showOnion draws the selected part's neighbouring keyframe poses
+	// faintly behind it (ToggleOnion).
+	showOnion bool
 
 	draggingPartIdx int // -1 = not dragging
 	// dragStartLocal is where the press began, widget-local. Drags report
@@ -505,6 +508,14 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 
 	draws := cw.resolvedDrawsAt(ext, origin)
 	sel := cw.project.Selection
+	// Onion skin first, so the real poses draw over it.
+	if cw.showOnion && !cw.project.Playback.IsPlaying && sel != nil {
+		for _, d := range draws {
+			if d.partIdx == sel.PartIndex {
+				objs = append(objs, r.onionGhosts(d, ext[d.part], origin)...)
+			}
+		}
+	}
 	for _, d := range draws {
 		selected := sel != nil && sel.PartIndex == d.partIdx
 		objs = append(objs, r.drawPart(d, origin, selected)...)
@@ -641,4 +652,45 @@ func rotationTick(d resolvedDraw, origin fyne.Position, zoom float32) fyne.Canva
 func rotationTickEnd(pivot fyne.Position, length, deg float32) fyne.Position {
 	rad := float64(deg) * math.Pi / 180
 	return fyne.NewPos(pivot.X+length*float32(math.Sin(rad)), pivot.Y-length*float32(math.Cos(rad)))
+}
+
+// onionTranslucency is how faint an onion-skin ghost is (1 = invisible).
+const onionTranslucency = 0.7
+
+// onionGhosts draws the selected part's poses at its keyframes either side
+// of the playhead, faintly, so the pose between them can be judged
+// without scrubbing back and forth. Sheet parts only; ghosts are drawn,
+// never hit-tested, so they can't be clicked or dragged.
+func (r *canvasRenderer) onionGhosts(d resolvedDraw, e partExtent, origin fyne.Position) []fyne.CanvasObject {
+	if d.part.Kind != editor.PartKindSheet || d.sheet == nil {
+		return nil
+	}
+	cw := r.widget
+	prev, next := cw.project.ActiveDirection().NeighbourKeyframes(d.part.ID, cw.project.Playback.ElapsedMs)
+	var objs []fyne.CanvasObject
+	for _, kf := range []*editor.Keyframe{prev, next} {
+		if kf == nil {
+			continue
+		}
+		cell, err := d.sheet.CellImage(kf.Row, kf.Col)
+		if err != nil {
+			continue
+		}
+		// Its own image, not one from the per-frame pool: a pooled image
+		// would carry the translucency over to its next, solid, use.
+		img := canvas.NewImageFromImage(cell)
+		img.ScaleMode = canvas.ImageScalePixels
+		img.FillMode = canvas.ImageFillOriginal
+		img.Translucency = onionTranslucency
+		img.Resize(fyne.NewSize(e.w*cw.zoom, e.h*cw.zoom))
+		img.Move(fyne.NewPos(origin.X+(kf.X-e.pivotX)*cw.zoom, origin.Y+(kf.Y-e.pivotY)*cw.zoom))
+		objs = append(objs, img)
+	}
+	return objs
+}
+
+// ToggleOnion turns the onion skin on or off.
+func (cw *CanvasWidget) ToggleOnion() {
+	cw.showOnion = !cw.showOnion
+	cw.Refresh()
 }

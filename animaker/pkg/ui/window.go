@@ -49,6 +49,7 @@ func BuildMenuBar(
 	onUndo func(),
 	onRedo func(),
 	onToggleGrid func(),
+	onToggleOnion func(),
 	onZoom func(float32),
 	onAbout func(),
 	onShortcuts func(),
@@ -81,6 +82,7 @@ func BuildMenuBar(
 
 	viewMenu := fyne.NewMenu("View",
 		fyne.NewMenuItem("Toggle Grid", onToggleGrid),
+		fyne.NewMenuItem("Toggle Onion Skin (O)", onToggleOnion),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Zoom 100%", func() { onZoom(1.0) }),
 		fyne.NewMenuItem("Zoom 200%", func() { onZoom(2.0) }),
@@ -107,6 +109,7 @@ var ShortcutHelp = [][2]string{
 	{"Delete", "Delete the selected keyframe, or the selected part's keyframe at the playhead"},
 	{"1 / 2 / 3 / 4", "Up / Right / Down / Left direction"},
 	{"Esc", "Deselect (the next palette drop adds a new part)"},
+	{"O", "Onion skin: show the selected part's neighbouring keyframe poses faintly"},
 	{"Ctrl+] / Ctrl+[", "Selected part forward / back in draw order"},
 	{"Ctrl+Shift+] / [", "Selected part to the front / back"},
 	{"Alt (while dragging)", "Place between whole pixels"},

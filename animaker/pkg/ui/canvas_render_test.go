@@ -9,6 +9,7 @@ import (
 	"animaker/pkg/editor"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 )
 
@@ -52,5 +53,43 @@ func TestReusedSpriteImagesFollowTheAnimation(t *testing.T) {
 	}
 	if isRed(at(0)) {
 		t.Error("sprite still drawn at its old place")
+	}
+}
+
+// With the onion skin on, the selected part's neighbouring keyframe poses
+// draw faintly behind it; off, or while playing, they don't.
+func TestOnionSkinDrawsNeighbouringPoses(t *testing.T) {
+	test.NewTempApp(t)
+	p := editor.NewProject("t")
+	p.LoadedSheets["r"] = editor.NewSpriteSheetTemplate("r", "r.png", image.NewRGBA(image.Rect(0, 0, 8, 8)), 8, 8, 0, 0)
+	part := editor.AddPart(p.CurrentTrack, editor.NewSheetPart("box", "", "r"))
+	editor.AddKeyframe(p.ActiveDirection(), part.ID, 0).X = 0
+	editor.AddKeyframe(p.ActiveDirection(), part.ID, 200).X = 40
+	p.Selection.PartIndex = 0
+	p.Seek(100)
+
+	cw := NewCanvasWidget(p)
+	w := test.NewWindow(cw)
+	t.Cleanup(w.Close)
+	ghosts := func() (n int) {
+		for _, o := range test.WidgetRenderer(cw).Objects() {
+			if img, ok := o.(*canvas.Image); ok && img.Translucency == onionTranslucency {
+				n++
+			}
+		}
+		return n
+	}
+
+	if ghosts() != 0 {
+		t.Error("ghosts drawn with the onion skin off")
+	}
+	cw.ToggleOnion()
+	if got := ghosts(); got != 2 {
+		t.Errorf("%d ghosts, want 2 (the keyframes at 0 and 200ms)", got)
+	}
+	p.Playback.IsPlaying = true
+	cw.Refresh()
+	if got := ghosts(); got != 0 {
+		t.Errorf("%d ghosts while playing, want 0", got)
 	}
 }

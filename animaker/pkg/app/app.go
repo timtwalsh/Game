@@ -122,6 +122,7 @@ func (a *Application) build() {
 		a.onUndo,
 		a.onRedo,
 		a.canvasWidget.ToggleGrid,
+		a.canvasWidget.ToggleOnion,
 		a.onZoom,
 		a.showAbout,
 		func() { ui.ShowShortcutsDialog(a.Window) },
@@ -632,6 +633,8 @@ func (a *Application) onTypedKey(e *fyne.KeyEvent) {
 			a.Project.Dirty = true
 			a.refreshAll()
 		}
+	case fyne.KeyO:
+		a.canvasWidget.ToggleOnion()
 	case fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4:
 		// The four standard facings, in the game's order: 1 = up (0).
 		a.switchDirection(int(e.Name[0] - '1'))

@@ -244,3 +244,27 @@ func TestKeyTimesLeavesOutThePartBeingMoved(t *testing.T) {
 		t.Errorf("KeyTimes(-1) = %v, want [0 200 350]", got)
 	}
 }
+
+func TestNeighbourKeyframes(t *testing.T) {
+	dir := NewDirection()
+	for _, ms := range []uint32{0, 200, 400} {
+		AddKeyframe(dir, 1, ms)
+	}
+	cases := []struct {
+		at, prev, next int64 // -1 = none
+	}{
+		{100, 0, 200}, {200, 0, 400}, {0, -1, 200}, {400, 200, -1}, {500, 400, -1},
+	}
+	for _, c := range cases {
+		p, n := dir.NeighbourKeyframes(1, uint32(c.at))
+		got := func(k *Keyframe) int64 {
+			if k == nil {
+				return -1
+			}
+			return int64(k.TimeMs)
+		}
+		if got(p) != c.prev || got(n) != c.next {
+			t.Errorf("at %d: prev %d next %d, want %d %d", c.at, got(p), got(n), c.prev, c.next)
+		}
+	}
+}

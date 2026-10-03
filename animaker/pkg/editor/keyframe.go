@@ -271,3 +271,19 @@ func SnapTime(t uint32, targets []uint32, within, grid uint32) (snapped uint32, 
 	}
 	return t, false
 }
+
+// NeighbourKeyframes returns a part's keyframes either side of timeMs: the
+// last one strictly before it and the first strictly after (nil where
+// there isn't one). With the playhead on a keyframe, these are that
+// keyframe's neighbours - the poses an onion skin shows around it.
+func (d *Direction) NeighbourKeyframes(partID int, timeMs uint32) (prev, next *Keyframe) {
+	for _, kf := range d.KeyframesFor(partID) {
+		switch {
+		case kf.TimeMs < timeMs:
+			prev = kf
+		case kf.TimeMs > timeMs && next == nil:
+			next = kf
+		}
+	}
+	return prev, next
+}
