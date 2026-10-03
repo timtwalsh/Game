@@ -36,6 +36,28 @@ func TestDropTileWithPartSelectedKeysThatPart(t *testing.T) {
 	}
 }
 
+// Decided 2026-10-03: a new part starts at the origin wherever it's
+// dropped, since a rig's pieces are usually drawn on one shared grid. A
+// drop that keys the selected part still lands where it's dropped.
+func TestDropTileNewPartStartsAtOrigin(t *testing.T) {
+	p := NewProject("test")
+	if !p.DropMakesNewPart("sprite") {
+		t.Fatal("nothing selected: a drop should make a new part")
+	}
+	idx, kf := p.DropTile("sprite", 0, 0, 37, -12)
+	if kf.X != 0 || kf.Y != 0 {
+		t.Errorf("new part at (%v,%v), want the origin", kf.X, kf.Y)
+	}
+	p.Selection.PartIndex = idx
+	if p.DropMakesNewPart("sprite") || !p.DropMakesNewPart("other_sheet") {
+		t.Error("DropMakesNewPart should follow the selection and its sheet")
+	}
+	p.Seek(100)
+	if _, kf := p.DropTile("sprite", 0, 1, 37, -12); kf.X != 37 || kf.Y != -12 {
+		t.Errorf("keyed drop at (%v,%v), want the drop point (37,-12)", kf.X, kf.Y)
+	}
+}
+
 func TestDropTileOnExistingKeyframeReCellsIt(t *testing.T) {
 	p := NewProject("test")
 	idx, _ := p.DropTile("sprite", 0, 0, 0, 0)
@@ -111,7 +133,8 @@ func TestEnsurePropKeepsAnExistingDefault(t *testing.T) {
 func TestTapTileKeysSelectedPartAtPlayheadKeepingPose(t *testing.T) {
 	p := NewProject("test")
 	dir := p.ActiveDirection()
-	idx, _ := p.DropTile("sprite", 0, 0, 10, 20)
+	idx, first := p.DropTile("sprite", 0, 0, 10, 20)
+	first.X, first.Y = 10, 20 // dragged off the origin
 	p.Selection.PartIndex, p.Selection.KeyframeIndex = idx, -1 // as clicking the part leaves it
 	p.Scrub(200)
 
