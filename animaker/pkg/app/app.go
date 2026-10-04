@@ -1466,12 +1466,18 @@ func (a *Application) playbackLoop() {
 	defer ticker.Stop()
 
 	lastTick := time.Now()
+	// carry keeps the sub-millisecond remainder AdvancePlayback's whole-ms
+	// delta can't express, so playback speed matches real time instead of
+	// losing a fraction of a millisecond every tick.
+	var carry time.Duration
 	for {
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			deltaMs := uint32(now.Sub(lastTick).Milliseconds())
+			elapsed := now.Sub(lastTick) + carry
 			lastTick = now
+			deltaMs := uint32(elapsed / time.Millisecond)
+			carry = elapsed - time.Duration(deltaMs)*time.Millisecond
 
 			// All of it on Fyne's main goroutine. This loop runs on its own
 			// goroutine, and used to advance the project and redraw from

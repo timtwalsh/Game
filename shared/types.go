@@ -108,6 +108,7 @@ const (
 	MaxSpeed               float32 = 5.0
 	SpeedTolerance         float32 = 2.0
 	NetworkTickRate        uint32  = 50 // ms (20Hz) - client send interval, server broadcast interval, and client interpolation window all derive from this
+	SimTickHz              uint32  = 60 // fixed simulation rate; gameplay always steps at this rate, never at the render frame rate
 	SuspicionSpeedHack     float32 = 0.5
 	SuspicionWallPhase     float32 = 2.0
 	SuspicionPlayerReport  float32 = 0.5

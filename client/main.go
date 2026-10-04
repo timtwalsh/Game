@@ -23,7 +23,6 @@ type Client struct {
 	controller      *PlayerController
 	remotePlayers   map[uint64]*PlayerInterpolation
 	mutex           sync.Mutex
-	lastNetworkSend time.Time
 }
 
 func NewClient(serverAddrStr string) *Client {
@@ -108,18 +107,39 @@ func (c *Client) SendMove(pos shared.Vec2, timeMs uint32) {
 	c.conn.WriteToUDP(out, c.serverAddr)
 }
 
+// Simulation runs on a fixed timestep, decoupled from the render frame rate.
+// Each frame adds its real elapsed time to an accumulator and runs as many
+// whole simSteps as fit; the leftover fraction is used only to blend the
+// drawn position between the last two steps.
+const (
+	simStep = time.Second / time.Duration(shared.SimTickHz)
+	// maxFrameTime caps how much real time one frame may feed the simulation,
+	// so a stall (window drag, breakpoint) doesn't trigger a huge catch-up
+	// burst. Time beyond it is dropped rather than simulated.
+	maxFrameTime = 250 * time.Millisecond
+	// ticksPerNetworkSend sends a ClientMoveMsg every N sim steps, i.e. at
+	// shared.NetworkTickRate measured in simulated time (3 steps at 60Hz).
+	ticksPerNetworkSend = max(1, (shared.NetworkTickRate*shared.SimTickHz+500)/1000)
+)
+
 func main() {
 	rl.InitWindow(800, 600, "2D MMO Client")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(144)
 
 	client := NewClient("127.0.0.1:8080")
-	var lastFrameTime time.Time = time.Now()
+	lastFrameTime := time.Now()
+	var accumulator time.Duration
+	var ticksSinceSend uint32
 
 	for !rl.WindowShouldClose() {
 		now := time.Now()
-		deltaMs := uint32(now.Sub(lastFrameTime).Milliseconds())
+		frameTime := now.Sub(lastFrameTime)
 		lastFrameTime = now
+		if frameTime > maxFrameTime {
+			frameTime = maxFrameTime
+		}
+		accumulator += frameTime
 
 		// Input
 		input := PlayerInput{
@@ -130,17 +150,25 @@ func main() {
 		}
 
 		client.mutex.Lock()
-		client.controller.UpdatePrediction(&input, deltaMs)
+		for accumulator >= simStep {
+			client.controller.UpdatePrediction(&input, simStep)
+			accumulator -= simStep
+
+			// Network Send - TimeMs is the simulated time the reported
+			// movement covers, so the server's speed check divides distance
+			// by exactly the time it was simulated over.
+			ticksSinceSend++
+			if ticksSinceSend >= ticksPerNetworkSend {
+				simulated := time.Duration(ticksSinceSend) * simStep
+				client.SendMove(client.controller.PredictedPosition, uint32(simulated.Round(time.Millisecond).Milliseconds()))
+				ticksSinceSend = 0
+			}
+		}
+		alpha := float32(accumulator) / float32(simStep)
+		localPos := client.controller.RenderPosition(alpha)
 
 		for _, rp := range client.remotePlayers {
-			rp.Update(deltaMs)
-		}
-
-		// Network Send
-		sinceLastSend := now.Sub(client.lastNetworkSend).Milliseconds()
-		if sinceLastSend >= int64(shared.NetworkTickRate) {
-			client.SendMove(client.controller.PredictedPosition, uint32(sinceLastSend))
-			client.lastNetworkSend = now
+			rp.Update(frameTime)
 		}
 
 		// Rendering
@@ -163,8 +191,8 @@ func main() {
 
 		// Draw local player
 		localColor := rl.NewColor(client.colorR, client.colorG, client.colorB, 255)
-		localCenterX := int32(client.controller.PredictedPosition.X + 8)
-		localCenterY := int32(client.controller.PredictedPosition.Y + 8)
+		localCenterX := int32(localPos.X + 8)
+		localCenterY := int32(localPos.Y + 8)
 		rl.DrawCircle(localCenterX, localCenterY, 8.0, localColor)
 
 		// Draw direction indicator line
