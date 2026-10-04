@@ -80,3 +80,30 @@ func TestClickingANestedSpriteSelectsItsPart(t *testing.T) {
 		t.Errorf("hitTest on the flame = %d, want part 0 (the torch)", got)
 	}
 }
+
+// A nested part's rotation turns its whole animation about the part: at
+// 180 the flame, (0,-6) above the torch's origin, hangs (0,6) below it,
+// and that's where it's drawn and clicked.
+func TestRotatedNestedPartTurnsItsAnimation(t *testing.T) {
+	cw, p, part := walkTorchCanvas(t)
+	p.ActiveDirection().KeyframesFor(part.ID)[0].RotationDeg = 180
+	origin := cw.originScreen()
+	at := func(x, y float32) fyne.Position { return fyne.NewPos(origin.X+x*cw.zoom, origin.Y+y*cw.zoom) }
+
+	// The flame's 16x16 cell, turned about its pivot at (10,26): (2,18) to (18,34).
+	var flame *canvas.Image
+	for _, o := range (&canvasRenderer{widget: cw}).buildObjects() {
+		if img, ok := o.(*canvas.Image); ok {
+			flame = img
+		}
+	}
+	if flame == nil || flame.Position() != at(2, 18) || flame.Size() != fyne.NewSize(16*cw.zoom, 16*cw.zoom) {
+		t.Fatalf("flame drawn at %v size %v, want %v size 16x16 anim px", flame.Position(), flame.Size(), at(2, 18))
+	}
+	if got := cw.hitTest(at(10, 30)); got != 0 {
+		t.Errorf("click on the turned flame hit %d, want 0", got)
+	}
+	if got := cw.hitTest(at(10, 8)); got != -1 {
+		t.Errorf("click where the flame was before turning hit %d, want -1", got)
+	}
+}

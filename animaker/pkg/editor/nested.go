@@ -90,7 +90,10 @@ type FlatSprite struct {
 	Sheet    *SpriteSheetTemplate
 	Row, Col int
 	X, Y     float32 // where the cell's pivot goes
-	Z        float32 // the Z of the part this sprite belongs to at the top level
+	// RotationDeg is the cell's rotation about its pivot: its own plus that
+	// of every nested part it's drawn through.
+	RotationDeg float32
+	Z           float32 // the Z of the part this sprite belongs to at the top level
 
 	// zPath is the sprite's Z at each level of nesting, outermost first.
 	// Draw order compares it level by level, so a nested sprite stays in
@@ -119,8 +122,10 @@ const maxNestDepth = 4
 func (p *Project) NestedClockMs() uint32 { return p.Playback.NestedClockMs }
 
 // FlattenNested resolves a nested part into the sprites to draw at the
-// current nested clock, back-to-front, relative to the part's position.
-// Returns nil if the animation isn't loaded or has nothing posed.
+// current nested clock, back-to-front, relative to the part's position and
+// already turned by the part's own rotation: a nested part's rotation
+// turns its whole animation about the part's origin. Returns nil if the
+// animation isn't loaded or has nothing posed.
 func (p *Project) FlattenNested(part *Part) []FlatSprite {
 	anim := p.ResolveNestedAnim(part)
 	if anim == nil {
@@ -136,6 +141,9 @@ func (p *Project) FlattenNested(part *Part) []FlatSprite {
 	}
 	want := part.NestedDirectionAt(p.Playback.ActiveDirection, p.CurrentTrack.Facings(), anim.Track.Facings(), tr)
 	sprites := p.flatten(anim, want, parentProps, part.NestedBindings, p.NestedClockMs(), 1)
+	for i := range sprites {
+		sprites[i].turn(tr.RotationDeg)
+	}
 	sort.SliceStable(sprites, func(i, j int) bool { return drawsBefore(sprites[i], sprites[j]) })
 	return sprites
 }
@@ -183,8 +191,8 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 			if sheet == nil {
 				continue
 			}
-			out = append(out, FlatSprite{Sheet: sheet, Row: tr.Row, Col: tr.Col, X: tr.X, Y: tr.Y, Z: tr.Z,
-				zPath: []float32{tr.Z}})
+			out = append(out, FlatSprite{Sheet: sheet, Row: tr.Row, Col: tr.Col, X: tr.X, Y: tr.Y,
+				RotationDeg: tr.RotationDeg, Z: tr.Z, zPath: []float32{tr.Z}})
 		case PartKindNestedAni:
 			path := part.NestedAniPath
 			if part.GoverningProp != "" && IsAnimValue(props[part.GoverningProp]) {
@@ -196,6 +204,7 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 			}
 			childWant := part.NestedDirectionAt(dirKey, t.Facings(), child.Track.Facings(), tr)
 			for _, s := range p.flatten(child, childWant, props, part.NestedBindings, clockMs, depth+1) {
+				s.turn(tr.RotationDeg)
 				s.X += tr.X
 				s.Y += tr.Y
 				// Kept within this part's slot in the draw order: a nested
@@ -207,6 +216,13 @@ func (p *Project) flatten(anim *NestedAnim, want int, parentProps map[string]str
 		}
 	}
 	return out
+}
+
+// turn rotates the sprite about its nested part's origin: its position
+// swings round, and the cell turns with it.
+func (s *FlatSprite) turn(deg float32) {
+	s.X, s.Y = RotatePoint(s.X, s.Y, deg)
+	s.RotationDeg += deg
 }
 
 // pickDirection is the direction of t that plays when want is asked for:
@@ -251,7 +267,9 @@ func childProps(t *Track, parentProps map[string]string, bindings map[string]Pro
 // every keyframe of the animation it currently plays in the direction it
 // would show - so the canvas can measure the part (to hit-test it and
 // centre the view on it) without the size changing as the nested
-// animation plays. ok is false when there's nothing to measure.
+// animation plays. It's before the part's own rotation (FlattenNested
+// applies that; the canvas turns this box to match). ok is false when
+// there's nothing to measure.
 func (p *Project) NestedExtent(part *Part) (minX, minY, maxX, maxY float32, ok bool) {
 	anim := p.ResolveNestedAnim(part)
 	if anim == nil {
@@ -296,8 +314,9 @@ func (p *Project) NestedExtent(part *Part) (minX, minY, maxX, maxY float32, ok b
 				tm = total - 1
 			}
 			for _, s := range p.flatten(anim, want, parentProps, part.NestedBindings, tm, 1) {
-				x0, y0 := s.X-s.Sheet.PivotX, s.Y-s.Sheet.PivotY
-				x1, y1 := x0+float32(s.Sheet.CellW), y0+float32(s.Sheet.CellH)
+				bx0, by0, bx1, by1 := RotatedCellBox(float32(s.Sheet.CellW), float32(s.Sheet.CellH),
+					s.Sheet.PivotX, s.Sheet.PivotY, s.RotationDeg)
+				x0, y0, x1, y1 := s.X+bx0, s.Y+by0, s.X+bx1, s.Y+by1
 				if first {
 					minX, minY, maxX, maxY, first = x0, y0, x1, y1, false
 					continue

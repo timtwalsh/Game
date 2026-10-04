@@ -407,7 +407,8 @@ feedback after using the previous version:
     - **Files**: nested paths and `.anif` prop defaults are absolute in
       memory, relative to the `.anif` on disk (`relAnimPath` /
       `absAnimPath`); opening a track loads its nested animations.
-    - Still not shown: nested **rotation**, like every part's.
+    - Still not shown: nested **rotation**, like every part's (shown
+      since entry 28).
 
 21. **Select to edit** (2026-10-01). Two requests:
     - The position panel (X/Y/Z/Rotation, nudge pad) is **always shown
@@ -530,7 +531,8 @@ feedback after using the previous version:
       poses at its neighbouring keyframes, faint, not while playing.
     - **Draw order** "To Back"/"To Front" buttons (`ZOrderTarget`);
       Rotation is labelled "not previewed" and a selected part's
-      rotation is drawn as a tick from its pivot.
+      rotation is drawn as a tick from its pivot (the label went when
+      rotation was previewed, entry 28; the tick stays).
     - **Props**: each schema row's default is a picker
       (`Project.SetPropDefault`, undoable, same kind and loaded only).
     - **File > New Track from Rig...** (`editor.RigFrom`,
@@ -622,6 +624,27 @@ feedback after using the previous version:
     - `viewBounds`, quantizing and `SetViewFrozen` (entry 8) are gone:
       the origin only moves when the view does, so a drag can't shift it.
 
+28. **Rotation preview** (2026-10-04). Requested: "can we add rotation
+    preview?" Rotation had been stored, interpolated and saved but only
+    shown as a tick on the selected part.
+    - The canvas draws every part turned about its pivot, clockwise on
+      screen (`editor.RotatePoint`; 90 turns "up" to the right, as the
+      tick always did). `ui/rotate.go` rotates the cell's pixels
+      nearest-neighbour about the pivot and caches them (32MB budget);
+      angles are drawn to 0.5° so a playing rotation mostly hits the
+      cache. `editor.RotatedCellBox` is the rotated cell's box - exact
+      top-left, size rounded up to whole pixels - shared by the image,
+      the hit box and `NestedExtent`, so a quarter turn is exact and a
+      click lands on what's drawn.
+    - A nested part's rotation turns its whole animation about the
+      part's origin, composing through every level (`FlatSprite.
+      RotationDeg`, `FlatSprite.turn`); `NestedExtent` is before the
+      part's own rotation and the canvas turns that box.
+    - Onion ghosts and the palette drop preview are drawn rotated too
+      (a drop onto the selected part keeps its rotation at the playhead).
+    - The Rotation field lost its "(not previewed)" label; the selected
+      part's tick stays, for the pivot and angle.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -704,9 +727,13 @@ feedback after using the previous version:
     disagree about where a part actually is. `LocalToAnimXY` converts a
     canvas-local point into the animation's own X/Y space
     (`(local - pan) / zoom`).
-    **Rotation is stored and saved but not visually applied here** — Fyne
-    has no simple rotated-image primitive, and the actual consumer of
-    rotation is a future game-side (raylib) renderer, not this preview.
+    **Parts are drawn rotated** (entry 28) about their pivot, clockwise
+    as raylib does: Fyne can't rotate an image, so `rotate.go` turns the
+    cell's pixels (nearest-neighbour, cached, angles drawn to 0.5°) and
+    `resolvedDraw.rect` is the rotated box (`editor.RotatedCellBox`), so
+    hit-testing matches. Rotated cells use a per-frame pool of image
+    objects (`rotImages`) refreshed only when their pixels change, so a
+    playing rotation doesn't create a texture per frame.
     Nested-animation parts draw their animation live (entry 20); only
     one whose animation isn't loaded draws as a labelled placeholder box.
   - `sheetgrid.go` — `SheetGridWidget`: renders every cell of a
@@ -783,12 +810,11 @@ feedback after using the previous version:
 
 Deliberate scope cuts, not oversights:
 
-- **Rotation isn't visually applied** in the canvas (Fyne has no simple
-  rotated-image primitive) — see `canvas.go` above. It's captured in
-  every keyframe and round-trips through save/load correctly; the field
-  says "not previewed" and a selected part's rotation is drawn as a tick
-  (entry 24). (Nested animations, once listed here too, have played
-  live in the canvas since 2026-10-01.)
+- **The rotation preview is the editor's own resampling**, not the
+  game's renderer: nearest-neighbour at 0.5° steps, which is close to
+  but not pixel-identical with how raylib will draw a rotated sprite.
+  (Rotation was not shown at all until entry 28; nested animations have
+  played live since 2026-10-01.)
 - **Single-key shortcuts need the canvas to have focus**: arrows, Space,
   Delete etc. go to the canvas only while no text field is focused
   (Fyne routes them to a focused `Entry` first), so after typing in a
@@ -893,7 +919,15 @@ lands where it was released). `canvas_select_test.go` also covers the
 middle drag panning even over the selected part, a stray middle press
 not sticking, and the wheel being ignored mid-drag;
 `pkg/app/canvas_view_test.go` checks the real layout opens centred and
-the wheel reaches the canvas through its clipping scroll container. `pkg/editor/keyframe_ops_test.go` — the exactly-on-a-middle-keyframe
+the wheel reaches the canvas through its clipping scroll container.
+`pkg/ui/rotate_test.go` — rotation as drawn: angle rounding, a quarter
+turn moving every pixel exactly, a rotated part drawn (checked in
+captured pixels) and hit-tested where it's turned to, and a playing
+rotation reusing one image object; `canvas_nested_test.go` checks a
+rotated nested part is drawn and clicked turned. `pkg/editor/rotation_test.go`
+— the clockwise convention, `RotatedCellBox` (including a quarter turn
+about a half-pixel pivot), and rotation composing through one and two
+levels of nesting and into `NestedExtent`. `pkg/editor/keyframe_ops_test.go` — the exactly-on-a-middle-keyframe
 `ValueAt` regression; `MoveKeyframe` re-sorting with the moved keyframe's
 ID tracking it, and refusing occupied times; `DuplicateKeyframe`
 inserting, pasting onto an occupied time, and no-op onto its own time;

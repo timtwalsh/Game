@@ -680,10 +680,14 @@ func (a *Application) onTileDragMove(sheetName string, row, col int, absPos fyne
 		a.canvasWidget.ClearDropPreview()
 		return
 	}
+	var deg float32
 	if a.Project.DropMakesNewPart(sheetName) {
 		x, y = 0, 0 // a new part starts at the origin (DropTile)
+	} else if part := a.Project.SelectedPart(); part != nil {
+		// Keying the selected part keeps its rotation at the playhead.
+		deg = a.Project.ActiveDirection().ValueAt(part.ID, a.Project.Playback.ElapsedMs).RotationDeg
 	}
-	a.canvasWidget.SetDropPreview(sheet, row, col, x, y)
+	a.canvasWidget.SetDropPreview(sheet, row, col, x, y, deg)
 }
 
 // canvasPoint converts a window position into the animation's own X/Y,

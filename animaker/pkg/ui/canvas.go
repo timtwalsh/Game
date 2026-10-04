@@ -33,10 +33,10 @@ import (
 // The view is centred on the content (contentBounds) when the canvas is
 // first laid out, when a track is opened, and on View > Center View.
 //
-// Rotation is stored and saved but not visually applied here — Fyne has no
-// simple rotated-image primitive, and the real consumer of rotation is the
-// game's own (raylib) renderer, not this preview. That's a known,
-// deliberate gap for this pass.
+// Parts are drawn rotated about their pivot (clockwise, as the game's
+// raylib renderer does). Fyne can't rotate an image, so rotate.go turns the
+// pixels itself; a nested part's rotation turns its whole animation
+// (editor.FlattenNested).
 type CanvasWidget struct {
 	widget.BaseWidget
 
@@ -306,8 +306,12 @@ type resolvedDraw struct {
 	// positioned relative to the part (nil for sheet parts, or a nested
 	// part whose animation isn't loaded).
 	sprites []editor.FlatSprite
-	rect    fyne.Position // top-left
-	size    fyne.Size
+	// rot is the part's rotation as drawn (drawnRotation; 0 for none).
+	// rect and size are the box covering it as rotated, so hit-testing
+	// matches what's drawn.
+	rot  float32
+	rect fyne.Position // top-left
+	size fyne.Size
 }
 
 // resolvedDraws computes every part's resolved transform and screen rect
@@ -343,8 +347,12 @@ func (cw *CanvasWidget) resolvedDrawsAt(ext map[*editor.Part]partExtent, origin 
 			d.sprites = cw.project.FlattenNested(part)
 		}
 		e := ext[part]
-		d.rect = fyne.NewPos(origin.X+(d.tr.X-e.pivotX)*cw.zoom, origin.Y+(d.tr.Y-e.pivotY)*cw.zoom)
-		d.size = fyne.NewSize(e.w*cw.zoom, e.h*cw.zoom)
+		d.rot = drawnRotation(d.tr.RotationDeg)
+		// A nested part's extent is "pivoted" at its own origin, which is
+		// what it turns about, so one box rule serves both kinds.
+		minX, minY, maxX, maxY := editor.RotatedCellBox(e.w, e.h, e.pivotX, e.pivotY, d.rot)
+		d.rect = fyne.NewPos(origin.X+(d.tr.X+minX)*cw.zoom, origin.Y+(d.tr.Y+minY)*cw.zoom)
+		d.size = fyne.NewSize((maxX-minX)*cw.zoom, (maxY-minY)*cw.zoom)
 		draws = append(draws, d)
 	}
 	sort.SliceStable(draws, func(i, j int) bool { return draws[i].tr.Z < draws[j].tr.Z })
@@ -488,10 +496,69 @@ type canvasRenderer struct {
 	// per frame and up to a minute of stale ones held at once.
 	images    map[image.Image][]*canvas.Image
 	imageUsed map[image.Image]int
+
+	// Rotated cells are fresh pixels whenever the angle changes (every
+	// frame, while a rotation plays), so they aren't pooled by image like
+	// the above - that pool would only grow. Instead rotImages are reused
+	// in draw order, each given the frame's pixels and refreshed (which
+	// re-uploads its texture) only when they change.
+	rotations rotationCache
+	rotImages []*canvas.Image
+	rotUsed   int
 }
 
 // cellImage returns a canvas.Image showing img, reusing one from an
 // earlier redraw when there is one not yet used in this one.
+// drawCell draws a sheet cell with its pivot at animation (x, y), turned
+// deg (a drawnRotation) about it. translucency above 0 gives it an image
+// of its own, since a pooled one would carry the translucency over to its
+// next, solid, use.
+func (r *canvasRenderer) drawCell(cell image.Image, sheet *editor.SpriteSheetTemplate, x, y, deg float32,
+	origin fyne.Position, translucency float64) *canvas.Image {
+	zoom := r.widget.zoom
+	w, h := float32(sheet.CellW), float32(sheet.CellH)
+	minX, minY, maxX, maxY := editor.RotatedCellBox(w, h, sheet.PivotX, sheet.PivotY, deg)
+	pix := cell
+	if deg != 0 {
+		pix = r.rotations.get(cell, sheet.PivotX, sheet.PivotY, deg)
+	}
+
+	var img *canvas.Image
+	switch {
+	case translucency > 0:
+		img = canvas.NewImageFromImage(pix)
+		img.ScaleMode = canvas.ImageScalePixels
+		img.FillMode = canvas.ImageFillOriginal
+		img.Translucency = translucency
+	case deg != 0:
+		img = r.rotatedImage(pix)
+	default:
+		img = r.cellImage(pix)
+	}
+	img.Resize(fyne.NewSize((maxX-minX)*zoom, (maxY-minY)*zoom))
+	img.Move(fyne.NewPos(origin.X+(x+minX)*zoom, origin.Y+(y+minY)*zoom))
+	return img
+}
+
+// rotatedImage is the next of rotImages, showing pix.
+func (r *canvasRenderer) rotatedImage(pix image.Image) *canvas.Image {
+	if r.rotUsed < len(r.rotImages) {
+		img := r.rotImages[r.rotUsed]
+		r.rotUsed++
+		if img.Image != pix {
+			img.Image = pix
+			img.Refresh()
+		}
+		return img
+	}
+	img := canvas.NewImageFromImage(pix)
+	img.ScaleMode = canvas.ImageScalePixels
+	img.FillMode = canvas.ImageFillOriginal
+	r.rotImages = append(r.rotImages, img)
+	r.rotUsed++
+	return img
+}
+
 func (r *canvasRenderer) cellImage(img image.Image) *canvas.Image {
 	if r.images == nil {
 		r.images = map[image.Image][]*canvas.Image{}
@@ -545,6 +612,7 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 func (r *canvasRenderer) buildScene() []fyne.CanvasObject {
 	cw := r.widget
 	r.imageUsed = map[image.Image]int{}
+	r.rotUsed = 0
 	ext := cw.partExtents()
 	size := cw.Size()
 	objs := []fyne.CanvasObject{}
@@ -596,7 +664,7 @@ func (r *canvasRenderer) buildScene() []fyne.CanvasObject {
 	if cw.showOnion && !cw.project.Playback.IsPlaying && sel != nil {
 		for _, d := range draws {
 			if d.partIdx == sel.PartIndex {
-				objs = append(objs, r.onionGhosts(d, ext[d.part], origin)...)
+				objs = append(objs, r.onionGhosts(d, origin)...)
 			}
 		}
 	}
@@ -638,9 +706,7 @@ func (r *canvasRenderer) drawPart(d resolvedDraw, origin fyne.Position, selected
 		return nil
 	}
 
-	img := r.cellImage(cellImg)
-	img.Resize(d.size)
-	img.Move(d.rect)
+	img := r.drawCell(cellImg, d.sheet, d.tr.X, d.tr.Y, d.rot, origin, 0)
 	objs := []fyne.CanvasObject{img}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
@@ -676,13 +742,7 @@ func (r *canvasRenderer) drawNested(d resolvedDraw, origin fyne.Position, select
 		if err != nil {
 			continue
 		}
-		img := r.cellImage(cellImg)
-		img.Resize(fyne.NewSize(float32(s.Sheet.CellW)*cw.zoom, float32(s.Sheet.CellH)*cw.zoom))
-		img.Move(fyne.NewPos(
-			origin.X+(d.tr.X+s.X-s.Sheet.PivotX)*cw.zoom,
-			origin.Y+(d.tr.Y+s.Y-s.Sheet.PivotY)*cw.zoom,
-		))
-		objs = append(objs, img)
+		objs = append(objs, r.drawCell(cellImg, s.Sheet, d.tr.X+s.X, d.tr.Y+s.Y, drawnRotation(s.RotationDeg), origin, 0))
 	}
 	if selected {
 		objs = append(objs, selectionOutline(d.rect, d.size))
@@ -727,10 +787,10 @@ func (r *canvasRenderer) buildGrid(size fyne.Size, origin fyne.Position) []fyne.
 	return objs
 }
 
-// rotationTick is a selected part's rotation, drawn: a line from its pivot
-// pointing the way the part's "up" would after rotating. The preview can't
-// rotate the sprite itself, so this is how a non-zero rotation becomes
-// visible at all. nil for no rotation.
+// rotationTick marks a selected part's rotation: a line from its pivot
+// pointing the way the part's "up" now faces, which shows the pivot and
+// the angle even where the art itself is hard to read. nil for no
+// rotation.
 func rotationTick(d resolvedDraw, origin fyne.Position, zoom float32) fyne.CanvasObject {
 	if d.tr.RotationDeg == 0 {
 		return nil
@@ -762,7 +822,7 @@ const onionTranslucency = 0.7
 // of the playhead, faintly, so the pose between them can be judged
 // without scrubbing back and forth. Sheet parts only; ghosts are drawn,
 // never hit-tested, so they can't be clicked or dragged.
-func (r *canvasRenderer) onionGhosts(d resolvedDraw, e partExtent, origin fyne.Position) []fyne.CanvasObject {
+func (r *canvasRenderer) onionGhosts(d resolvedDraw, origin fyne.Position) []fyne.CanvasObject {
 	if d.part.Kind != editor.PartKindSheet || d.sheet == nil {
 		return nil
 	}
@@ -777,15 +837,7 @@ func (r *canvasRenderer) onionGhosts(d resolvedDraw, e partExtent, origin fyne.P
 		if err != nil {
 			continue
 		}
-		// Its own image, not one from the per-frame pool: a pooled image
-		// would carry the translucency over to its next, solid, use.
-		img := canvas.NewImageFromImage(cell)
-		img.ScaleMode = canvas.ImageScalePixels
-		img.FillMode = canvas.ImageFillOriginal
-		img.Translucency = onionTranslucency
-		img.Resize(fyne.NewSize(e.w*cw.zoom, e.h*cw.zoom))
-		img.Move(fyne.NewPos(origin.X+(kf.X-e.pivotX)*cw.zoom, origin.Y+(kf.Y-e.pivotY)*cw.zoom))
-		objs = append(objs, img)
+		objs = append(objs, r.drawCell(cell, d.sheet, kf.X, kf.Y, drawnRotation(kf.RotationDeg), origin, onionTranslucency))
 	}
 	return objs
 }
@@ -802,16 +854,17 @@ type dropPreview struct {
 	sheet    *editor.SpriteSheetTemplate
 	row, col int
 	x, y     float32
+	deg      float32 // the rotation the drop keeps (the selected part's)
 }
 
 // dropPreviewTranslucency is how faint the dragged tile's preview is.
 const dropPreviewTranslucency = 0.4
 
 // SetDropPreview shows where a dragged palette tile would land: the cell,
-// drawn faintly by its pivot at animation (x, y), exactly as a drop there
-// would place it.
-func (cw *CanvasWidget) SetDropPreview(sheet *editor.SpriteSheetTemplate, row, col int, x, y float32) {
-	cw.preview = &dropPreview{sheet: sheet, row: row, col: col, x: x, y: y}
+// drawn faintly by its pivot at animation (x, y), turned deg, exactly as a
+// drop there would place it.
+func (cw *CanvasWidget) SetDropPreview(sheet *editor.SpriteSheetTemplate, row, col int, x, y, deg float32) {
+	cw.preview = &dropPreview{sheet: sheet, row: row, col: col, x: x, y: y, deg: deg}
 	cw.Refresh()
 }
 
@@ -836,13 +889,7 @@ func (r *canvasRenderer) dropPreviewImage(origin fyne.Position) fyne.CanvasObjec
 	if err != nil {
 		return nil
 	}
-	img := canvas.NewImageFromImage(cell) // its own: pooled images must stay solid
-	img.ScaleMode = canvas.ImageScalePixels
-	img.FillMode = canvas.ImageFillOriginal
-	img.Translucency = dropPreviewTranslucency
-	img.Resize(fyne.NewSize(float32(pv.sheet.CellW)*cw.zoom, float32(pv.sheet.CellH)*cw.zoom))
-	img.Move(fyne.NewPos(origin.X+(pv.x-pv.sheet.PivotX)*cw.zoom, origin.Y+(pv.y-pv.sheet.PivotY)*cw.zoom))
-	return img
+	return r.drawCell(cell, pv.sheet, pv.x, pv.y, drawnRotation(pv.deg), origin, dropPreviewTranslucency)
 }
 
 // -- Hover: the part under the mouse is outlined, with a hand cursor, so
