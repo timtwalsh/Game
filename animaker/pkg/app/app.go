@@ -44,8 +44,7 @@ type Application struct {
 	leftColumn     *fyne.Container
 	titleLabel     *widget.Label
 
-	playbackTicker *time.Ticker
-	playbackDone   chan bool
+	playbackDone chan bool
 
 	// The keyframe a canvas drag is moving, and where it sat when the drag
 	// began. Held by pointer for the whole gesture rather than looked up
