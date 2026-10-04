@@ -419,11 +419,12 @@ func ShowRenamePartDialog(win fyne.Window, current string, onRename func(name st
 	win.Canvas().Focus(nameEntry)
 }
 
-// ShowCopyTimingDialog offers to scaffold an empty direction with another
-// direction's keyframe times. sources must be non-empty; its first entry
-// is preselected (direction 0 whenever it has keyframes). onCopy runs only
-// if the artist chooses to copy.
-func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, facings int, onCopy func(src int)) {
+// ShowCopyTimingDialog offers to scaffold an empty direction from another
+// direction: either its keyframe times alone (the default) or its
+// keyframes whole, poses and cells included. sources must be non-empty;
+// its first entry is preselected (direction 0 whenever it has keyframes).
+// onCopy runs only if the artist chooses to copy; full reports which mode.
+func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, facings int, onCopy func(src int, full bool)) {
 	options := make([]string, len(sources))
 	for i, k := range sources {
 		options[i] = editor.FacingName(k, facings)
@@ -431,28 +432,35 @@ func ShowCopyTimingDialog(win fyne.Window, target int, sources []int, facings in
 	srcSelect := widget.NewSelect(options, nil)
 	srcSelect.SetSelected(options[0])
 
-	msg := widget.NewLabel(fmt.Sprintf("The %s direction has no keyframes yet. Copy the keyframe times "+
-		"from another direction as a starting point? Only the timing is copied: every "+
-		"copied keyframe starts at the origin on cell (0,0), ready for you to pose.", editor.FacingName(target, facings)))
+	const timesOnly, everything = "Keyframe times only", "Everything (poses and cells too)"
+	modeRadio := widget.NewRadioGroup([]string{timesOnly, everything}, nil)
+	modeRadio.Required = true
+	modeRadio.SetSelected(timesOnly)
+
+	msg := widget.NewLabel(fmt.Sprintf("The %s direction has no keyframes yet. Copy another "+
+		"direction as a starting point? Times only gives every copied keyframe the origin "+
+		"on cell (0,0), ready for you to pose; Everything duplicates the direction as-is.",
+		editor.FacingName(target, facings)))
 	msg.Wrapping = fyne.TextWrapWord
 
 	form := dialog.NewForm(
 		"Empty Direction",
-		"Copy Times", "Start Empty",
+		"Copy", "Start Empty",
 		[]*widget.FormItem{
 			{Text: "", Widget: msg},
 			{Text: "Copy from direction", Widget: srcSelect},
+			{Text: "Copy", Widget: modeRadio},
 		},
 		func(confirmed bool) {
 			if !confirmed || onCopy == nil {
 				return
 			}
 			if i := slices.Index(options, srcSelect.Selected); i >= 0 {
-				onCopy(sources[i])
+				onCopy(sources[i], modeRadio.Selected == everything)
 			}
 		},
 		win,
 	)
-	form.Resize(fyne.NewSize(440, 260))
+	form.Resize(fyne.NewSize(440, 320))
 	form.Show()
 }
