@@ -142,6 +142,8 @@ feedback after using the previous version:
      extent for the duration of a drag, driven from both drag sources —
      the canvas's own `Dragged`/`DragEnd`, and `SheetGridWidget`'s new
      `OnDragStart` plus the existing drop callback for palette drags.
+     (Superseded by entry 27: the canvas is now a panned view whose
+     origin never depends on the content, and `SetViewFrozen` is gone.)
 
 9. **Dragging a tile now creates a new part** (2026-09-24), from
    "it doesn't let me have multiple parts on the sheet simultaneously, I
@@ -600,6 +602,26 @@ feedback after using the previous version:
       The manifest saves on every change - it holds no poses, so it never
       joins the track's unsaved work or its undo history.
 
+27. **Canvas pan and zoom** (2026-10-04). Requested: middle mouse drag
+    should always move the canvas; wheel up zooms in (max 500%), wheel
+    down zooms out (min 10%).
+    - The canvas was sized to its content inside a scroll container, so
+      the wheel scrolled it and zoomed out art just sat in the top-left
+      corner with nothing to scroll. It is now a view: it fills its
+      panel, and the origin's position (`pan`) and `zoom` are the view's
+      own state. The scroll container stays, `ScrollNone`, purely to clip.
+    - Middle drag pans from anywhere, over the selected part too
+      (`MouseDown` records the button, since Fyne's `DragEvent` doesn't
+      carry it; any other press clears it). The wheel zooms about the
+      cursor by `wheelZoomStep` per notch, clamped to 0.1-5.0, and not
+      while a part is held. View > Zoom 800% became 500%.
+    - The view centres on `contentBounds` (origin, reference box, every
+      keyframe of the direction) on first layout, when a track opens, and
+      on the new View > Center View; a resize keeps the middle in the
+      middle. A zoom readout sits in the canvas's bottom-left corner.
+    - `viewBounds`, quantizing and `SetViewFrozen` (entry 8) are gone:
+      the origin only moves when the view does, so a drag can't shift it.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -664,24 +686,24 @@ feedback after using the previous version:
   - `canvas.go` — resolves every Part's transform at the current
     `ElapsedMs`, Z-sorts, draws Sheet parts as a cropped+pivoted cell
     around a full-span origin crosshair with the character-sized
-    reference box in its bottom-right quadrant. There is **no fixed
-    working area and no centering**: `viewBounds()` derives the extent
-    from the origin, the reference box and every keyframe of every part,
-    padded and quantized to 32px, and `MinSize` follows it — so art at
-    negative coordinates (a raised sword) simply grows the canvas.
-    Computing over *all* keyframes rather than the current frame is what
-    keeps scrubbing from resizing the canvas, and the quantization keeps
-    a drag from doing so continuously; either would shift the origin out
-    from under the cursor. Implements `Tappable` (click a part
+    reference box in its bottom-right quadrant. It is a **view onto
+    unbounded animation space** (entry 27): it fills its panel (a
+    `ScrollNone` scroll container in `app.go` only clips it), and the
+    origin's widget-local position (`pan`, = `originScreen()`) and `zoom`
+    (0.1-5.0) are its own state. Middle drag pans (`MouseDown` notes the
+    button, `Dragged` pans), the wheel zooms about the cursor
+    (`Scrolled`, `zoomAround`), and the view centres on `contentBounds()`
+    (origin, reference box, every keyframe of the direction) on first
+    layout, `SetProject` and `CenterView`; `layoutView` keeps the middle
+    in the middle on resize. Implements `Tappable` (click a part
     to select it, `OnPartTapped`) and `Draggable` (drag the *selected*
     part to move it, `OnPartDragStart/Dragged/DragEnd`; the drag keys the
     part at the playhead if it has no keyframe there, via
     `editor.EnsureKeyframe`). Both share
     `resolvedDraws()`/`hitTest()` so drawing and hit-testing can never
     disagree about where a part actually is. `LocalToAnimXY` converts a
-    canvas-local point into the animation's own X/Y space (now a direct
-    `local/zoom` scale — origin moved to the canvas's top-left corner
-    this round, no longer widget-center-relative).
+    canvas-local point into the animation's own X/Y space
+    (`(local - pan) / zoom`).
     **Rotation is stored and saved but not visually applied here** — Fyne
     has no simple rotated-image primitive, and the actual consumer of
     rotation is a future game-side (raylib) renderer, not this preview.
@@ -828,7 +850,7 @@ change handler is the trap — assign `OnChanged` *after* seeding a
   in `editor/`, `file/` and `ui/`.
 - Moving anything between `Track` and `Direction` is a wide change: the
   part/keyframe split is load-bearing in `canvas.go` (`resolvedDraws`,
-  `viewBounds`), `timeline.go` (`scrubArea.parts`), `properties.go`
+  `contentBounds`), `timeline.go` (`scrubArea.parts`), `properties.go`
   (`refreshPartList`) and every callback in `app.go` — most of which go
   through `Application.directionAndPart`.
 
@@ -863,10 +885,15 @@ add a second keyframe past a lone 0ms one), `EditableDurationMs` always
 leading the last keyframe, playback still looping over the *real*
 duration, new tracks having only direction 0, and `AddStandardDirections` adding just the missing facings.
 `pkg/ui/canvas_test.go` — canvas geometry, which is easy to break
-silently: the view always contains the origin and reference box, grows
-for negative coordinates, stays identical across a scrub, and
-`LocalToAnimXY` round-trips (so a dropped tile lands where it was
-released). `pkg/editor/keyframe_ops_test.go` — the exactly-on-a-middle-keyframe
+silently: the content the view centres on includes the origin, the
+reference box and negative/off-frame keyframes; centring and resizing
+keep the right point in the middle; the wheel zooms about the cursor
+within 10%-500%; and `LocalToAnimXY` round-trips (so a dropped tile
+lands where it was released). `canvas_select_test.go` also covers the
+middle drag panning even over the selected part, a stray middle press
+not sticking, and the wheel being ignored mid-drag;
+`pkg/app/canvas_view_test.go` checks the real layout opens centred and
+the wheel reaches the canvas through its clipping scroll container. `pkg/editor/keyframe_ops_test.go` — the exactly-on-a-middle-keyframe
 `ValueAt` regression; `MoveKeyframe` re-sorting with the moved keyframe's
 ID tracking it, and refusing occupied times; `DuplicateKeyframe`
 inserting, pasting onto an occupied time, and no-op onto its own time;

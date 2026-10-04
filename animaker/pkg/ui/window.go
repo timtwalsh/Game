@@ -54,6 +54,7 @@ func BuildMenuBar(
 	onToggleGrid func(),
 	onToggleOnion func(),
 	onZoom func(float32),
+	onCenterView func(),
 	onAbout func(),
 	onShortcuts func(),
 ) *fyne.MainMenu {
@@ -94,7 +95,9 @@ func BuildMenuBar(
 		fyne.NewMenuItem("Zoom 100%", func() { onZoom(1.0) }),
 		fyne.NewMenuItem("Zoom 200%", func() { onZoom(2.0) }),
 		fyne.NewMenuItem("Zoom 400%", func() { onZoom(4.0) }),
-		fyne.NewMenuItem("Zoom 800%", func() { onZoom(8.0) }),
+		fyne.NewMenuItem("Zoom 500%", func() { onZoom(5.0) }),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Center View", onCenterView),
 	)
 
 	helpMenu := fyne.NewMenu("Help",
@@ -122,6 +125,8 @@ var ShortcutHelp = [][2]string{
 	{"Ctrl+] / Ctrl+[", "Selected part forward / back in draw order"},
 	{"Ctrl+Shift+] / [", "Selected part to the front / back"},
 	{"Alt (while dragging)", "Place between whole pixels"},
+	{"Wheel (canvas)", "Zoom the canvas about the cursor, 10% to 500%"},
+	{"Middle-drag (canvas)", "Pan the canvas (View > Center View brings the art back)"},
 	{"Ctrl+wheel (timeline)", "Zoom the timeline"},
 	{"Ctrl+N / O / S", "New / Open / Save"},
 	{"Ctrl+Shift+S", "Save As"},
