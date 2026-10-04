@@ -1,0 +1,13 @@
+name = "baby"
+controller = "baby_controller"
+
+[animations]
+  [animations.dead]
+    anif = "baby_dead.anif"
+    mode = "hold"
+  [animations.jump]
+    anif = "baby_jump.anif"
+    mode = "once"
+  [animations.walk]
+    anif = "baby_walk.anif"
+    mode = "loop"

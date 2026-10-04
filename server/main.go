@@ -14,6 +14,7 @@ type Server struct {
 	clients    map[string]uint64
 	players    map[uint64]*shared.PlayerState
 	suspicions map[uint64]*SuspicionTracker
+	lastSeen   map[uint64]time.Time // when each player's last Move arrived
 	mutex      sync.Mutex
 	validator  MovementValidator
 	nextID     uint64
@@ -24,6 +25,7 @@ func NewServer() *Server {
 		clients:    make(map[string]uint64),
 		players:    make(map[uint64]*shared.PlayerState),
 		suspicions: make(map[uint64]*SuspicionTracker),
+		lastSeen:   make(map[uint64]time.Time),
 		validator:  NewMovementValidator(shared.NewCollisionLayer(100, 100)),
 		nextID:     1,
 	}
@@ -54,6 +56,32 @@ func (s *Server) ListenAndServe(addrStr string) error {
 	}
 }
 
+// playerTimeout is how long a player can go without sending a Move before
+// the server drops them. Clients send every NetworkTickRate (50ms), so this
+// is ~100 missed sends: a closed client, not a lost packet. There's no
+// explicit "leave" message, so this is how everyone else finds out.
+const playerTimeout = 5 * time.Second
+
+// dropIdle forgets every player not heard from in playerTimeout. They
+// stop appearing in the broadcast, which is how clients learn they left.
+// Call with s.mutex held.
+func (s *Server) dropIdle(now time.Time) {
+	for id, seen := range s.lastSeen {
+		if now.Sub(seen) <= playerTimeout {
+			continue
+		}
+		delete(s.players, id)
+		delete(s.suspicions, id)
+		delete(s.lastSeen, id)
+		for addr, cid := range s.clients {
+			if cid == id {
+				delete(s.clients, addr)
+			}
+		}
+		fmt.Printf("Player %d timed out\n", id)
+	}
+}
+
 func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	addrStr := addr.String()
 
@@ -79,7 +107,7 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 			player = &shared.PlayerState{
 				PlayerID:  playerID,
 				Position:  shared.Vec2{X: 0, Y: 0},
-				Animation: 0,
+				Animation: moveMsg.Animation,
 				Direction: moveMsg.Direction,
 				ColorR:    moveMsg.ColorR,
 				ColorG:    moveMsg.ColorG,
@@ -90,6 +118,7 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 			fmt.Printf("New player connected: %d from %s\n", playerID, addrStr)
 		}
 
+		s.lastSeen[playerID] = time.Now()
 		tracker := s.suspicions[playerID]
 
 		// Validate
@@ -106,6 +135,8 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 		if tracker.GetStatus() != SuspicionStatusAutoBan {
 			player.Position = moveMsg.Position
 			player.Direction = moveMsg.Direction
+			player.Animation = moveMsg.Animation
+			player.AnimSeq = moveMsg.AnimSeq
 			player.ColorR = moveMsg.ColorR
 			player.ColorG = moveMsg.ColorG
 			player.ColorB = moveMsg.ColorB
@@ -118,6 +149,7 @@ func (s *Server) tickLoop() {
 	ticker := time.NewTicker(time.Duration(shared.NetworkTickRate) * time.Millisecond)
 	for range ticker.C {
 		s.mutex.Lock()
+		s.dropIdle(time.Now())
 		var states []shared.PlayerState
 		for _, p := range s.players {
 			states = append(states, *p)

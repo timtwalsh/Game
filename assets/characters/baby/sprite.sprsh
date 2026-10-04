@@ -1,0 +1,6 @@
+name = "sprite"
+file_path = "sprite.png"
+cell_w = 160
+cell_h = 180
+pivot_x = 80.0
+pivot_y = 90.0
