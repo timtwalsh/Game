@@ -207,7 +207,7 @@ func (a *Application) directionMenu(key int) *fyne.Menu {
 	del := fyne.NewMenuItem("Delete "+name+"...", func() { a.confirmDeleteDirection(key) })
 	del.Disabled = len(track.Directions) <= 1
 
-	// How many directions: 1, 4, 8 or 16.
+	// How many directions: 1, 2, 4, 8 or 16.
 	var countItems []*fyne.MenuItem
 	for _, c := range editor.DirectionCounts {
 		c := c
@@ -368,9 +368,9 @@ func (a *Application) refreshDirectionSelect() {
 }
 
 // offerTimingCopy prompts, on switching to a direction with no keyframes,
-// to copy another direction's keyframe times into it. Only times: the
-// poses are the artist's to author per facing, so the editor never copies
-// them between directions on its own.
+// to copy another direction into it: its keyframe times by default, or its
+// keyframes whole if the artist picks that. Poses are the artist's to
+// author per facing, so they're only copied when explicitly chosen.
 func (a *Application) offerTimingCopy(key int) {
 	track := a.Project.CurrentTrack
 	dir := track.Directions[key]
@@ -381,9 +381,13 @@ func (a *Application) offerTimingCopy(key int) {
 	if len(sources) == 0 {
 		return
 	}
-	ui.ShowCopyTimingDialog(a.Window, key, sources, track.Facings(), func(src int) {
+	ui.ShowCopyTimingDialog(a.Window, key, sources, track.Facings(), func(src int, full bool) {
 		a.Project.RecordUndo()
-		editor.CopyKeyframeTimes(track, src, key)
+		if full {
+			editor.CopyKeyframes(track, src, key)
+		} else {
+			editor.CopyKeyframeTimes(track, src, key)
+		}
 		a.Project.Dirty = true
 		a.refreshAll()
 	})

@@ -8,15 +8,16 @@ import (
 
 // How a track's direction keys map to compass facings.
 //
-// A track declares how many directions it has - 1, 4, 8 or 16 - and its
-// keys are 0..N-1 clockwise from north, so key k faces k*360/N degrees.
-// 8 is exactly the game's own 8-way facing (client/prediction.go: 0=N,
-// 1=NE, 2=E ... 7=NW), and 4 is exactly what tracks always used (0=up,
-// 1=right, 2=down, 3=left), so neither needs translating. Every key is
-// named from the 16-point compass.
+// A track declares how many directions it has - 1, 2, 4, 8 or 16 - and
+// its keys are 0..N-1 clockwise from north, so key k faces k*360/N
+// degrees. The exception is 2, for side-scrolling: its keys are 0=E and
+// 1=W, not N and S. 8 is exactly the game's own 8-way facing
+// (client/prediction.go: 0=N, 1=NE, 2=E ... 7=NW), and 4 is exactly what
+// tracks always used (0=up, 1=right, 2=down, 3=left), so neither needs
+// translating. Every key is named from the 16-point compass.
 
 // DirectionCounts are the direction counts a track can have.
-var DirectionCounts = []int{1, 4, 8, 16}
+var DirectionCounts = []int{1, 2, 4, 8, 16}
 
 // CompassNames are the 16 compass points, clockwise from north.
 var CompassNames = [16]string{
@@ -56,22 +57,39 @@ func (t *Track) Facings() int {
 	return 16
 }
 
-// FacingName names key k of an n-direction track by compass point: N, E,
-// S, W for 4; N, NE, E ... for 8; all 16 points for 16. A 1-direction
+// FacingName names key k of an n-direction track by compass point: E, W
+// for 2; N, E, S, W for 4; N, NE, E ... for 8; all 16 points for 16. A
+// 1-direction
 // track's one direction is "All". A key outside 0..n-1 (only possible in
 // a hand-edited file) is "Dir k".
 func FacingName(k, n int) string {
-	switch {
-	case n == 1 && k == 0:
+	if n == 1 && k == 0 {
 		return "All"
-	case n <= 0 || n > 16 || 16%n != 0 || k < 0 || k >= n:
-		return fmt.Sprintf("Dir %d", k)
 	}
-	return CompassNames[k*16/n]
+	if p, ok := compassPoint(k, n); ok {
+		return CompassNames[p]
+	}
+	return fmt.Sprintf("Dir %d", k)
+}
+
+// compassPoint is which of the 16 compass points (an index into
+// CompassNames) key k of an n-direction track faces; false if n isn't a
+// count that divides the compass or k is outside 0..n-1.
+func compassPoint(k, n int) (int, bool) {
+	switch {
+	case n <= 0 || n > 16 || 16%n != 0 || k < 0 || k >= n:
+		return 0, false
+	case n == 2: // side-scrolling: E, W
+		return 4 + 8*k, true
+	}
+	return k * 16 / n, true
 }
 
 // facingAngle is the compass bearing of key k of an n-direction track.
 func facingAngle(k, n int) float64 {
+	if p, ok := compassPoint(k, n); ok {
+		return float64(p) * 360 / 16
+	}
 	if n <= 0 {
 		return 0
 	}
@@ -116,23 +134,32 @@ func MapDirection(k, fromN, toN int) int {
 // its facing. Record an undo step first.
 func (p *Project) SetDirectionCount(n int, dropPosed bool) (lost []int, err error) {
 	if !ValidDirectionCount(n) {
-		return nil, fmt.Errorf("a track can have 1, 4, 8 or 16 directions, not %d", n)
+		return nil, fmt.Errorf("a track can have 1, 2, 4, 8 or 16 directions, not %d", n)
 	}
 	t := p.CurrentTrack
 	from := t.Facings()
 	if n == from && t.DirectionCount == n {
 		return nil, nil
 	}
+	// The key in n that faces each compass point, for the points n has.
+	keyAt := map[int]int{}
+	for j := 0; j < n; j++ {
+		if p, ok := compassPoint(j, n); ok {
+			keyAt[p] = j
+		}
+	}
 	moved := map[int]*Direction{}
 	for _, k := range t.SortedDirectionKeys() {
 		d := t.Directions[k]
-		if k >= from || (k*n)%from != 0 { // no key faces this way in n
+		p, ok := compassPoint(k, from)
+		j, faces := keyAt[p]
+		if !ok || !faces { // no key faces this way in n
 			if d.TotalKeyframes() > 0 {
 				lost = append(lost, k)
 			}
 			continue
 		}
-		moved[k*n/from] = d
+		moved[j] = d
 	}
 	if len(lost) > 0 && !dropPosed {
 		return lost, nil

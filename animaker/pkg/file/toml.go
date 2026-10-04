@@ -38,8 +38,8 @@ type tomlTrackMeta struct {
 	Version      string `toml:"version"`
 	RefBoxWidth  int    `toml:"ref_box_width"`
 	RefBoxHeight int    `toml:"ref_box_height"`
-	// Directions is how many directions the track has (1, 4, 8, 16); keys
-	// are 0..N-1 clockwise from north. Absent in older files, which are
+	// Directions is how many directions the track has (1, 2, 4, 8, 16); keys
+	// are 0..N-1 clockwise from north, except 2 is 0=E, 1=W. Absent in older files, which are
 	// judged by their keys (Track.Facings).
 	Directions int `toml:"directions,omitempty"`
 }
@@ -324,7 +324,7 @@ func LoadTrack(path string) (*editor.Track, []SheetRef, error) {
 	// of its directions - otherwise the key's facing is a guess.
 	if n := tt.Metadata.Directions; n != 0 {
 		if !editor.ValidDirectionCount(n) {
-			return nil, nil, fmt.Errorf("directions = %d: a track has 1, 4, 8 or 16 directions", n)
+			return nil, nil, fmt.Errorf("directions = %d: a track has 1, 2, 4, 8 or 16 directions", n)
 		}
 		for k := range t.Directions {
 			if k < 0 || k >= n {

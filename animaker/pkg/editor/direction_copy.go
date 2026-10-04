@@ -47,3 +47,30 @@ func CopyKeyframeTimes(t *Track, srcKey, dstKey int) int {
 	}
 	return added
 }
+
+// CopyKeyframes copies every keyframe of every part from src into dst
+// whole — time, position, rotation, cell and nested direction — for when
+// the artist opts to start a facing as a duplicate of another rather than
+// from timing alone. As with CopyKeyframeTimes, times dst already has a
+// keyframe at are left alone and only parts still in the rig are copied.
+// Returns how many keyframes were added.
+func CopyKeyframes(t *Track, srcKey, dstKey int) int {
+	src, dst := t.Directions[srcKey], t.Directions[dstKey]
+	if src == nil || dst == nil || srcKey == dstKey {
+		return 0
+	}
+	added := 0
+	for _, part := range t.Parts {
+		for _, kf := range src.KeyframesFor(part.ID) {
+			before := len(dst.KeyframesFor(part.ID))
+			nk := AddKeyframe(dst, part.ID, kf.TimeMs)
+			if len(dst.KeyframesFor(part.ID)) > before {
+				idx := nk.Index
+				*nk = *kf
+				nk.Index = idx
+				added++
+			}
+		}
+	}
+	return added
+}

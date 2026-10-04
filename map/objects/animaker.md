@@ -547,9 +547,11 @@ feedback after using the previous version:
     - **Direction keys now match the game.** The spec had claimed
       0=up/1=right/2=down/3=left was the game's convention; the game is
       8-way (`client/prediction.go`: 0=N, 1=NE, 2=E ... 7=NW). A track
-      now declares `DirectionCount` N = 1, 4, 8 or 16 (saved as
+      now declares `DirectionCount` N = 1, 2, 4, 8 or 16 (saved as
       `directions` in `[metadata]`), keys `0..N-1` clockwise from north
-      (`editor/facings.go`). 8 is the game's numbering; 4 is what files
+      (`editor/facings.go`), except 2 is a side-scroller's 0=E, 1=W
+      (added 2026-10-04; `compassPoint` is the one place keys meet
+      bearings). 8 is the game's numbering; 4 is what files
       always used, so a file without the count is read by its keys
       (`Track.Facings`). Names come from the 16-point compass
       (`FacingName`: N, NNE, NE, ENE ...; "All" for a 1-direction track).
@@ -564,7 +566,7 @@ feedback after using the previous version:
       *Change to* lists the track's other directions by name (posed ones
       disabled) and moves the keyframes unchanged
       (`Project.ChangeDirectionKey`). *Delete* asks only if posed, never
-      the last one (`Project.DeleteDirection`). *Directions > 1/4/8/16*
+      the last one (`Project.DeleteDirection`). *Directions > 1/2/4/8/16*
       (`Project.SetDirectionCount`) keeps each direction's facing (4 to
       8 moves E from key 1 to 2) and asks before dropping posed ones the
       new count can't face. *Add Direction* offers missing ones by name;

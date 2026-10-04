@@ -51,3 +51,31 @@ func TestTimingSourcesSkipsEmptyAndTarget(t *testing.T) {
 		t.Errorf("TimingSources(0) = %v, want [3]", got)
 	}
 }
+
+func TestCopyKeyframesCopiesWholePose(t *testing.T) {
+	track := NewTrack("t")
+	AddStandardDirections(track)
+	body := AddPart(track, NewSheetPart("body", "", "sheet"))
+	up := track.Directions[0]
+	for _, ms := range []uint32{0, 200} {
+		kf := AddKeyframe(up, body.ID, ms)
+		kf.X, kf.Y, kf.Z, kf.RotationDeg, kf.Row, kf.Col, kf.Direction = 10, 20, 3, 45, 1, 2, 1
+	}
+
+	if got := CopyKeyframes(track, 0, 2); got != 2 {
+		t.Errorf("added %d keyframes, want 2", got)
+	}
+	kfs := track.Directions[2].KeyframesFor(body.ID)
+	if len(kfs) != 2 {
+		t.Fatalf("body has %d keyframes in direction 2, want 2", len(kfs))
+	}
+	for i, kf := range kfs {
+		want := *up.KeyframesFor(body.ID)[i]
+		if *kf != want {
+			t.Errorf("keyframe %d = %+v, want %+v", i, *kf, want)
+		}
+		if kf == up.KeyframesFor(body.ID)[i] {
+			t.Errorf("keyframe %d shares its pointer with the source", i)
+		}
+	}
+}
