@@ -113,7 +113,7 @@ func TestDropPreviewShowsWhereATileWouldLand(t *testing.T) {
 		return nil
 	}
 
-	cw.SetDropPreview(sheet, 0, 1, 10, 20)
+	cw.SetDropPreview(sheet, 0, 1, 10, 20, 0)
 	img := preview()
 	if img == nil {
 		t.Fatal("no preview drawn")
