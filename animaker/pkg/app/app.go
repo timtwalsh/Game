@@ -30,9 +30,9 @@ type Application struct {
 	// at startup (reportPreviousCrash).
 	PreviousCrashLog string
 
-	canvasWidget *ui.CanvasWidget
-	timeline     *ui.TimelineWidget
-	properties   *ui.PropertiesPanel
+	canvasWidget  *ui.CanvasWidget
+	timeline      *ui.TimelineWidget
+	properties    *ui.PropertiesPanel
 	directionTabs *ui.DirectionTabs
 	// The .anichar open beside the track, if any (character.go), and the
 	// left column it shares with the palette.
@@ -42,7 +42,7 @@ type Application struct {
 	characterView  fyne.CanvasObject
 	palettePanel   fyne.CanvasObject
 	leftColumn     *fyne.Container
-	titleLabel   *widget.Label
+	titleLabel     *widget.Label
 
 	playbackTicker *time.Ticker
 	playbackDone   chan bool

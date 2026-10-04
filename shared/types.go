@@ -67,11 +67,11 @@ func (c *CollisionLayer) IsBlocked(x, y uint32) bool {
 }
 
 type VisualLayer struct {
-	Name   string `json:"name"`
-	ZMin   uint32 `json:"z_min"`
-	ZMax   uint32 `json:"z_max"`
-	Width  uint32 `json:"width"`
-	Height uint32 `json:"height"`
+	Name   string   `json:"name"`
+	ZMin   uint32   `json:"z_min"`
+	ZMax   uint32   `json:"z_max"`
+	Width  uint32   `json:"width"`
+	Height uint32   `json:"height"`
 	Tiles  []uint16 `json:"tiles"`
 }
 
@@ -94,13 +94,13 @@ type GameObject struct {
 }
 
 type Level struct {
-	Name          string         `json:"name"`
-	Width         uint32         `json:"width"`
-	Height        uint32         `json:"height"`
-	Tileset       string         `json:"tileset"`
-	Collision     CollisionLayer `json:"collision"`
-	VisualLayers  []VisualLayer  `json:"visual_layers"`
-	Objects       []GameObject   `json:"objects"`
+	Name         string         `json:"name"`
+	Width        uint32         `json:"width"`
+	Height       uint32         `json:"height"`
+	Tileset      string         `json:"tileset"`
+	Collision    CollisionLayer `json:"collision"`
+	VisualLayers []VisualLayer  `json:"visual_layers"`
+	Objects      []GameObject   `json:"objects"`
 }
 
 const (

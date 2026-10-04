@@ -49,14 +49,14 @@ func (s *Server) ListenAndServe(addrStr string) error {
 			fmt.Println("Error reading UDP:", err)
 			continue
 		}
-		
+
 		s.handlePacket(buf[:n], clientAddr)
 	}
 }
 
 func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 	addrStr := addr.String()
-	
+
 	var wrapper shared.MessageWrapper
 	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return
@@ -67,13 +67,13 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 		if err := json.Unmarshal(wrapper.Payload, &moveMsg); err != nil {
 			return
 		}
-		
+
 		s.mutex.Lock()
-		
+
 		// MVP Shortcut: Trust client's random PlayerID
 		playerID := moveMsg.PlayerID
 		s.clients[addrStr] = playerID
-		
+
 		player, exists := s.players[playerID]
 		if !exists {
 			player = &shared.PlayerState{
@@ -89,9 +89,9 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 			s.suspicions[playerID] = NewSuspicionTracker(playerID)
 			fmt.Printf("New player connected: %d from %s\n", playerID, addrStr)
 		}
-		
+
 		tracker := s.suspicions[playerID]
-		
+
 		// Validate
 		issues := s.validator.ValidateMovement(player.Position, moveMsg.Position, moveMsg.TimeMs, MovementTypeWalk)
 		for _, issue := range issues {
@@ -102,7 +102,7 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 				tracker.AddEvent(shared.SuspicionEvent{Type: shared.SuspicionEventWallPhase, TileX: issue.TileX, TileY: issue.TileY})
 			}
 		}
-		
+
 		if tracker.GetStatus() != SuspicionStatusAutoBan {
 			player.Position = moveMsg.Position
 			player.Direction = moveMsg.Direction
@@ -122,12 +122,12 @@ func (s *Server) tickLoop() {
 		for _, p := range s.players {
 			states = append(states, *p)
 		}
-		
+
 		msg := shared.ServerPlayerStatesMsg{States: states}
 		payload, _ := json.Marshal(msg)
 		wrapper := shared.MessageWrapper{Type: "PlayerStates", Payload: payload}
 		out, _ := json.Marshal(wrapper)
-		
+
 		for addrStr := range s.clients {
 			addr, _ := net.ResolveUDPAddr("udp", addrStr)
 			s.conn.WriteToUDP(out, addr)

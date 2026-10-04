@@ -16,11 +16,19 @@ type PlayerInput struct {
 
 func (pi *PlayerInput) GetMovementVector() shared.Vec2 {
 	var x, y float32
-	if pi.Up { y -= 1.0 }
-	if pi.Down { y += 1.0 }
-	if pi.Left { x -= 1.0 }
-	if pi.Right { x += 1.0 }
-	
+	if pi.Up {
+		y -= 1.0
+	}
+	if pi.Down {
+		y += 1.0
+	}
+	if pi.Left {
+		x -= 1.0
+	}
+	if pi.Right {
+		x += 1.0
+	}
+
 	if x != 0 && y != 0 {
 		len := float32(math.Sqrt(float64(x*x + y*y)))
 		x /= len
@@ -32,24 +40,32 @@ func (pi *PlayerInput) GetMovementVector() shared.Vec2 {
 // GetDirection returns a 0-7 value (0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW)
 func (pi *PlayerInput) GetDirection() uint8 {
 	var dx, dy float64
-	if pi.Up { dy -= 1.0 }
-	if pi.Down { dy += 1.0 }
-	if pi.Left { dx -= 1.0 }
-	if pi.Right { dx += 1.0 }
-	
+	if pi.Up {
+		dy -= 1.0
+	}
+	if pi.Down {
+		dy += 1.0
+	}
+	if pi.Left {
+		dx -= 1.0
+	}
+	if pi.Right {
+		dx += 1.0
+	}
+
 	if dx == 0 && dy == 0 {
 		return 255 // No movement
 	}
-	
+
 	angle := math.Atan2(dy, dx)
 	// Convert -PI..PI to 0..2PI
 	if angle < 0 {
 		angle += 2 * math.Pi
 	}
-	
+
 	// Add Pi/8 to rotate the sectors so that East is centered at 0
-	octant := int(math.Floor((angle + math.Pi/8) / (math.Pi / 4))) % 8
-	
+	octant := int(math.Floor((angle+math.Pi/8)/(math.Pi/4))) % 8
+
 	// Map to our 0=N clockwise standard
 	// Math: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE
 	// We want 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
@@ -81,17 +97,17 @@ func (pc *PlayerController) UpdatePrediction(input *PlayerInput, deltaMs uint32)
 	pc.LastPosition = pc.PredictedPosition
 	deltaSec := float32(deltaMs) / 1000.0
 	movement := input.GetMovementVector()
-	
+
 	speed := shared.MaxSpeed * shared.TileSize
 	distance := speed * deltaSec
-	
+
 	if movement.X != 0 || movement.Y != 0 {
 		pc.Velocity.X = movement.X * speed
 		pc.Velocity.Y = movement.Y * speed
-		
+
 		newX := pc.PredictedPosition.X + movement.X*distance
 		newY := pc.PredictedPosition.Y + movement.Y*distance
-		
+
 		if pc.CanMoveTo(newX, newY) {
 			pc.PredictedPosition.X = newX
 			pc.PredictedPosition.Y = newY
@@ -103,7 +119,7 @@ func (pc *PlayerController) UpdatePrediction(input *PlayerInput, deltaMs uint32)
 				pc.PredictedPosition.Y = newY
 			}
 		}
-		
+
 		dir := input.GetDirection()
 		if dir != 255 {
 			pc.Direction = dir
@@ -193,7 +209,7 @@ func (pi *PlayerInterpolation) Update(deltaMs uint32) {
 		pi.CurrentPosition = pi.TargetPosition
 	} else {
 		t := float32(pi.InterpolationTime) / float32(pi.InterpolationDuration)
-		pi.CurrentPosition.X = pi.LastPosition.X + (pi.TargetPosition.X - pi.LastPosition.X)*t
-		pi.CurrentPosition.Y = pi.LastPosition.Y + (pi.TargetPosition.Y - pi.LastPosition.Y)*t
+		pi.CurrentPosition.X = pi.LastPosition.X + (pi.TargetPosition.X-pi.LastPosition.X)*t
+		pi.CurrentPosition.Y = pi.LastPosition.Y + (pi.TargetPosition.Y-pi.LastPosition.Y)*t
 	}
 }

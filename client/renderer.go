@@ -23,13 +23,13 @@ func CalculateShadowLength(z uint32) float32 {
 
 func SortObjectsForRendering(objects []shared.GameObject) []RenderableObject {
 	var renderables []RenderableObject
-	
+
 	for _, obj := range objects {
 		if obj.Z >= 11 && obj.Z <= 50 {
 			shadowLength := CalculateShadowLength(obj.Z)
 			zContribution := int32(obj.Z) / 2
 			sortKey := int32(obj.Y) - zContribution
-			
+
 			renderables = append(renderables, RenderableObject{
 				Obj:          obj,
 				ShadowLength: shadowLength,
@@ -37,10 +37,10 @@ func SortObjectsForRendering(objects []shared.GameObject) []RenderableObject {
 			})
 		}
 	}
-	
+
 	sort.Slice(renderables, func(i, j int) bool {
 		return renderables[i].SortKey < renderables[j].SortKey
 	})
-	
+
 	return renderables
 }
