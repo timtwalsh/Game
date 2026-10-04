@@ -51,62 +51,74 @@ func (mv *MovementValidator) CheckWallPhase(from, to shared.Vec2, timeMs uint32,
 	if mType == MovementTypeTeleport || mType == MovementTypeKnockedBack {
 		return WallPhaseResult{Clean: true}
 	}
-	
+
 	// Basic line drawing approximation
 	fromX := int(from.X / shared.TileSize)
 	fromY := int(from.Y / shared.TileSize)
 	toX := int(to.X / shared.TileSize)
 	toY := int(to.Y / shared.TileSize)
-	
+
 	dx := math.Abs(float64(toX - fromX))
 	dy := math.Abs(float64(toY - fromY))
 	sx, sy := -1, -1
-	if toX > fromX { sx = 1 }
-	if toY > fromY { sy = 1 }
-	
+	if toX > fromX {
+		sx = 1
+	}
+	if toY > fromY {
+		sy = 1
+	}
+
 	err := dx - dy
 	x, y := fromX, fromY
-	
+
 	for {
 		if x >= 0 && y >= 0 {
 			if mv.Collision.IsBlocked(uint32(x), uint32(y)) {
 				// Simple cheat check: could they go around?
 				directDist := from.DistanceTo(to)
-				
+
 				// Estimate detour
 				rightDist := directDist + shared.TileSize // Simplified
 				timeSec := float32(timeMs) / 1000.0
 				speedForDetour := rightDist / timeSec
-				
+
 				if speedForDetour > shared.MaxSpeed*shared.TileSize {
 					return WallPhaseResult{Clean: false, Cheated: true, TileX: uint32(x), TileY: uint32(y)}
 				}
 				return WallPhaseResult{Clean: false, Cheated: false, TileX: uint32(x), TileY: uint32(y)}
 			}
 		}
-		
-		if x == toX && y == toY { break }
+
+		if x == toX && y == toY {
+			break
+		}
 		e2 := 2 * err
-		if e2 > -dy { err -= dy; x += sx }
-		if e2 < dx { err += dx; y += sy }
+		if e2 > -dy {
+			err -= dy
+			x += sx
+		}
+		if e2 < dx {
+			err += dx
+			y += sy
+		}
 	}
-	
+
 	return WallPhaseResult{Clean: true}
 }
 
 func (mv *MovementValidator) ValidateMovement(from, to shared.Vec2, timeMs uint32, mType MovementType) []MovementValidation {
 	var issues []MovementValidation
-	
+
 	speed := mv.CheckSpeed(from, to, timeMs)
 	if speed > shared.MaxSpeed*shared.TileSize*shared.SpeedTolerance {
 		issues = append(issues, MovementValidation{TooFast: true, Speed: speed})
 	}
-	
+
 	wp := mv.CheckWallPhase(from, to, timeMs, mType)
 	if wp.Cheated || !wp.Clean {
 		issues = append(issues, MovementValidation{WallPhase: true, TileX: wp.TileX, TileY: wp.TileY})
 	}
-	
+
 	return issues
 }
 

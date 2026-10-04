@@ -26,10 +26,13 @@ the named card for the full waterfall.
   is still handled as non-fatal (warns and skips launching it) so the
   script keeps working for the game if animaker's build breaks again for
   an unrelated reason.
-- `.github/workflows/test.yml` has two jobs, both green as of 2026-09-17:
-  `game` runs `go vet`/`go build ./...`/`go test ./... -v` for the root
-  module; `animaker` runs `go build ./...` for that module. Both need
-  native Linux packages installed first because `raylib-go` (game) and
+- `.github/workflows/test.yml` has three jobs, all green as of 2026-10-04:
+  `checks` runs `gofmt -l` over both modules and `go mod tidy -diff` in
+  each (no cgo, so no packages); `game` runs `go vet`/`go build ./...`/
+  `go test -race ./... -v` for the root module; `animaker` runs
+  `go vet`/`go build ./...`/`go test ./... -v` for that module on
+  Windows and Linux (`-race` on Linux only). The Linux build jobs need
+  native packages installed first because `raylib-go` (game) and
   Fyne (animaker) use cgo — `gcc libgl1-mesa-dev xorg-dev`, plus
   `libwayland-dev libxkbcommon-dev` for `raylib-go` specifically (it
   fails at `go vet` without them: `fatal error:

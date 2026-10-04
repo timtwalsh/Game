@@ -134,7 +134,7 @@ func TestTapTileKeysSelectedPartAtPlayheadKeepingPose(t *testing.T) {
 	p := NewProject("test")
 	dir := p.ActiveDirection()
 	idx, first := p.DropTile("sprite", 0, 0, 10, 20)
-	first.X, first.Y = 10, 20 // dragged off the origin
+	first.X, first.Y = 10, 20                                  // dragged off the origin
 	p.Selection.PartIndex, p.Selection.KeyframeIndex = idx, -1 // as clicking the part leaves it
 	p.Scrub(200)
 

@@ -169,8 +169,11 @@ func (c *Character) sortAnimations() {
 // the index of the occurrence to move, or -1 to add another.
 func (a *CharAnim) SetMarker(name string, at int, timeMs uint32) error {
 	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("a marker needs a name")
+	}
 	if err := ValidAnimName(name); err != nil {
-		return fmt.Errorf("marker %w", err)
+		return err
 	}
 	if at >= 0 && at < len(a.Markers) {
 		a.Markers[at] = Marker{name, timeMs}
@@ -179,6 +182,13 @@ func (a *CharAnim) SetMarker(name string, at int, timeMs uint32) error {
 	}
 	a.SortMarkers()
 	return nil
+}
+
+// MarkerIndex is where m is in Markers, or -1. Markers re-sort as they're
+// edited, so a row that showed m finds it again by value rather than
+// trusting the index it was drawn at.
+func (a *CharAnim) MarkerIndex(m Marker) int {
+	return slices.Index(a.Markers, m)
 }
 
 // RemoveMarker deletes the marker at index i.

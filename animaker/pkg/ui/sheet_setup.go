@@ -176,10 +176,10 @@ func (r *sheetSetupRenderer) rebuild() {
 	r.objects = append(r.objects, p.hover.rect)
 }
 
-func (r *sheetSetupRenderer) Layout(fyne.Size)            {}
-func (r *sheetSetupRenderer) MinSize() fyne.Size          { return r.p.MinSize() }
+func (r *sheetSetupRenderer) Layout(fyne.Size)             {}
+func (r *sheetSetupRenderer) MinSize() fyne.Size           { return r.p.MinSize() }
 func (r *sheetSetupRenderer) Objects() []fyne.CanvasObject { return r.objects }
-func (r *sheetSetupRenderer) Destroy()                    {}
+func (r *sheetSetupRenderer) Destroy()                     {}
 func (r *sheetSetupRenderer) Refresh() {
 	r.rebuild()
 	canvas.Refresh(r.p)

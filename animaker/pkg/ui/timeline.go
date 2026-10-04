@@ -21,9 +21,9 @@ const (
 	// still lands on 0 (timeForX clamps it).
 	timelineStartPadPx = 14
 	// timelineZeroX is where time 0 sits in the scroll area's content.
-	timelineZeroX = timelineLabelWidth + timelineStartPadPx
-	timelineMarkerSize  = 10
-	timelineTailPx      = 40 // empty space after the last tick, so the end isn't flush
+	timelineZeroX      = timelineLabelWidth + timelineStartPadPx
+	timelineMarkerSize = 10
+	timelineTailPx     = 40 // empty space after the last tick, so the end isn't flush
 
 	// Zoom is ms of animation time per screen pixel: smaller is zoomed in.
 	timelineDefaultMsPerPx = 2
@@ -400,11 +400,11 @@ func newRowDeleteButton(onTap func()) *rowDeleteButton {
 	return b
 }
 
-func (b *rowDeleteButton) Tapped(*fyne.PointEvent)         { b.onTap() }
-func (b *rowDeleteButton) MouseIn(*desktop.MouseEvent)     { setFill(b.bg, ColorDeleteHover) }
-func (b *rowDeleteButton) MouseMoved(*desktop.MouseEvent)  {}
-func (b *rowDeleteButton) MouseOut()                       { setFill(b.bg, color.Transparent) }
-func (b *rowDeleteButton) Cursor() desktop.Cursor          { return desktop.PointerCursor }
+func (b *rowDeleteButton) Tapped(*fyne.PointEvent)        { b.onTap() }
+func (b *rowDeleteButton) MouseIn(*desktop.MouseEvent)    { setFill(b.bg, ColorDeleteHover) }
+func (b *rowDeleteButton) MouseMoved(*desktop.MouseEvent) {}
+func (b *rowDeleteButton) MouseOut()                      { setFill(b.bg, color.Transparent) }
+func (b *rowDeleteButton) Cursor() desktop.Cursor         { return desktop.PointerCursor }
 
 func (b *rowDeleteButton) CreateRenderer() fyne.WidgetRenderer {
 	return &rowDeleteRenderer{b: b}
@@ -491,7 +491,7 @@ func (r *partLabelRenderer) Refresh()           { r.label.text.Refresh() }
 func (r *partLabelRenderer) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{r.label.bg, r.label.text}
 }
-func (r *partLabelRenderer) Destroy()                     {}
+func (r *partLabelRenderer) Destroy() {}
 
 // -- Renderer --
 

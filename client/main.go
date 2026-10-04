@@ -31,7 +31,7 @@ func NewClient(serverAddrStr string) *Client {
 	if err != nil {
 		panic(err)
 	}
-	
+
 	addr, _ := net.ResolveUDPAddr("udp", "0.0.0.0:0")
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
@@ -131,7 +131,7 @@ func main() {
 
 		client.mutex.Lock()
 		client.controller.UpdatePrediction(&input, deltaMs)
-		
+
 		for _, rp := range client.remotePlayers {
 			rp.Update(deltaMs)
 		}
@@ -142,7 +142,7 @@ func main() {
 			client.SendMove(client.controller.PredictedPosition, uint32(sinceLastSend))
 			client.lastNetworkSend = now
 		}
-		
+
 		// Rendering
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.RayWhite)
@@ -153,28 +153,28 @@ func main() {
 			centerX := int32(rp.CurrentPosition.X + 8)
 			centerY := int32(rp.CurrentPosition.Y + 8)
 			rl.DrawCircle(centerX, centerY, 8.0, color)
-			
+
 			// Draw direction indicator line
 			angle := getAngleForDirection(rp.Direction)
 			endX := int32(float64(centerX) + math.Cos(angle)*8.0)
 			endY := int32(float64(centerY) + math.Sin(angle)*8.0)
 			rl.DrawLineEx(rl.NewVector2(float32(centerX), float32(centerY)), rl.NewVector2(float32(endX), float32(endY)), 2.0, rl.Black)
 		}
-		
+
 		// Draw local player
 		localColor := rl.NewColor(client.colorR, client.colorG, client.colorB, 255)
 		localCenterX := int32(client.controller.PredictedPosition.X + 8)
 		localCenterY := int32(client.controller.PredictedPosition.Y + 8)
 		rl.DrawCircle(localCenterX, localCenterY, 8.0, localColor)
-		
+
 		// Draw direction indicator line
 		localAngle := getAngleForDirection(client.controller.Direction)
 		localEndX := int32(float64(localCenterX) + math.Cos(localAngle)*8.0)
 		localEndY := int32(float64(localCenterY) + math.Sin(localAngle)*8.0)
 		rl.DrawLineEx(rl.NewVector2(float32(localCenterX), float32(localCenterY)), rl.NewVector2(float32(localEndX), float32(localEndY)), 2.0, rl.Black)
-		
+
 		rl.DrawText("Use WASD to move", 10, 10, 20, rl.DarkGray)
-		
+
 		rl.EndDrawing()
 		client.mutex.Unlock()
 	}

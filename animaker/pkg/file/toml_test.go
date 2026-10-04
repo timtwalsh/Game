@@ -1,10 +1,10 @@
 package file
 
 import (
-	"strings"
-	"os"
 	"animaker/pkg/editor"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 

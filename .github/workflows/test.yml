@@ -5,10 +5,52 @@ on:
     branches: [main]
   pull_request:
 
+# The workflow only reads the repo; nothing here needs a write token.
+permissions:
+  contents: read
+
+# A new push to a PR supersedes its in-flight run. Runs on main are never
+# cancelled, so every merge keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  checks:
+    name: gofmt & go mod tidy (both modules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            go.sum
+            animaker/go.sum
+
+      # Neither step compiles anything, so no cgo packages are needed.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l client server shared animaker)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt -w:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go mod tidy (game)
+        run: go mod tidy -diff
+
+      - name: go mod tidy (animaker)
+        working-directory: animaker
+        run: go mod tidy -diff
+
   game:
     name: build & test (game module)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -26,8 +68,10 @@ jobs:
       - name: Build (client + server)
         run: go build ./...
 
+      # -race: the client and server share state between their network and
+      # tick goroutines under a mutex.
       - name: Test
-        run: go test ./... -v
+        run: go test -race ./... -v
 
   animaker:
     name: build & test (animaker module, ${{ matrix.os }})
@@ -38,6 +82,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -60,5 +105,14 @@ jobs:
         run: go build ./...
 
       - name: Test
+        if: runner.os == 'Windows'
         working-directory: animaker
         run: go test ./... -v
+
+      # The race detector runs on Linux only, where it's cheap. It's the
+      # check for the editor's playback goroutine touching project state
+      # outside fyne.Do (the cause of an earlier crash).
+      - name: Test (with race detector)
+        if: runner.os == 'Linux'
+        working-directory: animaker
+        run: go test -race ./... -v
