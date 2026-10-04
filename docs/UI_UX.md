@@ -38,6 +38,7 @@ in the list wins.
 | 4 | **Every player can play** | Accessibility is a default, not a menu we add at the end. Text size, contrast, remapping, colour-independence and reduced motion are in from the first widget. |
 | 5 | **The player owns their screen** | In an MMO, people spend hundreds of hours looking at the UI. Layout, scale, what's shown and what's hidden should be the player's choice. Defaults should still be good enough that most people never change them. |
 | 6 | **Cheap enough to forget about** | The UI must never be why the game drops a frame. It has a hard per-frame budget (see 1.2) and the same zero-allocation steady-state discipline the render loop already follows (`// Reused every frame, so drawing allocates nothing once warmed up.` in `client/main.go`). |
+| 7 | **No display is the display** | Resolution, aspect ratio, refresh rate, pixel density and window mode are all unknowns, and they change at runtime when a player resizes, drags to another monitor or docks a handheld. None of today's values (800×600, 144 FPS) are final, and nothing in this doc may depend on them. Every number tied to a display is a parameter, and every target is stated relative to the display or checked across a matrix of displays (2.2). |
 
 ### 1.2 Measurable targets
 
@@ -48,10 +49,10 @@ to verify it.
 
 | Target | Value | Source / rationale | How we verify |
 |---|---|---|---|
-| Minimum body text at 1080p, default UI scale | **18px** cap-to-descender. We will never ship anything below **14px**. | Xbox XAG 101 / handheld guidance: never under 14px at 1080p, 18px recommended. XAG asks for 28px on TV-distance play, so the UI-scale slider must reach that. | Font metrics check in a unit test against the theme tokens |
+| Minimum body text, default UI scale | **≥ 1.67% of the short screen side** (18px at 1080p), never below **1.3%** (14px at 1080p). On high-DPI or small physical screens (handhelds, laptops) it must also be at least the OS-reported DPI-equivalent of 18 logical px. | Xbox XAG 101 / handheld guidance quotes 14px minimum and 18px recommended *at 1080p*. We store that as a ratio so it holds on any resolution. XAG asks for 28px at 1080p on TV-distance play, so the UI-scale slider must reach that. | Unit test over the display matrix (2.2): computed body-text height ≥ the floor at every entry |
 | Text contrast | **≥ 4.5:1** for body text, **≥ 3:1** for large text (≥ 24px) and essential UI graphics such as bar fills and icons against their backgrounds | WCAG 2.x AA, also referenced by XAG 102 | Contrast check of every theme token pair, run in CI |
 | Colour independence | **0** pieces of information conveyed by colour alone | Game Accessibility Guidelines (GAG), basic level | Review checklist. Every colour-coded item must also have a shape, icon or text difference. |
-| UI scale range | **50%–200%**, in 10% steps | Pillar 5. Covers 720p laptops through 4K TVs. | Screenshot pass at 50/100/200% at 720p, 1080p and 4K. Nothing clipped or overlapping. |
+| UI scale range | **50%–200%** of the automatic scale, in 10% steps | Pillars 5 and 7. The automatic scale already adapts to resolution and DPI. The slider is personal preference on top. | Layout test at 50/100/200% across every display-matrix entry (2.2): nothing clipped, overlapping or off-screen |
 | Remappable controls | **100%** of actions, including UI navigation | GAG basic. Remapping is one of the four most-complained-about accessibility gaps. | Each input action has a binding entry in the settings file |
 | Gamepad and keyboard parity | Every screen is fully usable with keyboard only *and* with gamepad only. A mouse is optional everywhere. | FFXIV and Diablo IV-style console parity. Also helps motor accessibility. | Manual test script per screen |
 | Flashing | **≤ 3 flashes per second**. No large saturated-red flashes. | Photosensitive-epilepsy guidance (Harding test, WCAG 2.3.1) | Review checklist, plus "reduce flashing" in options |
@@ -73,13 +74,17 @@ keeps flow, and 10s keeps attention.
 
 #### Performance budget
 
-The current target is 144 FPS (`rl.SetTargetFPS(144)`), which gives a 6.9ms
-frame.
+The refresh rate isn't decided, and players will run anything from a 30 FPS
+cap to an uncapped high-refresh panel. Today's `rl.SetTargetFPS(144)` is a
+placeholder, so budgets are a **share of the frame**. They are sized against
+the **highest refresh rate we support**: **240Hz, a 4.17ms frame**, which is
+the strictest case.
 
 | Target | Value |
 |---|---|
-| UI update + draw, typical scene (HUD, 20 nameplates, 10 combat texts, chat) | **≤ 0.7ms** CPU (~10% of the frame) |
-| UI worst case (100 nameplates, 40 combat texts, open inventory) | **≤ 1.5ms** CPU |
+| UI update + draw, typical scene (HUD, 20 nameplates, 10 combat texts, chat) | **≤ 10% of the frame**: ≤ 0.4ms at 240Hz on the reference machine |
+| UI worst case (100 nameplates, 40 combat texts, open inventory) | **≤ 25% of the frame**: ≤ 1.0ms at 240Hz |
+| Frame-rate independence | Every UI animation, timer and lifetime is driven by elapsed time, never by frame count. Behaviour is identical at 30, 60, 144, 240 FPS and uncapped (2.2). |
 | Heap allocations per frame in steady state | **0** (`testing.AllocsPerRun` on update/layout paths) |
 | Draw calls for the UI pass | All UI art in **one atlas texture**, plus one texture per font size. Target **< 10** texture switches per frame. |
 
@@ -244,15 +249,83 @@ The core rules:
   without raylib opening a window. This is the same split
   `client/prediction.go` already has from drawing.
 
-### 2.2 Rendering model and resolution
+### 2.2 Display independence and rendering model
+
+The current display settings are placeholders: a fixed 800×600 window, 144
+FPS, no camera. This section designs for **any** display and keeps the
+choices that are still open as named, swappable parameters, not constants.
+
+#### 2.2.1 Display parameters
+
+All display-dependent values live in one `Display` struct. It is read from
+settings and refreshed from raylib on resize, monitor change or DPI change:
+
+| Parameter | Source | Notes |
+|---|---|---|
+| Framebuffer size (px) | `rl.GetRenderWidth/Height` | This, not the window size, is what we lay out against. The two differ on high-DPI displays. |
+| DPI scale | `rl.GetWindowScaleDPI`, with the `FlagWindowHighdpi` window flag | Feeds the automatic UI scale |
+| Aspect ratio | derived | Expect anything from 4:3 to 32:9. Portrait is out of scope unless we ship on phones. |
+| Refresh rate / FPS cap | `rl.GetMonitorRefreshRate`, plus settings | Player options: VSync, match monitor, a fixed cap, or uncapped |
+| Window mode | settings | Windowed (resizable), borderless fullscreen, exclusive fullscreen |
+| Monitor | `rl.GetCurrentMonitor` | Moving between monitors re-reads everything above |
+| Safe area | settings | Edge margin, 0–10%, for TV overscan and rounded or notched handheld screens |
+
+A change to any of these fires a `DisplayChanged` event. Layout recomputes
+next frame, fonts re-rasterise if their pixel size changed (2.4), and render
+textures are recreated. **Nothing caches a screen size across frames.**
+
+#### 2.2.2 Decisions that are still open
+
+These are game-design or art-direction calls, not UI calls. The UI system
+must work whatever is chosen, and changing any of them later must be a
+settings or constants change, not a rewrite.
+
+| Open decision | Options | What the UI system does regardless |
+|---|---|---|
+| **World pixel scale**: how many screen pixels one art pixel covers | (a) a fixed internal resolution such as 480×270 or 384×216, scaled up; (b) a fixed number of tiles visible vertically, internal size derived from the window; (c) a player-chosen zoom | The world camera exposes `WorldToScreen`/`ScreenToWorld`. World-space UI only ever uses those, never a hard-coded scale. |
+| **How much world each player sees** | Fixed vertical view with width that grows with aspect ratio, capped (e.g. at 21:9) so ultrawide isn't a scouting advantage; or a fixed view area | Gameplay fairness in a PvP MMO, so the server may need to know the cap. The UI just respects the camera rectangle it's given. |
+| **Non-integer scale factors** (1366×768, 1280×800 handhelds, 1440p against a 270-line base) | Integer scaling with letterbox bars; fit with a sharp-bilinear (pixel-art AA) shader; or nearest-neighbour fit (shimmering, not recommended) | Expose all three as a Graphics option and default to integer with letterbox. The letterbox bars are part of the screen-space UI area, so HUD elements can sit in them. |
+| **Supported refresh rates** | 30–240Hz, plus uncapped | Every animation is time-based (1.2). The perf budget is defined at 240Hz. |
+| **Minimum supported window size** | e.g. 1024×576 logical | Below this, the automatic UI scale stops shrinking. Windows become scrollable rather than unreadable. |
+
+#### 2.2.3 Display test matrix
+
+Layout tests (pure Go, no window) and the later screenshot harness (UI-5.6)
+run over this matrix. Each entry pairs a framebuffer size with a DPI scale:
+
+| Entry | Why it's included |
+|---|---|
+| 1280×720 @1.0 | Small windowed / low-end laptop |
+| 1280×800 @1.0 | Steam Deck-class handheld, 16:10, non-integer scale |
+| 1366×768 @1.0 | Common budget laptop, awkward ratio |
+| 1920×1080 @1.0 | The most common desktop |
+| 1920×1200 @1.0 | 16:10 desktop |
+| 2560×1440 @1.0 | Common high-refresh desktop; not an integer multiple of 1080 |
+| 2560×1600 @2.0 | High-DPI laptop (e.g. a MacBook), framebuffer ≠ window |
+| 3440×1440 @1.0 | 21:9 ultrawide |
+| 5120×1440 @1.0 | 32:9 super-ultrawide |
+| 3840×2160 @1.5 | 4K with OS scaling |
+| 1024×768 @1.0 | 4:3, the narrowest supported shape |
+
+**Prerequisite in the frame loop (not UI code).** `client/main.go` computes
+`deltaMs` as `uint32(now.Sub(lastFrameTime).Milliseconds())`, then sets
+`lastFrameTime = now`, so the fractional millisecond is thrown away every
+frame. At 144 FPS a 6.94ms frame counts as 6ms, so movement, interpolation
+and animation run about 13% slow. Above ~1000 FPS uncapped, the delta is 0 and
+nothing moves. Simulation speed currently depends on refresh rate. This must
+be fixed before any refresh-rate decision means anything: accumulate the
+remainder, or carry the delta as a duration or float. It's tracked as task
+UI-0.0.
+
+#### 2.2.4 Render passes
 
 - **World pass:**
-  - Render the world to a `rl.RenderTexture2D` at a fixed **internal
-    resolution**. Proposal: 480×270, which scales by an exact ×4 to 1080p and
-    ×8 to 4K.
-  - Blit it to the window with integer scaling, letterboxing any remainder.
+  - Render the world to a `rl.RenderTexture2D` sized by the world-pixel-scale
+    decision (2.2.2). Recreate it on `DisplayChanged`.
+  - Present it to the framebuffer using the selected scaling mode (integer +
+    letterbox by default).
   - This replaces today's fixed 800×600 window drawn 1:1.
-  - It needs a camera, which doesn't exist yet. That is task UI-0.2.
+  - It needs a camera, which doesn't exist yet. That is task UI-0.2b.
 - **World-space UI pass (spatial):**
   - Nameplates, speech bubbles, combat text and interaction prompts.
   - Positions come from world coordinates projected through the camera, but
@@ -261,8 +334,19 @@ The core rules:
     does with `footY`.
 - **Screen-space UI pass (non-diegetic):**
   - HUD, unit frames, windows, dialogue and menus.
-  - Laid out in a **reference resolution of 1920×1080 units**, then multiplied
-    by `uiScale = (displayHeight / 1080) × playerUIScale`.
+  - Laid out in **reference units**: the short side of the screen is defined
+    as 1080 units. The automatic scale is
+    `autoScale = max(shortSidePx / 1080, dpiScale × minLogicalScale)`, and the
+    final scale is `uiScale = autoScale × playerUIScale`.
+    - Using the short side, rather than always height, keeps the maths valid
+      for every aspect ratio.
+    - The DPI term stops text shrinking below a readable physical size on
+      small, dense screens.
+    - 1080 is just a unit definition, not an assumed display.
+  - Wide screens get extra horizontal room, not bigger UI. A **HUD width
+    cap** option (default: off; presets 16:9 and 21:9) keeps the HUD inside a
+    centred region on ultrawides, so players don't have to turn their head to
+    see their health bar.
   - Pixel-art panels snap to integer multiples where possible. Text uses
     pre-rasterised font sizes (see 2.4).
 - **Overlay pass:**
@@ -689,7 +773,7 @@ The tabs are listed in order of likely use. Each setting:
 | **Accessibility** (first-class tab) | UI scale; text size (body, chat, dialogue independently); font choice (pixel / legible / dyslexia-friendly); high contrast theme; colour-vision mode (protan / deutan / tritan token tables); reduce motion; reduce flashing; screen shake 0–100%; typewriter speed / instant; hold-vs-toggle for held actions; dialogue auto-advance off/on + speed |
 | **Interface** | HUD element toggles; nameplate categories, range, cap; combat text categories & scale; chat fade, timestamps, profanity filter, bubble on/off; numeric bar text format; HUD layout (later: edit mode, saved layouts) |
 | **Controls** | Rebind every action (keyboard + pad separately); conflict detection with swap prompt; mouse/stick sensitivity; prompt glyph style (auto / keyboard / Xbox / PlayStation) |
-| **Graphics** | Window mode, resolution, vsync, FPS cap (currently hard-coded 144), internal pixel scale (integer / fit) |
+| **Graphics** | Window mode (windowed / borderless / exclusive); monitor; resolution (exclusive only); VSync; FPS cap (match monitor / 30 / 60 / 120 / 144 / 240 / uncapped; today's hard-coded 144 goes away); world scaling mode (integer + letterbox / sharp fit / nearest fit); world zoom, if decision 2.2.2 allows it; HUD width cap; safe-area margin |
 | **Audio** | Master, music, effects, UI, voice/text-blips — separate sliders (GAG basic) |
 | **Gameplay** | Auto-target, click-to-move (future), confirm-before-destroy, social (whisper/invite from friends only) |
 
@@ -716,7 +800,7 @@ The tabs are listed in order of likely use. Each setting:
   These live in a `Layout` struct that is pure data, which is what makes a
   later WoW Edit Mode / FFXIV HUD Layout-style editor a UI over a TOML file
   rather than a refactor.
-- **Safe margin** default: 2.5% of each screen edge. Adjustable 0–10% for TVs
+- **Safe margin** default: 2.5% of each screen edge, plus any letterbox area. Adjustable 0–10% for TVs
   with overscan.
 - Containers: `HStack`, `VStack`, `Grid`, `Scroll`, `NineSlicePanel`. No
   absolute pixel positions inside containers.
@@ -776,11 +860,13 @@ is the suggested build order.
 
 | ID | Task | Size | Blocked by | Done when |
 |---|---|---|---|---|
+| UI-0.0 | Fix frame-delta truncation in `client/main.go` (lost sub-ms remainder makes simulation speed refresh-rate-dependent). Not UI code, but everything time-based in the UI depends on it. | S | — | A test steps prediction and animation with 1000 frames at 1/30, 1/144, 1/240 and 1/1000 s and gets the same result (within float tolerance) at each rate. |
 | UI-0.1 | Create `client/ui` package skeleton: `UI` root with `Update(snapshot, actions)` and `Draw()`, wired into `client/main.go`'s loop as steps 4–6 of the frame diagram | S | — | Main loop calls `ui.Update`/`ui.Draw`. The old `DrawText` line moves into it. `go test ./...` green. |
-| UI-0.2 | Camera + render-texture world pass at a fixed internal resolution with integer scaling; resizable window | M | — | Window resizes without stretching pixels. World draws via `RenderTexture2D`. A world→screen projection function exists and is unit-tested. |
-| UI-0.3 | UI scale model: reference 1920×1080 units → screen, × player scale; safe margins | S | 0.1 | Elements land at the same relative spot at 720p, 1080p and 1440p (unit-tested). |
+| UI-0.2a | `Display` struct + `DisplayChanged` event: framebuffer size, DPI, refresh, monitor, window mode read from raylib; resizable, high-DPI-aware window; FPS cap from settings instead of hard-coded 144 | M | 0.0 | Resizing, moving monitors and toggling fullscreen at runtime all fire one event and relayout correctly. Nothing caches screen size. |
+| UI-0.2b | Camera + render-texture world pass, with world pixel scale and scaling mode as parameters (integer + letterbox / sharp fit / nearest); `WorldToScreen` / `ScreenToWorld` | M | 0.2a | All three scaling modes work across the display matrix (2.2.3). Projection is unit-tested in both directions. Changing the scale decision is a one-line constant or settings change. |
+| UI-0.3 | UI scale model: short-side reference units, DPI floor, player scale, safe area, letterbox-aware, optional HUD width cap | S | 0.2a | A layout test over the full display matrix × {50, 100, 200}% shows no clipping, overlap or off-screen elements, and body text ≥ the 1.2 floor. |
 | UI-0.4 | Theme tokens (`theme.go`) + WCAG contrast test over all token pairs | S | — | No raw colour literals in `client/ui` outside `theme.go` (grep check in test). Contrast test passes. |
-| UI-0.5 | Font loading: pixel + legible fonts, `LoadFontEx` per used size, re-rasterise on scale change, Latin-1 + Latin Ext-A glyphs | M | 0.3 | Text renders crisp at 50/100/200% scale. Missing glyph shows tofu. Fonts unloaded on exit. |
+| UI-0.5 | Font loading: pixel + legible fonts, `LoadFontEx` per used size, re-rasterise on `DisplayChanged` / scale change, Latin-1 + Latin Ext-A glyphs | M | 0.3 | Text renders crisp at 50/100/200% scale. Missing glyph shows tofu. Fonts unloaded on exit. |
 | UI-0.6 | `TextMeasurer` interface + wrapping, ellipsis, simple rich-text spans (colour, icon) | M | 0.5 | Table tests for wrap/ellipsis with a fake measurer, including multi-byte UTF-8. |
 | UI-0.7 | Layout primitives: anchors/pivots/offset, H/VStack, Grid, 9-slice panel; UI atlas + TOML slice manifest | M | 0.3 | A test panel composes from stacks and renders a 9-slice frame from the atlas. Layout tests pass. |
 | UI-0.8 | Input actions + bindings: replace hard-coded `rl.IsKeyDown` with actions; keyboard + gamepad; UI-first routing; text-box capture | M | 0.1 | Movement still works. With a text box focused, WASD types and doesn't move. Bindings come from a table. |
@@ -801,7 +887,7 @@ together.
 | UI-1.1 | Controls/help overlay replacing the hard-coded instruction text; shows *current* bindings and device glyphs | S | 0.8, 0.14 | Rebinding a key changes the help text. Pad users see pad glyphs. |
 | UI-1.2 | System menu (`Esc`) with non-pausing behaviour, Resume / Options / Quit, `Esc`-closes-topmost rule | M | 0.14 | Fully operable by keyboard and by pad. World keeps updating behind it. |
 | UI-1.3 | Options screen v1: Accessibility (UI scale, text sizes, reduce motion/flashing), Graphics (window, vsync, FPS cap), Audio sliders, Controls rebinding with conflict detection | L | 0.11, 0.14, 1.2 | All settings apply live and persist across restart. Conflicting binding prompts a swap. |
-| UI-1.4 | Player names: add a name to `PlayerState` / join flow, then nameplates v1 (name, faction shape, range fade, overlap avoidance, category toggles) | M | [net] name field; 0.2, 0.7 | 20 players in a clump stay readable. Declutter unit tests pass. Plates don't jitter against interpolated sprites. |
+| UI-1.4 | Player names: add a name to `PlayerState` / join flow, then nameplates v1 (name, faction shape, range fade, overlap avoidance, category toggles) | M | [net] name field; 0.2b, 0.7 | 20 players in a clump stay readable. Declutter unit tests pass. Plates don't jitter against interpolated sprites. |
 | UI-1.5 | Chat: wire `ClientChatMsg`/`ServerChatMsg` end-to-end (server relay + rate limit), chat window with Say/System tabs, input box, history | L | [net] chat; 0.8, 0.14 | Two clients can chat. Rate-limit feedback is shown. Input capture is correct. |
 | UI-1.6 | Speech bubbles for Say (lifetime formula, 2-per-speaker cap, wrap/ellipsis, muted hidden) | M | 1.4, 1.5 | Bubbles track speakers, stack and expire per spec. Unit tests cover lifetime and stacking. |
 | UI-1.7 | Mute + report from name/bubble context menu (wire `ClientReportPlayerMsg`) | M | 1.5; [net] report | A muted player's chat and bubbles are hidden for the session. Reports reach the server log. |
@@ -849,7 +935,7 @@ Keyboard-only and pad-only play-through of every Phase 1 screen.
 | UI-4.1 | Shared tabbed game-menu frame (tab switching with Q/E and LB/RB, remembers tab/scroll) | P2 | M | 0.14 |
 | UI-4.2 | Inventory grid (drag-drop, pad-friendly move mode, tooltips, compare) | P2 | L | 4.1; [game] items |
 | UI-4.3 | Character/equipment screen | P2 | M | 4.1; [game] items/stats |
-| UI-4.4 | Minimap + full map (zone name, player marker, party markers) | P2 | L | 0.2; [game] levels (`ClientLoadLevelMsg`) |
+| UI-4.4 | Minimap + full map (zone name, player marker, party markers) | P2 | L | 0.2b; [game] levels (`ClientLoadLevelMsg`) |
 | UI-4.5 | Quest log | P2 | M | 4.1; [game] quests |
 | UI-4.6 | Social: friends, ignore list, party invite flow | P3 | L | 1.5, 1.7 |
 | UI-4.7 | Pre-game: title/login, character select/create, loading screen with tips and cancel | P2 | L | [net] auth (designed, not built) |
@@ -871,7 +957,7 @@ Keyboard-only and pad-only play-through of every Phase 1 screen.
 ### 3.8 Priority summary
 
 ```
-NOW        P0  Foundations ───────────────► UI-0.1 … 0.14   (no gameplay deps)
+NOW        P0  Foundations ───────────────► UI-0.0 … 0.14   (no gameplay deps)
 NEXT       P1  Social MVP  ───────────────► UI-1.1 … 1.10   (needs: names, chat, report wiring)
 WHEN READY P2  Combat UI   ◄── combat system                UI-2.x
            P2  Narrative   ◄── interact + dialogue protocol UI-3.x
@@ -881,12 +967,13 @@ LATER      P3  Customisation & advanced a11y                UI-5.x
 
 **Recommended first slice** (about 2 weeks solo):
 
-- UI-0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.10
+- UI-0.0, 0.1, 0.2a, 0.2b, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.10
 - then UI-1.1 + UI-1.2
 
 That replaces the hard-coded text and key checks with the real foundations.
-After it, the game has crisp, scalable text, remappable input, a camera and
-an `Esc` menu. Every later item builds on that slice without rework.
+After it, the game has frame-rate-independent timing, a window that
+adapts to any resolution, aspect ratio and DPI, crisp scalable text,
+remappable input, a camera and an `Esc` menu. Every later item builds on that slice without rework.
 
 **Biggest risks to watch:**
 
@@ -897,7 +984,10 @@ an `Esc` menu. Every later item builds on that slice without rework.
    text and dialogue.
 3. **UI frame-time creep as nameplates and combat text grow.** Mitigated by
    fixed pools, caps, the `F3` budget overlay and benchmark tests.
-4. **Protocol work blocking UI.** Many P1/P2 items are blocked on `[net]`
+4. **Locking in a display assumption by accident.** The display settings are
+   placeholders. Mitigated by pillar 7: the `Display` struct, the open
+   decisions table in 2.2.2, and the display-matrix tests that run in CI.
+5. **Protocol work blocking UI.** Many P1/P2 items are blocked on `[net]`
    wiring, not UI effort. Schedule the protocol tasks (names, chat,
    interact/report) alongside Phase 0 so they're ready when Phase 1 starts.
 
