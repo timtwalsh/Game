@@ -12,6 +12,7 @@ type PlayerInput struct {
 	Right    bool
 	Attack   bool
 	Interact bool
+	Jump     bool // pressed this frame (not held)
 }
 
 func (pi *PlayerInput) GetMovementVector() shared.Vec2 {
@@ -146,6 +147,8 @@ type PlayerInterpolation struct {
 	InterpolationTime     uint32
 	InterpolationDuration uint32
 	Direction             uint8
+	Animation             uint8
+	AnimSeq               uint8
 	ColorR                uint8
 	ColorG                uint8
 	ColorB                uint8
@@ -193,6 +196,8 @@ func (pi *PlayerInterpolation) ServerUpdate(state shared.PlayerState) {
 	pi.InterpolationTime = 0
 	pi.InterpolationDuration = elapsed
 	pi.Direction = state.Direction
+	pi.Animation = state.Animation
+	pi.AnimSeq = state.AnimSeq
 	pi.ColorR = state.ColorR
 	pi.ColorG = state.ColorG
 	pi.ColorB = state.ColorB

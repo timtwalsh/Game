@@ -13,10 +13,25 @@ type ClientMoveMsg struct {
 	Position  Vec2   `json:"position"`
 	TimeMs    uint32 `json:"time_ms"`
 	Direction uint8  `json:"direction"`
+	Animation uint8  `json:"animation"` // AnimIdle/AnimWalk/AnimJump: presentation only, relayed as-is
+	AnimSeq   uint8  `json:"anim_seq"`  // bumped each time a one-shot animation (jump) starts
 	ColorR    uint8  `json:"color_r"`
 	ColorG    uint8  `json:"color_g"`
 	ColorB    uint8  `json:"color_b"`
 }
+
+// Character animation states carried in ClientMoveMsg.Animation and
+// PlayerState.Animation. They name what the player is doing, not which
+// .anif plays - each client's character controller maps them to its
+// .anichar's animations. Purely visual: the server relays them and never
+// reads gameplay from them. AnimSeq rides along so a second jump straight
+// after the first still restarts it on other clients, though Animation
+// never changed.
+const (
+	AnimIdle uint8 = 0
+	AnimWalk uint8 = 1
+	AnimJump uint8 = 2
+)
 
 type ClientAttackMsg struct {
 	Direction uint8 `json:"direction"`
@@ -50,6 +65,7 @@ type PlayerState struct {
 	PlayerID  uint64 `json:"player_id"`
 	Position  Vec2   `json:"position"`
 	Animation uint8  `json:"animation"`
+	AnimSeq   uint8  `json:"anim_seq"`
 	Direction uint8  `json:"direction"`
 	ColorR    uint8  `json:"color_r"`
 	ColorG    uint8  `json:"color_g"`

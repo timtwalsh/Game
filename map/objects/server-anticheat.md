@@ -42,6 +42,12 @@ instead of a hard allow/deny per packet.
   client address every `shared.NetworkTickRate` ms (currently 50ms),
   unconditionally (no interest management / area-of-interest filtering
   yet). `server/main.go:117-137`.
+- `dropIdle` (2026-10-05), run at the top of each tick, forgets a player
+  with no `Move` for `playerTimeout` (5s): their state, suspicion tracker
+  and client address. That's the only way a player leaves. **It also
+  throws away their suspicion score**, so going quiet for 5s resets it -
+  no worse than today's trust-the-client player ID, but it matters once
+  IDs are real accounts. `server/main_test.go`.
 
 ## Connected to
 
