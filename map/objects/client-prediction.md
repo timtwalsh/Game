@@ -76,6 +76,41 @@ instead of truncated ms.
   self and a `map[uint64]*PlayerInterpolation` for everyone else;
   `receiveLoop` demuxes incoming `ServerPlayerStatesMsg` into corrections
   vs. remote interpolation updates. `client/main.go:56-93`.
+- **Character animation (2026-10-04/05).** `client/anim` is the runtime
+  for animaker assets, raylib-free. `Library` loads `.anichar` → `.anif`
+  (and the `.anif`s they nest) → `.sprsh` once and shares tracks/sheets by
+  path; a missing sheet or nested file is a `Library.Problems` entry (the
+  client prints them), not an error, as in the editor. `Instance` is
+  per-player playback (`Play`/`Restart`/`SetFacing`/`SetProp`/`Seek`/
+  `Advance`/`Finished`/`AppendSprites`/`AppendCrossedMarkers`). It
+  matches the editor: X/Y/Z/rotation lerp, Row/Col/direction step; the
+  game's 8-way facing maps to the track's directions (diagonals →
+  sideways), and an unposed direction plays the first posed one. Nested
+  parts play on the instance's own clock (looping at their own length),
+  pick direction by inherit/static/per-keyframe, take props by
+  passthrough/static bindings (or an `.anif`-valued prop swaps the nested
+  track), stay in their part's Z slot, and are offset and turned by their
+  part. All of that is resolved into a per-instance node tree when the
+  animation or props change; direction lookup is two array reads off
+  tables built at load, keyframes are binary-searched. A frame allocates
+  nothing (`TestFrameDoesNotAllocate`, `TestNestedFrameDoesNotAllocate`;
+  `BenchmarkFrame` ~80ns for the baby).
+  `client/character.go` `CharacterAnimator` is the engine-owned state
+  machine: the `animStates` table maps each `shared.Anim*` state to an
+  animation (idle stands in as walk frame 0 when there's no "idle"; jump
+  is a one-shot). Adding a state = constant + table row + its trigger in
+  `nextLocalState`. Local players `Step`; remote ones `Apply` the relayed
+  `Animation`/`AnimSeq`.
+  `client/sprites.go` loads sheet textures and draws a frame. How a
+  character sits in the world (`lookDef`: `.anichar` path, scale, origin
+  offset from the collision box centre) is engine-side data, not in
+  animaker's formats; every player uses `playerLook` (the baby).
+- **Frame loop & leaving (2026-10-05).** `main` updates prediction,
+  interpolation and animation under `Client.mutex`, snapshots what to draw,
+  and unlocks before drawing, so `receiveLoop` isn't blocked by rendering.
+  `remoteAnims` is main-goroutine-only for that reason. `applyPlayerStates`
+  drops any remote player missing from a broadcast (the server's list is
+  complete, and it times players out - see server-anticheat.md).
 - `RenderableObject` / `SortObjectsForRendering` in `client/renderer.go` —
   Z-based draw-order and shadow-length calc for world objects
   (`shared.GameObject`), independent of players.
@@ -116,7 +151,8 @@ simulation in fixed 60Hz steps inside it. No other consumer.
 
 ## See
 
-`client/prediction.go`, `client/main.go`, `client/renderer.go`
+`client/prediction.go`, `client/main.go`, `client/renderer.go`,
+`client/character.go`, `client/sprites.go`, `client/anim/`
 
 Tests: `client/prediction_test.go` — covers `PlayerInput` direction/vector
 math, `PlayerController` movement + wall-stopping + server correction,
@@ -125,6 +161,12 @@ tiles), `RenderPosition` blending, the send-interval tick math,
 `PlayerInterpolation` easing, and (as regression coverage for the jitter
 fix above) that a late update adapts `InterpolationDuration` upward
 instead of re-snapping to a fixed window, and that a near-zero gap
-clamps to `interpolationDurationMin`. `client/main.go` and
+clamps to `interpolationDurationMin`. `client/anim/anim_test.go`
+loads the real baby assets (modes, sheets, direction mapping, cell
+stepping, loop wrap, jump interpolation, prop fallback);
+`client/character_test.go` covers the state machine (one-shots run to
+the end, back-to-back jumps bump `AnimSeq`, remote restarts on seq,
+unknown states show idle).
+`client/main.go`, `client/sprites.go` and
 `client/renderer.go` are untested (network/render glue and depth-sort
 only, respectively).

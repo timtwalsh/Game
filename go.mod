@@ -2,7 +2,10 @@ module game
 
 go 1.25.0
 
-require github.com/gen2brain/raylib-go/raylib v0.60.1
+require (
+	github.com/BurntSushi/toml v1.5.0
+	github.com/gen2brain/raylib-go/raylib v0.60.1
+)
 
 require (
 	github.com/ebitengine/purego v0.10.0 // indirect

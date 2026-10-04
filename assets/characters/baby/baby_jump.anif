@@ -1,0 +1,248 @@
+[metadata]
+  name = "baby_jump"
+  version = "1.0"
+  ref_box_width = 48
+  ref_box_height = 64
+  directions = 4
+
+[[props]]
+  name = "sprite"
+  default = "sprite"
+
+[[parts]]
+  id = 1
+  name = "sprite_1"
+  kind = "sheet"
+  governing_prop = "sprite"
+  fixed_sheet = "sprite"
+  static_direction = 0
+
+[directions]
+  [directions.0]
+
+    [[directions.0.keyframes]]
+      part_id = 1
+      time_ms = 0
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 0
+      direction = 0
+
+    [[directions.0.keyframes]]
+      part_id = 1
+      time_ms = 140
+      x = 0.0
+      y = -10.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 0
+      col = 0
+      direction = 0
+
+    [[directions.0.keyframes]]
+      part_id = 1
+      time_ms = 396
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 0
+      direction = 0
+
+    [[directions.0.keyframes]]
+      part_id = 1
+      time_ms = 490
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 0
+      direction = 0
+
+    [[directions.0.keyframes]]
+      part_id = 1
+      time_ms = 800
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 0
+      direction = 0
+  [directions.1]
+
+    [[directions.1.keyframes]]
+      part_id = 1
+      time_ms = 0
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 1
+      direction = 0
+
+    [[directions.1.keyframes]]
+      part_id = 1
+      time_ms = 140
+      x = 0.0
+      y = -10.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 0
+      col = 1
+      direction = 0
+
+    [[directions.1.keyframes]]
+      part_id = 1
+      time_ms = 396
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 1
+      direction = 0
+
+    [[directions.1.keyframes]]
+      part_id = 1
+      time_ms = 490
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 1
+      direction = 0
+
+    [[directions.1.keyframes]]
+      part_id = 1
+      time_ms = 800
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 1
+      direction = 0
+  [directions.2]
+
+    [[directions.2.keyframes]]
+      part_id = 1
+      time_ms = 0
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 2
+      direction = 0
+
+    [[directions.2.keyframes]]
+      part_id = 1
+      time_ms = 140
+      x = 0.0
+      y = -10.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 0
+      col = 2
+      direction = 0
+
+    [[directions.2.keyframes]]
+      part_id = 1
+      time_ms = 396
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 2
+      direction = 0
+
+    [[directions.2.keyframes]]
+      part_id = 1
+      time_ms = 490
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 2
+      direction = 0
+
+    [[directions.2.keyframes]]
+      part_id = 1
+      time_ms = 800
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 2
+      direction = 0
+  [directions.3]
+
+    [[directions.3.keyframes]]
+      part_id = 1
+      time_ms = 0
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 3
+      direction = 0
+
+    [[directions.3.keyframes]]
+      part_id = 1
+      time_ms = 140
+      x = 0.0
+      y = -10.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 0
+      col = 3
+      direction = 0
+
+    [[directions.3.keyframes]]
+      part_id = 1
+      time_ms = 396
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 3
+      direction = 0
+
+    [[directions.3.keyframes]]
+      part_id = 1
+      time_ms = 490
+      x = 0.0
+      y = -69.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 2
+      col = 3
+      direction = 0
+
+    [[directions.3.keyframes]]
+      part_id = 1
+      time_ms = 800
+      x = 0.0
+      y = 0.0
+      z = 0.0
+      rotation_deg = 0.0
+      row = 1
+      col = 3
+      direction = 0
+
+[[sheets]]
+  name = "sprite"
+  path = "sprite.sprsh"

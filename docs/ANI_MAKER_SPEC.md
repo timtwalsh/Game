@@ -16,7 +16,7 @@
 4. [Sprite sheet templates](#sprite-sheet-templates)
 5. [Props](#props)
 6. [File formats](#file-formats)
-7. [Runtime design guidance (not built this pass)](#runtime-design-guidance-not-built-this-pass)
+7. [Runtime design guidance](#runtime-design-guidance)
 8. [Explicitly out of scope / deferred](#explicitly-out-of-scope--deferred)
 9. [Open questions — genuinely unresolved](#open-questions--genuinely-unresolved)
 10. [Editor implementation plan](#editor-implementation-plan)
@@ -331,9 +331,9 @@ pivot_y = 24.0
 
 ---
 
-## Runtime design guidance (not built this pass)
+## Runtime design guidance
 
-This session is editor + data model only — no game-side loader is being built now. But the data model above was shaped with these constraints in mind, and a future runtime implementation should hold to them:
+A first runtime exists (2026-10-04, nested parts and markers 2026-10-05): `client/anim` loads `.anichar`/`.anif`/`.sprsh` and plays sheet and nested parts as the editor previews them (plus rotation, which the editor stores but doesn't draw: a nested part's rotation turns its whole animation about the part's origin), reports markers crossed each frame, and `client/character.go` is the engine's state machine for players (idle/walk/jump). It follows the constraints below; the `AnimatedInstance` sketch is `anim.Instance`. The data model was shaped with these in mind, and the runtime should keep holding to them:
 
 - **Asset data (Track: parts/keyframes/sheet templates) is loaded once and shared by reference** across every on-screen instance using it. Never clone a Track per instance.
 - **Per-instance state is small and separate from asset data.** Sketch of the shape a character-controller-style consumer would want:

@@ -18,6 +18,8 @@ type ClientMoveMsg struct {
     Position  Vec2   `json:"position"`
     TimeMs    uint32 `json:"time_ms"`
     Direction uint8  `json:"direction"`
+    Animation uint8  `json:"animation"` // shared.AnimIdle / AnimWalk / AnimJump
+    AnimSeq   uint8  `json:"anim_seq"`  // bumped each time a one-shot (jump) starts
     ColorR    uint8  `json:"color_r"`
     ColorG    uint8  `json:"color_g"`
     ColorB    uint8  `json:"color_b"`
@@ -33,8 +35,17 @@ type ClientMoveMsg struct {
 - **Validation:** Speed check, wall-phase check — `server/validation.go`
 - **Response:** Usually none (broadcast to other clients on the next tick)
 - **On violation:** Server logs suspicion, no feedback to client
-- Color fields exist because the MVP renders each player as a colored
-  circle (`client/main.go:150-167`) — there's no sprite/animation system yet.
+- `Animation` (2026-10-04) is the sender's animation *state* —
+  `shared.AnimIdle`/`AnimWalk`/`AnimJump`, not an `.anif` — set by the
+  client's `CharacterAnimator` (`client/character.go`). Presentation only:
+  the server copies it (and `AnimSeq`) into `PlayerState` unvalidated and
+  nothing server-side reads them. Each client maps the state to its own
+  `.anichar`. `AnimJump` exists to exercise a one-shot (`once`)
+  animation end to end, not as a movement mechanic. Gameplay must never
+  be derived from `Animation`.
+- Color fields: players are drawn as the `.anichar` character with a
+  shadow in their colour at their feet (falling back to the old colored
+  circle if the character fails to load).
 #### Attack — **defined, not wired up**
 ```go
 type ClientAttackMsg struct {
@@ -115,6 +126,7 @@ type PlayerState struct {
     PlayerID  uint64 `json:"player_id"`
     Position  Vec2   `json:"position"`
     Animation uint8  `json:"animation"`
+    AnimSeq   uint8  `json:"anim_seq"`
     Direction uint8  `json:"direction"`
     ColorR    uint8  `json:"color_r"`
     ColorG    uint8  `json:"color_g"`
@@ -127,9 +139,10 @@ type ServerPlayerStateMsg struct {
 - `ServerPlayerStateMsg` (singular) is defined but never sent standalone —
   the server always sends the batched `ServerPlayerStatesMsg` below, even
   when there's only one player.
-- `Animation` is populated in the struct but always `0` in practice — there
-  is no animation system driving it yet (see `docs/ARCHITECTURE.md#attack-prediction`
-  and the client renderer, which just draws a circle + direction line).
+- `Animation`/`AnimSeq` are the player's last `ClientMoveMsg` values,
+  relayed as-is (2026-10-04). Remote clients start a one-shot (jump) when
+  either changes, so a second jump straight after the first restarts even
+  though `Animation` stayed `AnimJump`.
 #### Multiple Player States (Batched) — **live**
 ```go
 type ServerPlayerStatesMsg struct {
@@ -139,9 +152,14 @@ type ServerPlayerStatesMsg struct {
 - **Sent:** Every `shared.NetworkTickRate` ms (50ms), unconditionally, to
   every known client address — `server/main.go:117-137`. This is the
   *only* server→client message actually sent today.
-- **Client does:** demuxes each `PlayerState` in `receiveLoop`
-  (`client/main.go:56-93`) — if it's the local player's own ID, calls
+- **Client does:** demuxes each `PlayerState` in `applyPlayerStates`
+  (`client/main.go`) — if it's the local player's own ID, calls
   `ServerCorrection`; otherwise creates/updates a `PlayerInterpolation`.
+  A remote player missing from the broadcast is dropped: the list is
+  always complete, so absence means they've left.
+- **Leaving (2026-10-05):** there's no leave message. The server drops a
+  player it hasn't had a `Move` from in `playerTimeout` (5s,
+  `server/main.go` `dropIdle`), so they vanish from the next broadcast.
 - No area-of-interest filtering — "all players in area" currently means
   *all connected players*, full stop.
 #### Attack Result — **defined, not sent**
