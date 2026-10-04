@@ -77,9 +77,12 @@ the file it tests, in the same package) as new logic is added; update the
 relevant `map/objects/*.md` card's "Tests:" line when you do, so the map
 stays accurate.
 
-`.github/workflows/test.yml` has two jobs, both green as of 2026-09-17:
-`game` (`go vet`, `go build ./...`, `go test ./... -v`) and `animaker`
-(`go build ./...`). Both install native Linux packages first — `raylib-go`
+`.github/workflows/test.yml` has three jobs, all green as of 2026-10-04:
+`checks` (`gofmt -l` over both modules, and `go mod tidy -diff` in each;
+run `gofmt -w` / `go mod tidy` before pushing), `game` (`go vet`,
+`go build ./...`, `go test -race ./... -v`) and `animaker` (`go vet`,
+`go build ./...`, `go test ./... -v` on Windows and Linux, with `-race`
+on Linux). The build jobs install native Linux packages first — `raylib-go`
 and Fyne are cgo-based, not pure Go, so the runner needs X11/Wayland/GL
 dev headers (`gcc libgl1-mesa-dev xorg-dev libwayland-dev
 libxkbcommon-dev`) or `go vet`/`go build` fail before ever reaching your
