@@ -249,8 +249,9 @@ func childProps(t *Track, parentProps map[string]string, bindings map[string]Pro
 
 // NestedExtent is the box, relative to the nested part's origin, covering
 // every keyframe of the animation it currently plays in the direction it
-// would show - so the canvas can size itself without resizing as the
-// nested animation plays. ok is false when there's nothing to measure.
+// would show - so the canvas can measure the part (to hit-test it and
+// centre the view on it) without the size changing as the nested
+// animation plays. ok is false when there's nothing to measure.
 func (p *Project) NestedExtent(part *Part) (minX, minY, maxX, maxY float32, ok bool) {
 	anim := p.ResolveNestedAnim(part)
 	if anim == nil {

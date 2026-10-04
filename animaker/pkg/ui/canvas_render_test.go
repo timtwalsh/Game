@@ -31,7 +31,7 @@ func TestReusedSpriteImagesFollowTheAnimation(t *testing.T) {
 	w := test.NewWindow(cw)
 	t.Cleanup(w.Close)
 	w.SetPadded(false)
-	w.Resize(cw.MinSize())
+	w.Resize(fyne.NewSize(200, 200))
 
 	isRed := func(local fyne.Position) bool {
 		origin := cw.originScreen()

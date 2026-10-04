@@ -21,14 +21,17 @@ import (
 // its bottom-right quadrant, the way GraalShop's GANI editor does it. Parts
 // are positioned relative to that origin.
 //
-// The canvas has no fixed working area and does no centering: its extent is
-// derived from what's actually placed (see viewBounds), so art may sit at
-// negative coordinates above/left of the origin — a raised sword, a
-// trailing cape — and the canvas simply grows to include it. The extent is
-// computed over *every* keyframe rather than just the current frame, and
-// quantized, so scrubbing never resizes the canvas and a drag only does so
-// when it crosses a quantum boundary. A canvas that resized continuously
-// under a drag would shift the origin out from under the cursor.
+// The canvas is a view onto unbounded animation space: it fills the panel
+// it sits in, and where the origin sits in it (pan) and at what scale
+// (zoom) are the view's own state, not derived from what's placed. Middle
+// mouse drag pans, from anywhere and whatever is selected; the wheel zooms
+// about the cursor, 10% to 500%. Art may sit at negative coordinates
+// above/left of the origin — a raised sword, a trailing cape — and is
+// simply panned to. Because the origin only moves when the view does, a
+// drag or an edit can never shift it out from under the cursor.
+//
+// The view is centred on the content (contentBounds) when the canvas is
+// first laid out, when a track is opened, and on View > Center View.
 //
 // Rotation is stored and saved but not visually applied here — Fyne has no
 // simple rotated-image primitive, and the real consumer of rotation is the
@@ -57,10 +60,15 @@ type CanvasWidget struct {
 	// a corner was a jump of half its size on the first frame.
 	dragStartLocal fyne.Position
 
-	// viewFrozen pins the extent while a drag is in progress — see
-	// SetViewFrozen.
-	viewFrozen                                     bool
-	frozenMinX, frozenMinY, frozenMaxX, frozenMaxY float32
+	// pan is where animation (0,0) sits, widget-local. viewPlaced is false
+	// until the view has been centred at a real size (layoutView);
+	// viewSize is the size it was last laid out at.
+	pan        fyne.Position
+	viewPlaced bool
+	viewSize   fyne.Size
+	// panning is set by a middle-button press: the drag that follows moves
+	// the view rather than a part.
+	panning bool
 
 	// OnPartTapped fires with the part index under the click, or -1 if the
 	// click landed on empty space (a deselect).
@@ -82,13 +90,28 @@ func NewCanvasWidget(project *editor.Project) *CanvasWidget {
 	return cw
 }
 
+// SetProject shows another project, centred on its content.
 func (cw *CanvasWidget) SetProject(project *editor.Project) {
 	cw.project = project
+	cw.viewPlaced = false
+	cw.layoutView(cw.Size())
 	cw.Refresh()
 }
 
+// SetZoom sets the zoom (clamped to minZoom..maxZoom), keeping whatever is
+// at the middle of the canvas where it is.
 func (cw *CanvasWidget) SetZoom(z float32) {
-	cw.zoom = z
+	size := cw.Size()
+	cw.zoomAround(fyne.NewPos(size.Width/2, size.Height/2), z)
+}
+
+// Zoom is the current zoom factor (1 = 100%).
+func (cw *CanvasWidget) Zoom() float32 { return cw.zoom }
+
+// CenterView pans so the content (the reference box and every keyframe
+// of the active direction) is centred, keeping the zoom.
+func (cw *CanvasWidget) CenterView() {
+	cw.centerView(cw.Size())
 	cw.Refresh()
 }
 
@@ -98,10 +121,61 @@ func (cw *CanvasWidget) ToggleGrid() {
 }
 
 const (
-	canvasMarginPx   = 24 // anim px of breathing room around the content
-	canvasQuantizePx = 32 // view extent rounds outward to this, so small moves don't resize
-	nestedBoxPx      = 24 // placeholder box for a NestedAni part whose animation isn't loaded, in anim px
+	minZoom       = 0.1  // 10%
+	maxZoom       = 5.0  // 500%
+	wheelZoomStep = 1.25 // zoom factor per wheel notch
+	nestedBoxPx   = 24   // placeholder box for a NestedAni part whose animation isn't loaded, in anim px
 )
+
+func clampZoom(z float32) float32 {
+	return minF(maxF(z, minZoom), maxZoom)
+}
+
+// zoomAround changes the zoom to z (clamped), keeping the animation point
+// under the widget-local position at at that same position.
+func (cw *CanvasWidget) zoomAround(at fyne.Position, z float32) {
+	z = clampZoom(z)
+	if z == cw.zoom {
+		return
+	}
+	ax, ay := cw.LocalToAnimXY(at)
+	cw.zoom = z
+	cw.pan = fyne.NewPos(at.X-ax*z, at.Y-ay*z)
+	cw.Refresh()
+}
+
+// panBy moves the view by d widget pixels.
+func (cw *CanvasWidget) panBy(d fyne.Delta) {
+	cw.pan = cw.pan.Add(d)
+	cw.Refresh()
+}
+
+// layoutView keeps the view placed as the canvas is resized: centred on
+// the content the first time it has a real size, and after that keeping
+// whatever was in the middle in the middle.
+func (cw *CanvasWidget) layoutView(size fyne.Size) {
+	if size.Width <= 0 || size.Height <= 0 {
+		return
+	}
+	if !cw.viewPlaced {
+		cw.centerView(size)
+	} else if size != cw.viewSize {
+		cw.pan = cw.pan.Add(fyne.NewDelta((size.Width-cw.viewSize.Width)/2, (size.Height-cw.viewSize.Height)/2))
+	}
+	cw.viewSize = size
+}
+
+// centerView pans so contentBounds is centred in a canvas of this size.
+func (cw *CanvasWidget) centerView(size fyne.Size) {
+	if cw.project == nil || cw.project.CurrentTrack == nil {
+		return
+	}
+	minX, minY, maxX, maxY := cw.contentBounds(cw.partExtents())
+	cx, cy := (minX+maxX)/2, (minY+maxY)/2
+	cw.pan = fyne.NewPos(size.Width/2-cx*cw.zoom, size.Height/2-cy*cw.zoom)
+	cw.viewPlaced = size.Width > 0 && size.Height > 0
+	cw.viewSize = size
+}
 
 // refBox returns the track's character-sized reference box dimensions.
 func (cw *CanvasWidget) refBox() (w, h float32) {
@@ -116,7 +190,8 @@ func (cw *CanvasWidget) refBox() (w, h float32) {
 // the same for all its keyframes. For a sheet part that's its cell; for a
 // nested part it's the box covering every pose of the animation it plays
 // (Project.NestedExtent), "pivoted" at the nested animation's own origin -
-// so the canvas sizes to it and doesn't resize as it plays.
+// so its hit box and the content the view centres on don't change as it
+// plays.
 func (cw *CanvasWidget) partExtentAnim(part *editor.Part) (w, h, pivotX, pivotY float32) {
 	if part.Kind == editor.PartKindNestedAni {
 		if minX, minY, maxX, maxY, ok := cw.project.NestedExtent(part); ok {
@@ -129,36 +204,6 @@ func (cw *CanvasWidget) partExtentAnim(part *editor.Part) (w, h, pivotX, pivotY 
 		return 0, 0, 0, 0
 	}
 	return float32(sheet.CellW), float32(sheet.CellH), sheet.PivotX, sheet.PivotY
-}
-
-// SetViewFrozen pins the view to its current extent for the duration of a
-// drag, and releases it afterwards. While a sprite is being held — dragged
-// in from the palette, or moved on the canvas — the keyframe under it is
-// changing, which would otherwise re-derive the extent and slide the origin
-// (and with it everything drawn) out from under the cursor. Quantizing the
-// extent makes that rarer but can't prevent it, because crossing a quantum
-// boundary is exactly what an outward drag does. app.go drives this from
-// both drag sources.
-func (cw *CanvasWidget) SetViewFrozen(frozen bool) {
-	if frozen == cw.viewFrozen {
-		return
-	}
-	if frozen {
-		cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY = cw.viewBounds()
-	}
-	cw.viewFrozen = frozen
-	cw.Refresh()
-}
-
-// viewBounds is the visible region in animation coordinates. It always
-// contains the origin and the reference box, plus every keyframe of every
-// part (not just the current frame — so scrubbing can't resize the canvas),
-// padded and rounded outward to canvasQuantizePx.
-func (cw *CanvasWidget) viewBounds() (minX, minY, maxX, maxY float32) {
-	if cw.viewFrozen {
-		return cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY
-	}
-	return cw.boundsFor(cw.partExtents())
 }
 
 // partExtent is partExtentAnim's result for one part.
@@ -176,11 +221,11 @@ func (cw *CanvasWidget) partExtents() map[*editor.Part]partExtent {
 	return ext
 }
 
-// boundsFor is viewBounds from already-measured parts.
-func (cw *CanvasWidget) boundsFor(ext map[*editor.Part]partExtent) (minX, minY, maxX, maxY float32) {
-	if cw.viewFrozen {
-		return cw.frozenMinX, cw.frozenMinY, cw.frozenMaxX, cw.frozenMaxY
-	}
+// contentBounds is what the view centres on, in animation coordinates: the
+// origin and the reference box, plus every keyframe of every part in the
+// active direction (not just the current frame, so it doesn't matter where
+// the playhead is when the view is centred).
+func (cw *CanvasWidget) contentBounds(ext map[*editor.Part]partExtent) (minX, minY, maxX, maxY float32) {
 	refW, refH := cw.refBox()
 	minX, minY, maxX, maxY = 0, 0, refW, refH
 
@@ -196,22 +241,13 @@ func (cw *CanvasWidget) boundsFor(ext map[*editor.Part]partExtent) (minX, minY, 
 		}
 	}
 
-	return floorTo(minX-canvasMarginPx, canvasQuantizePx),
-		floorTo(minY-canvasMarginPx, canvasQuantizePx),
-		ceilTo(maxX+canvasMarginPx, canvasQuantizePx),
-		ceilTo(maxY+canvasMarginPx, canvasQuantizePx)
+	return minX, minY, maxX, maxY
 }
 
-// originScreen is where animation (0,0) sits in widget-local pixels. It's
-// offset from the widget's top-left by however much negative space the
-// current view includes.
+// originScreen is where animation (0,0) sits in widget-local pixels: the
+// view's pan.
 func (cw *CanvasWidget) originScreen() fyne.Position {
-	minX, minY, _, _ := cw.viewBounds()
-	return cw.originFor(minX, minY)
-}
-
-func (cw *CanvasWidget) originFor(minX, minY float32) fyne.Position {
-	return fyne.NewPos(-minX*cw.zoom, -minY*cw.zoom)
+	return cw.pan
 }
 
 // LocalToAnimXY converts a position local to this widget into the
@@ -229,12 +265,10 @@ func (cw *CanvasWidget) CreateRenderer() fyne.WidgetRenderer {
 	return &canvasRenderer{widget: cw}
 }
 
+// MinSize is small and fixed: the canvas fills whatever room it's given,
+// and what it shows is decided by pan and zoom, not by its size.
 func (cw *CanvasWidget) MinSize() fyne.Size {
-	if cw.project == nil || cw.project.CurrentTrack == nil {
-		return fyne.NewSize(300, 300)
-	}
-	minX, minY, maxX, maxY := cw.viewBounds()
-	return fyne.NewSize(maxF((maxX-minX)*cw.zoom, 100), maxF((maxY-minY)*cw.zoom, 100))
+	return fyne.NewSize(100, 100)
 }
 
 func minF(a, b float32) float32 {
@@ -251,21 +285,12 @@ func maxF(a, b float32) float32 {
 	return b
 }
 
-// floorTo/ceilTo round outward to a multiple of q, including for negative
-// values (where Go's integer truncation rounds toward zero, i.e. the wrong
-// way for a lower bound).
+// floorTo rounds down to a multiple of q, including for negative values
+// (where Go's integer truncation rounds toward zero, i.e. up).
 func floorTo(v, q float32) float32 {
 	n := float32(int(v / q))
 	if v < 0 && n*q != v {
 		n--
-	}
-	return n * q
-}
-
-func ceilTo(v, q float32) float32 {
-	n := float32(int(v / q))
-	if v > 0 && n*q != v {
-		n++
 	}
 	return n * q
 }
@@ -290,9 +315,7 @@ type resolvedDraw struct {
 // renderer (drawing) and this widget's own hit-testing, so both always
 // agree on where a part actually is.
 func (cw *CanvasWidget) resolvedDraws() []resolvedDraw {
-	ext := cw.partExtents()
-	minX, minY, _, _ := cw.boundsFor(ext)
-	return cw.resolvedDrawsAt(ext, cw.originFor(minX, minY))
+	return cw.resolvedDrawsAt(cw.partExtents(), cw.originScreen())
 }
 
 // resolvedDrawsAt is resolvedDraws with the parts already measured and the
@@ -375,7 +398,46 @@ func (cw *CanvasWidget) Tapped(e *fyne.PointEvent) {
 	}
 }
 
+var _ fyne.Scrollable = (*CanvasWidget)(nil)
+var _ desktop.Mouseable = (*CanvasWidget)(nil)
+
+// Scrolled zooms about the cursor: wheel up zooms in, down zooms out, a
+// fixed step per notch. Not while a part is held: its drag is measured in
+// the view it started in.
+func (cw *CanvasWidget) Scrolled(e *fyne.ScrollEvent) {
+	if cw.draggingPartIdx >= 0 {
+		return
+	}
+	switch {
+	case e.Scrolled.DY > 0:
+		cw.zoomAround(e.Position, cw.zoom*wheelZoomStep)
+	case e.Scrolled.DY < 0:
+		cw.zoomAround(e.Position, cw.zoom/wheelZoomStep)
+	}
+}
+
+// MouseDown notes whether the drag that may follow is a pan: Fyne starts a
+// drag for the middle button as for the left, but DragEvent doesn't say
+// which button is held. Any other press clears it, so a middle click
+// released off the canvas (no MouseUp here) can't leave it set.
+func (cw *CanvasWidget) MouseDown(e *desktop.MouseEvent) {
+	cw.panning = e.Button == desktop.MouseButtonTertiary
+}
+
+func (cw *CanvasWidget) MouseUp(e *desktop.MouseEvent) {
+	if e.Button == desktop.MouseButtonTertiary {
+		cw.panning = false
+	}
+}
+
+// Dragged pans the view for a middle-button drag, from anywhere on the
+// canvas and whatever is selected; a left-button drag moves the selected
+// part.
 func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
+	if cw.panning && cw.draggingPartIdx < 0 {
+		cw.panBy(e.Dragged)
+		return
+	}
 	if cw.draggingPartIdx < 0 {
 		// Fyne's first Dragged event already carries the first movement,
 		// so the press point is Position minus Dragged. Hit-testing
@@ -387,7 +449,6 @@ func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 			return
 		}
 		cw.dragStartLocal = start
-		cw.SetViewFrozen(true)
 		if cw.OnPartDragStart != nil {
 			cw.OnPartDragStart(cw.draggingPartIdx)
 		}
@@ -395,8 +456,9 @@ func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 	if cw.draggingPartIdx < 0 || cw.zoom == 0 {
 		return
 	}
-	// The view is frozen for the whole drag, so a delta in widget pixels
-	// maps to animation pixels by zoom alone — no origin shift to undo.
+	// The origin only moves when the view is panned or zoomed, neither of
+	// which can happen mid-drag, so a delta in widget pixels maps to
+	// animation pixels by zoom alone.
 	dx := (e.Position.X - cw.dragStartLocal.X) / cw.zoom
 	dy := (e.Position.Y - cw.dragStartLocal.Y) / cw.zoom
 	if cw.OnPartDragged != nil {
@@ -409,7 +471,7 @@ func (cw *CanvasWidget) DragEnd() {
 		cw.OnPartDragEnd()
 	}
 	cw.draggingPartIdx = -1
-	cw.SetViewFrozen(false)
+	cw.panning = false
 }
 
 // -- Renderer --
@@ -446,7 +508,12 @@ func (r *canvasRenderer) cellImage(img image.Image) *canvas.Image {
 	return ci
 }
 
-func (r *canvasRenderer) Layout(size fyne.Size) {}
+// Layout keeps the view placed (layoutView) and redraws: the background,
+// grid and crosshair fill the widget, so they change with its size.
+func (r *canvasRenderer) Layout(size fyne.Size) {
+	r.widget.layoutView(size)
+	r.objects = r.buildObjects()
+}
 
 func (r *canvasRenderer) MinSize() fyne.Size { return r.widget.MinSize() }
 
@@ -464,15 +531,25 @@ func (r *canvasRenderer) Objects() []fyne.CanvasObject {
 
 func (r *canvasRenderer) Destroy() {}
 
+// buildObjects is the scene with the zoom readout over it, in the
+// bottom-left corner.
 func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
+	cw := r.widget
+	objs := r.buildScene()
+	label := canvas.NewText(fmt.Sprintf("%.0f%%", cw.zoom*100), ColorRefBox)
+	label.TextSize = 10
+	label.Move(fyne.NewPos(4, cw.Size().Height-label.MinSize().Height-2))
+	return append(objs, label)
+}
+
+func (r *canvasRenderer) buildScene() []fyne.CanvasObject {
 	cw := r.widget
 	r.imageUsed = map[image.Image]int{}
 	ext := cw.partExtents()
-	minX, minY, maxX, maxY := cw.boundsFor(ext)
-	size := fyne.NewSize(maxF((maxX-minX)*cw.zoom, 100), maxF((maxY-minY)*cw.zoom, 100))
+	size := cw.Size()
 	objs := []fyne.CanvasObject{}
 
-	origin := cw.originFor(minX, minY)
+	origin := cw.originScreen()
 
 	bg := canvas.NewRectangle(ColorCanvasBackground)
 	bg.Resize(size)
@@ -498,7 +575,7 @@ func (r *canvasRenderer) buildObjects() []fyne.CanvasObject {
 	objs = append(objs, refLabel)
 
 	// Origin crosshair, spanning the whole canvas so 0,0 stays findable
-	// however far the view has grown.
+	// while it's anywhere in view.
 	hLine := canvas.NewLine(ColorOriginCrosshair)
 	hLine.StrokeWidth = 1
 	hLine.Position1 = fyne.NewPos(0, origin.Y)

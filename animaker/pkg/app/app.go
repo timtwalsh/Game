@@ -109,7 +109,10 @@ func (a *Application) build() {
 	a.wireCallbacks()
 
 	directionBar := a.buildDirectionBar()
+	// The canvas pans and zooms itself (middle-drag, wheel); this scroll
+	// container never scrolls and is only there to clip it to its panel.
 	canvasScroll := container.NewScroll(a.canvasWidget)
+	canvasScroll.Direction = container.ScrollNone
 	a.palettePanel = a.properties.BuildPalette()
 	a.buildCharacterPanel()
 	a.leftColumn = container.NewStack(a.palettePanel)
@@ -133,6 +136,7 @@ func (a *Application) build() {
 		a.canvasWidget.ToggleGrid,
 		a.canvasWidget.ToggleOnion,
 		a.onZoom,
+		a.canvasWidget.CenterView,
 		a.showAbout,
 		func() { ui.ShowShortcutsDialog(a.Window) },
 	)
@@ -612,10 +616,6 @@ func (a *Application) wireCallbacks() {
 		a.canvasWidget.Refresh()
 		a.timeline.Refresh()
 	}
-	// Freeze the canvas extent for the whole palette drag, so placing the
-	// first keyframe past the current bounds doesn't slide the canvas
-	// while the artist is still choosing where to drop.
-	a.properties.OnTileDragStart = func() { a.canvasWidget.SetViewFrozen(true) }
 	a.properties.OnTileDragMove = a.onTileDragMove
 	a.properties.OnTileDropped = a.onTileDropped
 	a.properties.OnTileTapped = a.onTileTapped
@@ -639,9 +639,8 @@ func (a *Application) wireCallbacks() {
 //
 // Drops outside the canvas's bounds are ignored.
 func (a *Application) onTileDropped(sheetName string, row, col int, absPos fyne.Position) {
-	// The drop ends the gesture, so the view unfreezes and the preview
-	// goes here however this returns - including the rejection paths below.
-	defer a.canvasWidget.SetViewFrozen(false)
+	// The drop ends the gesture, so the preview goes here however this
+	// returns - including the rejection paths below.
 	defer a.canvasWidget.ClearDropPreview()
 
 	if a.Project.ActiveDirection() == nil || sheetName == "" {

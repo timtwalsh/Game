@@ -60,14 +60,14 @@ func TestNestedPartIsDrawnAsItsAnimation(t *testing.T) {
 		t.Errorf("flame drawn at %v, want %v", got, want(2, 6))
 	}
 
-	before := cw.MinSize()
+	before := cw.originScreen()
 	p.Playback.NestedClockMs = 150 // halfway: x lerps to 2
 	imgs = images()
 	if got := imgs[0].Position(); got != want(4, 6) {
 		t.Errorf("at 150ms flame drawn at %v, want %v", got, want(4, 6))
 	}
-	if cw.MinSize() != before {
-		t.Error("the canvas resized as the nested animation played")
+	if cw.originScreen() != before {
+		t.Error("the origin moved as the nested animation played")
 	}
 }
 
