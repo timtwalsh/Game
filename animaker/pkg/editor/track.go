@@ -17,8 +17,8 @@ type Track struct {
 	// is actually placed rather than bounding it — see pkg/ui/canvas.go.
 	RefBoxWidth, RefBoxHeight int
 
-	// DirectionCount is how many directions the track has: 1, 4, 8 or 16,
-	// keys 0..N-1 clockwise from north (see facings.go). 0 means not
+	// DirectionCount is how many directions the track has: 1, 2, 4, 8 or 16,
+	// keys 0..N-1 clockwise from north, except 2 is E, W (see facings.go). 0 means not
 	// recorded (an older file) - use Facings(), which judges by the keys.
 	DirectionCount int
 

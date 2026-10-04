@@ -207,7 +207,7 @@ func (a *Application) directionMenu(key int) *fyne.Menu {
 	del := fyne.NewMenuItem("Delete "+name+"...", func() { a.confirmDeleteDirection(key) })
 	del.Disabled = len(track.Directions) <= 1
 
-	// How many directions: 1, 4, 8 or 16.
+	// How many directions: 1, 2, 4, 8 or 16.
 	var countItems []*fyne.MenuItem
 	for _, c := range editor.DirectionCounts {
 		c := c

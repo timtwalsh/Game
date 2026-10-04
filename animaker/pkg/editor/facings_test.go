@@ -8,6 +8,7 @@ func TestFacingNamesFollowTheCompass(t *testing.T) {
 		want string
 	}{
 		{0, 1, "All"},
+		{0, 2, "E"}, {1, 2, "W"},
 		{0, 4, "N"}, {1, 4, "E"}, {2, 4, "S"}, {3, 4, "W"},
 		{1, 8, "NE"}, {2, 8, "E"}, {7, 8, "NW"},
 		{1, 16, "NNE"}, {3, 16, "ENE"}, {5, 16, "ESE"}, {11, 16, "WSW"}, {13, 16, "WNW"}, {15, 16, "NNW"},
@@ -43,6 +44,11 @@ func TestMapDirectionByFacing(t *testing.T) {
 		{5, 8, 4, 3, "SW -> W"},
 		{1, 16, 8, 1, "NNE: a tie between N and NE goes to the more sideways NE"},
 		{3, 8, 1, 0, "anything -> a 1-direction track's only key"},
+		{1, 4, 2, 0, "E -> side-scroller E"},
+		{3, 4, 2, 1, "W -> side-scroller W"},
+		{3, 8, 2, 0, "SE -> side-scroller E"},
+		{7, 8, 2, 1, "NW -> side-scroller W"},
+		{1, 2, 8, 6, "side-scroller W -> W"},
 		{6, 16, 16, 6, "same count: unchanged"},
 	}
 	for _, c := range cases {
@@ -114,5 +120,39 @@ func TestNestedInheritMapsByFacing(t *testing.T) {
 	AddKeyframe(p.ActiveDirection(), part.ID, 0)
 	if got := p.FlattenNested(part); len(got) != 1 || got[0].Row != 1 {
 		t.Errorf("character facing S (8-way key 4): torch %+v, want its S direction (row 1)", got)
+	}
+}
+
+// A 2-direction track is a side-scroller: E and W, not N and S.
+func TestSetDirectionCountSideScroller(t *testing.T) {
+	p := NewProject("t")
+	AddStandardDirections(p.CurrentTrack) // N E S W
+	part := AddPart(p.CurrentTrack, NewSheetPart("body", "", "s"))
+	AddKeyframe(p.CurrentTrack.Directions[3], part.ID, 0).X = 33 // W
+	p.SetActiveDirection(3)
+
+	if lost, err := p.SetDirectionCount(2, false); err != nil || lost != nil {
+		t.Fatalf("4->2: lost %v, err %v", lost, err)
+	}
+	tr := p.CurrentTrack
+	if len(tr.Directions) != 2 || tr.Directions[1].KeyframesFor(part.ID)[0].X != 33 {
+		t.Fatalf("after 4->2: %d directions, want 2 with W's keyframe at key 1", len(tr.Directions))
+	}
+	if p.Playback.ActiveDirection != 1 {
+		t.Errorf("active %d, want 1 (still facing W)", p.Playback.ActiveDirection)
+	}
+
+	// 2 -> 8: W goes to key 6, E (empty) to key 2.
+	if _, err := p.SetDirectionCount(8, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.CurrentTrack.Directions[6].KeyframesFor(part.ID); len(got) != 1 || got[0].X != 33 {
+		t.Errorf("after 2->8: key 6 (W) has %v, want W's keyframe", got)
+	}
+
+	// Posing N then going to 2 reports N as lost.
+	AddKeyframe(p.CurrentTrack.Directions[0], part.ID, 0)
+	if lost, _ := p.SetDirectionCount(2, false); len(lost) != 1 || lost[0] != 0 {
+		t.Errorf("8->2 with N posed: lost %v, want [0]", lost)
 	}
 }
