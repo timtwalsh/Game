@@ -31,9 +31,11 @@ jobs:
             animaker/go.sum
 
       # Neither step compiles anything, so no cgo packages are needed.
+      # gofmt walks the whole tree, so new top-level folders (cmd/...) are
+      # covered without editing this list.
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l client server shared animaker)
+          unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             echo "These files need gofmt -w:"
             echo "$unformatted"
