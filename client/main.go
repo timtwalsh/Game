@@ -56,7 +56,7 @@ func NewClient(serverAddrStr string) *Client {
 		colorR:        uint8(rand.Intn(256)),
 		colorG:        uint8(rand.Intn(256)),
 		colorB:        uint8(rand.Intn(256)),
-		controller:    NewPlayerController(shared.Vec2{X: 100, Y: 100}, shared.NewCollisionLayer(100, 100)),
+		controller:    NewPlayerController(shared.SpawnPoint, shared.NewCollisionLayer(100, 100)),
 		remotePlayers: make(map[uint64]*PlayerInterpolation),
 		remoteAnims:   make(map[uint64]*CharacterAnimator),
 		assets:        anim.NewLibrary(),
