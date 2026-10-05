@@ -26,9 +26,12 @@ type ClientMoveMsg struct {
 }
 ```
 - **Sent:** Every `shared.NetworkTickRate` ms (50ms / 20Hz as of
-  2026-09-17) — `client/main.go:140-143`. `TimeMs` carries the *actual*
-  elapsed milliseconds since the last send (not a hardcoded assumption),
-  since the server's `CheckSpeed` divides distance by this value directly.
+  2026-09-17), counted in fixed simulation steps (`ticksPerNetworkSend`
+  in `client/main.go`, 3 steps at `shared.SimTickHz` = 60Hz). `TimeMs`
+  carries the *simulated* time the reported movement covers (as of
+  2026-10-05; previously wall-clock time since the last send), so the
+  server's `CheckSpeed`, which divides distance by this value directly,
+  sees exactly the time the movement was simulated over.
 - **Validation:** Speed check, wall-phase check — `server/validation.go`
 - **Response:** Usually none (broadcast to other clients on the next tick)
 - **On violation:** Server logs suspicion, no feedback to client
@@ -211,8 +214,8 @@ T+0ms: Client starts
 
 T+~0ms: Player moves (presses WASD/arrows)
   Client (live):
-    ├─ Update PredictedPosition locally every frame (client/prediction.go)
-    ├─ Render at new position immediately
+    ├─ Step PredictedPosition at a fixed 60Hz (shared.SimTickHz), never per frame (client/prediction.go)
+    ├─ Render blended between the last two sim steps, every frame
     └─ Every tick (shared.NetworkTickRate, 50ms), send a ClientMoveMsg
 
 T+~50ms: Server receives move (live)

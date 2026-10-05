@@ -4,6 +4,7 @@ import (
 	"game/shared"
 	"math"
 	"testing"
+	"time"
 )
 
 func almostEqual(a, b float32) bool {
@@ -68,7 +69,7 @@ func TestPlayerControllerMovesOnOpenGround(t *testing.T) {
 	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(10, 10))
 	input := PlayerInput{Right: true}
 
-	pc.UpdatePrediction(&input, 100) // 100ms
+	pc.UpdatePrediction(&input, 100*time.Millisecond)
 
 	// speed = MaxSpeed*TileSize = 80 units/sec; 100ms -> 8 units.
 	if !almostEqual(pc.PredictedPosition.X, 8) {
@@ -87,13 +88,13 @@ func TestPlayerControllerStopsAtWall(t *testing.T) {
 	input := PlayerInput{Right: true}
 
 	// First step: 20 -> 28, still inside tile 1 (walkable).
-	pc.UpdatePrediction(&input, 100)
+	pc.UpdatePrediction(&input, 100*time.Millisecond)
 	if !almostEqual(pc.PredictedPosition.X, 28) {
 		t.Fatalf("after first step, PredictedPosition.X = %v, want 28", pc.PredictedPosition.X)
 	}
 
 	// Second step would land at 36, inside the blocked tile 2 - must be stopped.
-	pc.UpdatePrediction(&input, 100)
+	pc.UpdatePrediction(&input, 100*time.Millisecond)
 	if !almostEqual(pc.PredictedPosition.X, 28) {
 		t.Errorf("after moving into a wall, PredictedPosition.X = %v, want unchanged at 28", pc.PredictedPosition.X)
 	}
@@ -112,13 +113,13 @@ func TestPlayerInterpolationEasesThenSnaps(t *testing.T) {
 	pi := NewPlayerInterpolation(shared.Vec2{X: 0, Y: 0})
 	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 100, Y: 0}})
 
-	half := shared.NetworkTickRate / 2
+	half := networkTick / 2
 	pi.Update(half) // half of InterpolationDuration, whatever it's currently tuned to
 	if !almostEqual(pi.CurrentPosition.X, 50) {
 		t.Errorf("halfway through interpolation, CurrentPosition.X = %v, want 50", pi.CurrentPosition.X)
 	}
 
-	pi.Update(shared.NetworkTickRate - half) // remaining half
+	pi.Update(networkTick - half) // remaining half
 	if !almostEqual(pi.CurrentPosition.X, 100) {
 		t.Errorf("after full interpolation window, CurrentPosition.X = %v, want 100 (snapped to target)", pi.CurrentPosition.X)
 	}
@@ -137,7 +138,7 @@ func TestPlayerInterpolationAdaptsToALateUpdate(t *testing.T) {
 	// Let the first segment finish, then simulate updates arriving late:
 	// several ticks pass with no new ServerUpdate - enough to exceed
 	// interpolationDurationMax, so this also exercises the upper clamp.
-	lateGap := shared.NetworkTickRate * 5
+	lateGap := networkTick * 5
 	pi.Update(lateGap)
 	if !almostEqual(pi.CurrentPosition.X, 100) {
 		t.Fatalf("should have reached the first target during the gap, got CurrentPosition.X = %v", pi.CurrentPosition.X)
@@ -147,8 +148,8 @@ func TestPlayerInterpolationAdaptsToALateUpdate(t *testing.T) {
 	// should reflect the real ~3-tick gap since the last ServerUpdate,
 	// not silently reset to a single tick.
 	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 200, Y: 0}})
-	if pi.InterpolationDuration <= shared.NetworkTickRate {
-		t.Errorf("InterpolationDuration after a %vms gap = %v, want it adapted upward (was pinned at %v pre-fix)", lateGap, pi.InterpolationDuration, shared.NetworkTickRate)
+	if pi.InterpolationDuration <= networkTick {
+		t.Errorf("InterpolationDuration after a %v gap = %v, want it adapted upward (was pinned at %v pre-fix)", lateGap, pi.InterpolationDuration, networkTick)
 	}
 	if pi.InterpolationDuration != interpolationDurationMax {
 		t.Errorf("InterpolationDuration = %v, want it clamped to interpolationDurationMax (%v) for a gap this large", pi.InterpolationDuration, interpolationDurationMax)
@@ -157,7 +158,7 @@ func TestPlayerInterpolationAdaptsToALateUpdate(t *testing.T) {
 	// A single network tick's worth of progress should now cover
 	// proportionally less distance than before (since it must be spread
 	// over the longer, adapted window) - i.e. no more instant-looking snap.
-	pi.Update(shared.NetworkTickRate)
+	pi.Update(networkTick)
 	if pi.CurrentPosition.X >= 150 {
 		t.Errorf("after one normal tick into an adapted (longer) window, CurrentPosition.X = %v, want well short of the target (100) - a snap indicates the duration didn't adapt", pi.CurrentPosition.X)
 	}
@@ -168,10 +169,56 @@ func TestPlayerInterpolationClampsAVeryShortGap(t *testing.T) {
 	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 100, Y: 0}})
 
 	// Two updates arrive back-to-back with essentially no time between them.
-	pi.Update(1)
+	pi.Update(time.Millisecond)
 	pi.ServerUpdate(shared.PlayerState{Position: shared.Vec2{X: 200, Y: 0}})
 
 	if pi.InterpolationDuration != interpolationDurationMin {
 		t.Errorf("InterpolationDuration after a ~1ms gap = %v, want it clamped to interpolationDurationMin (%v)", pi.InterpolationDuration, interpolationDurationMin)
+	}
+}
+
+func TestPlayerControllerMovementIsFrameRateIndependent(t *testing.T) {
+	// Regression test for the frame-timing bug: the client used to step the
+	// simulation by each render frame's elapsed time truncated to whole
+	// milliseconds, so at 144fps (~6.94ms frames counted as 6ms) the player
+	// moved ~13% slower than MaxSpeed, and the error varied with frame rate.
+	// The simulation now always advances in fixed simSteps, so one second of
+	// simulated time covers exactly MaxSpeed tiles.
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(100, 100))
+	input := PlayerInput{Right: true}
+
+	for i := uint32(0); i < shared.SimTickHz; i++ {
+		pc.UpdatePrediction(&input, simStep)
+	}
+
+	want := shared.MaxSpeed * shared.TileSize
+	if !almostEqual(pc.PredictedPosition.X, want) {
+		t.Errorf("after 1s of sim steps, PredictedPosition.X = %v, want %v", pc.PredictedPosition.X, want)
+	}
+}
+
+func TestPlayerControllerRenderPositionBlendsSteps(t *testing.T) {
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(10, 10))
+	input := PlayerInput{Right: true}
+	pc.UpdatePrediction(&input, 100*time.Millisecond) // 0 -> 8
+
+	if got := pc.RenderPosition(0); !almostEqual(got.X, 0) {
+		t.Errorf("RenderPosition(0).X = %v, want 0 (previous step)", got.X)
+	}
+	if got := pc.RenderPosition(0.5); !almostEqual(got.X, 4) {
+		t.Errorf("RenderPosition(0.5).X = %v, want 4", got.X)
+	}
+	if got := pc.RenderPosition(1); !almostEqual(got.X, 8) {
+		t.Errorf("RenderPosition(1).X = %v, want 8 (current step)", got.X)
+	}
+}
+
+func TestTicksPerNetworkSendMatchesNetworkTickRate(t *testing.T) {
+	// The client sends once every ticksPerNetworkSend sim steps; that must
+	// still add up to shared.NetworkTickRate, since TimeMs reported to the
+	// server's speed check is derived from it.
+	got := (time.Duration(ticksPerNetworkSend) * simStep).Round(time.Millisecond)
+	if want := networkTick; got != want {
+		t.Errorf("ticksPerNetworkSend * simStep = %v, want %v", got, want)
 	}
 }

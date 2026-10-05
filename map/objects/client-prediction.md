@@ -40,6 +40,19 @@ measures the real elapsed time since the previous update (clamped to
 `shared.NetworkTickRate`) and uses that as the next segment's duration,
 so `Update` always eases at the pace updates are actually arriving.
 
+On 2026-10-05 a frame-timing bug was fixed: the render loop stepped the
+local simulation by each frame's elapsed time *truncated to whole
+milliseconds* (`uint32(...Milliseconds())`). At 144fps a ~6.94ms frame
+counted as 6ms, so the player moved ~13% under `MaxSpeed`, and the error
+changed with frame rate; a long frame also produced one huge step. The
+rule now: **simulation is never tied to the frame rate.** The loop feeds
+real frame time (capped at `maxFrameTime`, 250ms) into an accumulator and
+runs whole fixed `simStep`s (`time.Second / shared.SimTickHz`, 60Hz). The
+local player is drawn at `RenderPosition(alpha)`, blending the last two
+steps. Remote-player easing stays per frame (it's presentation; the
+server owns those positions), but now gets full-precision `time.Duration`
+instead of truncated ms.
+
 ## Shape
 
 - `PlayerInput{Up, Down, Left, Right, Attack, Interact bool}` +
@@ -48,7 +61,9 @@ so `Update` always eases at the pace updates are actually arriving.
 - `PlayerController` — the *local* player only: `Position` (last
   server-confirmed), `PredictedPosition` (what's drawn), `Velocity`,
   `Direction`, and its own `Collision` copy. `UpdatePrediction` moves
-  `PredictedPosition` each frame with wall-sliding via `CanMoveTo`;
+  `PredictedPosition` by one fixed sim step with wall-sliding via
+  `CanMoveTo` (keeping the pre-step position in `LastPosition`);
+  `RenderPosition(alpha)` blends the two for drawing;
   `ServerCorrection` snaps `Position` when a server update arrives.
   `client/prediction.go:61-124`.
 - `PlayerInterpolation` — one per *remote* player: `CurrentPosition`
@@ -114,21 +129,25 @@ so `Update` always eases at the pace updates are actually arriving.
 
 - **Hits:** nothing outside `client/` — `PlayerController` and
   `PlayerInterpolation` are not imported by `server/` or `animaker/`.
-- **Hits:** perceived movement feel everywhere — `client/main.go:141`
-  (send interval), `server/main.go`'s `tickLoop` (broadcast interval),
-  and this file's `InterpolationDuration` all read `shared.NetworkTickRate`
-  directly now, so changing the one constant retunes all three together.
-  Also note `client/main.go:142` now sends the *actual* elapsed ms since
-  last send (not a hardcoded `100`) as `ClientMoveMsg.TimeMs` — this
-  feeds directly into `MovementValidator.CheckSpeed` on the server, so a
-  bug here would skew anti-cheat speed math, not just visuals.
+- **Hits:** perceived movement feel everywhere — `client/main.go`'s
+  `ticksPerNetworkSend` (send interval), `server/main.go`'s `tickLoop`
+  (broadcast interval), and this file's `InterpolationDuration` all derive
+  from `shared.NetworkTickRate`, so changing the one constant retunes all
+  three together. `ClientMoveMsg.TimeMs` is the *simulated* time covered
+  since the last send (`ticksSinceSend * simStep`) — this feeds directly
+  into `MovementValidator.CheckSpeed` on the server, so a bug here would
+  skew anti-cheat speed math, not just visuals.
+- **Hits:** `shared.SimTickHz` — retuning it changes sim granularity and
+  `ticksPerNetworkSend`; `TestTicksPerNetworkSendMatchesNetworkTickRate`
+  fails if the two rates stop dividing evenly. Never pass a frame's
+  elapsed time to `UpdatePrediction`.
 - **Does not hit:** server-side validation logic — the server does not
   run this prediction code; it only sees the resulting `ClientMoveMsg`.
 
 ## Surfaces
 
-Runs inside `client/main.go`'s raylib render loop (144fps target). No
-other consumer.
+Runs inside `client/main.go`'s raylib render loop (144fps target), with
+simulation in fixed 60Hz steps inside it. No other consumer.
 
 ## See
 
@@ -137,6 +156,8 @@ other consumer.
 
 Tests: `client/prediction_test.go` — covers `PlayerInput` direction/vector
 math, `PlayerController` movement + wall-stopping + server correction,
+frame-rate-independent stepping (1s of sim steps = exactly `MaxSpeed`
+tiles), `RenderPosition` blending, the send-interval tick math,
 `PlayerInterpolation` easing, and (as regression coverage for the jitter
 fix above) that a late update adapts `InterpolationDuration` upward
 instead of re-snapping to a fixed window, and that a near-zero gap

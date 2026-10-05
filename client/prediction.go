@@ -3,6 +3,7 @@ package main
 import (
 	"game/shared"
 	"math"
+	"time"
 )
 
 type PlayerInput struct {
@@ -94,9 +95,14 @@ func NewPlayerController(pos shared.Vec2, collision shared.CollisionLayer) *Play
 	}
 }
 
-func (pc *PlayerController) UpdatePrediction(input *PlayerInput, deltaMs uint32) {
+// UpdatePrediction advances the local simulation by one step of length dt.
+// The render loop always calls it with the fixed simStep (see client/main.go),
+// never with a frame's elapsed time, so movement is independent of frame rate.
+// LastPosition keeps the pre-step position so rendering can blend between the
+// two (RenderPosition).
+func (pc *PlayerController) UpdatePrediction(input *PlayerInput, dt time.Duration) {
 	pc.LastPosition = pc.PredictedPosition
-	deltaSec := float32(deltaMs) / 1000.0
+	deltaSec := float32(dt.Seconds())
 	movement := input.GetMovementVector()
 
 	speed := shared.MaxSpeed * shared.TileSize
@@ -130,6 +136,15 @@ func (pc *PlayerController) UpdatePrediction(input *PlayerInput, deltaMs uint32)
 	}
 }
 
+// RenderPosition blends between the previous and current simulation steps;
+// alpha is the fraction of a step that has elapsed since the last one ran.
+func (pc *PlayerController) RenderPosition(alpha float32) shared.Vec2 {
+	return shared.Vec2{
+		X: pc.LastPosition.X + (pc.PredictedPosition.X-pc.LastPosition.X)*alpha,
+		Y: pc.LastPosition.Y + (pc.PredictedPosition.Y-pc.LastPosition.Y)*alpha,
+	}
+}
+
 func (pc *PlayerController) CanMoveTo(x, y float32) bool {
 	tileX := uint32(x / shared.TileSize)
 	tileY := uint32(y / shared.TileSize)
@@ -144,8 +159,8 @@ type PlayerInterpolation struct {
 	TargetPosition        shared.Vec2
 	CurrentPosition       shared.Vec2
 	LastPosition          shared.Vec2
-	InterpolationTime     uint32
-	InterpolationDuration uint32
+	InterpolationTime     time.Duration
+	InterpolationDuration time.Duration
 	Direction             uint8
 	Animation             uint8
 	AnimSeq               uint8
@@ -164,8 +179,8 @@ func NewPlayerInterpolation(pos shared.Vec2) *PlayerInterpolation {
 		// (see ServerUpdate) reads as exactly one tick, matching
 		// InterpolationDuration below, instead of reading as 0 and being
 		// clamped down to interpolationDurationMin.
-		InterpolationTime:     shared.NetworkTickRate,
-		InterpolationDuration: shared.NetworkTickRate,
+		InterpolationTime:     networkTick,
+		InterpolationDuration: networkTick,
 	}
 }
 
@@ -174,8 +189,9 @@ func NewPlayerInterpolation(pos shared.Vec2) *PlayerInterpolation {
 // gap (jitter, a dropped packet) doesn't produce an unplayable snap or an
 // unplayably slow crawl for the next segment.
 const (
-	interpolationDurationMin = shared.NetworkTickRate / 2
-	interpolationDurationMax = shared.NetworkTickRate * 4
+	networkTick              = time.Duration(shared.NetworkTickRate) * time.Millisecond
+	interpolationDurationMin = networkTick / 2
+	interpolationDurationMax = networkTick * 4
 )
 
 func (pi *PlayerInterpolation) ServerUpdate(state shared.PlayerState) {
@@ -203,13 +219,16 @@ func (pi *PlayerInterpolation) ServerUpdate(state shared.PlayerState) {
 	pi.ColorB = state.ColorB
 }
 
-func (pi *PlayerInterpolation) Update(deltaMs uint32) {
+// Update advances the visual easing by the real elapsed time dt. This is
+// presentation only (remote positions are authored by the server), so it runs
+// once per render frame with full-precision time rather than in sim steps.
+func (pi *PlayerInterpolation) Update(dt time.Duration) {
 	// InterpolationTime accumulates unconditionally, even past
 	// InterpolationDuration (i.e. even once we've visually "arrived") -
 	// ServerUpdate reads it to measure the real elapsed time since the
 	// previous update. Capping it at InterpolationDuration here would hide
 	// how late a delayed update actually was.
-	pi.InterpolationTime += deltaMs
+	pi.InterpolationTime += dt
 	if pi.InterpolationTime >= pi.InterpolationDuration {
 		pi.CurrentPosition = pi.TargetPosition
 	} else {

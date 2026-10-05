@@ -107,9 +107,10 @@ Key principle: Client predicts everything locally for responsiveness. Server tru
 
 ```
 Client Side:
-  Input → Prediction → Network Send (every tick, shared.NetworkTickRate)
+  Input → Prediction (fixed 60Hz steps, shared.SimTickHz)
+          → Network Send (every 3 sim steps = shared.NetworkTickRate)
     ↓
-    └─→ Render (every 7ms at 144fps)
+    └─→ Render (every frame, ~144fps, blended between the last two sim steps)
 
 Server Side:
   Receive Update → Validate (speed, wall-phase) → Broadcast to nearby
@@ -315,26 +316,34 @@ Real shape, `client/prediction.go:61-124`:
 ```go
 type PlayerController struct {
     Position          shared.Vec2 // last server-confirmed position
-    PredictedPosition shared.Vec2 // local prediction, what's rendered
-    LastPosition      shared.Vec2
+    PredictedPosition shared.Vec2 // local prediction, current sim step
+    LastPosition      shared.Vec2 // previous sim step, for render blending
     Velocity          shared.Vec2
     Direction         uint8
     Collision         shared.CollisionLayer
 }
 
-func (pc *PlayerController) UpdatePrediction(input *PlayerInput, deltaMs uint32)
+func (pc *PlayerController) UpdatePrediction(input *PlayerInput, dt time.Duration) // always called with simStep
+func (pc *PlayerController) RenderPosition(alpha float32) shared.Vec2
 func (pc *PlayerController) CanMoveTo(x, y float32) bool
 func (pc *PlayerController) ServerCorrection(serverPos shared.Vec2)
 ```
-There is no separate `GetDisplayPosition()` method — callers read
-`PredictedPosition` directly (see `client/main.go:165-166`).
+The local player is drawn at `RenderPosition(alpha)`, a blend between
+`LastPosition` and `PredictedPosition` by the fraction of a sim step left in
+the frame accumulator.
 
 #### Movement Prediction
 ```
-Input → Local collision test → Position update (every frame)
+Input → Local collision test → Position update (fixed 60Hz sim step)
   ↓                              ↓
- 5 inputs/sec            144 display updates/sec
+ 20 sends/sec            ~144 blended display updates/sec
 ```
+**Rule: simulation is never tied to the frame rate.** `client/main.go`
+accumulates real frame time and runs whole `simStep`s
+(`time.Second / shared.SimTickHz`); per-frame time is capped at 250ms so a
+stall drops time instead of teleporting. Until 2026-10-05 the client
+stepped by each frame's elapsed time truncated to whole milliseconds, which
+made the player ~13% slow at 144fps and speed vary with frame rate.
 
 #### Attack Prediction
 > **Not implemented.** No `AttackDefinition`, `AttackFrame`, `AttackHitbox`, or
@@ -351,13 +360,13 @@ type PlayerInterpolation struct {
     TargetPosition        shared.Vec2
     CurrentPosition       shared.Vec2
     LastPosition          shared.Vec2
-    InterpolationTime     uint32
-    InterpolationDuration uint32 // set to shared.NetworkTickRate (50ms) in NewPlayerInterpolation
+    InterpolationTime     time.Duration
+    InterpolationDuration time.Duration // set to shared.NetworkTickRate (50ms) in NewPlayerInterpolation
     Direction             uint8
 }
 
 func (pi *PlayerInterpolation) ServerUpdate(state shared.PlayerState)
-func (pi *PlayerInterpolation) Update(deltaMs uint32)
+func (pi *PlayerInterpolation) Update(dt time.Duration) // per frame, real elapsed time (presentation only)
 ```
 ```
 Last update ──(interpolate)──→ Next update

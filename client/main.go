@@ -33,9 +33,8 @@ type Client struct {
 	localAnim *CharacterAnimator
 	// remoteAnims is only touched by the main goroutine (it's drawn
 	// outside the lock), unlike remotePlayers.
-	remoteAnims     map[uint64]*CharacterAnimator
-	mutex           sync.Mutex
-	lastNetworkSend time.Time
+	remoteAnims map[uint64]*CharacterAnimator
+	mutex       sync.Mutex
 }
 
 func NewClient(serverAddrStr string) *Client {
@@ -146,6 +145,21 @@ func (c *Client) SendMove(pos shared.Vec2, timeMs uint32) {
 	c.conn.WriteToUDP(out, c.serverAddr)
 }
 
+// Simulation runs on a fixed timestep, decoupled from the render frame rate.
+// Each frame adds its real elapsed time to an accumulator and runs as many
+// whole simSteps as fit; the leftover fraction is used only to blend the
+// drawn position between the last two steps.
+const (
+	simStep = time.Second / time.Duration(shared.SimTickHz)
+	// maxFrameTime caps how much real time one frame may feed the simulation,
+	// so a stall (window drag, breakpoint) doesn't trigger a huge catch-up
+	// burst. Time beyond it is dropped rather than simulated.
+	maxFrameTime = 250 * time.Millisecond
+	// ticksPerNetworkSend sends a ClientMoveMsg every N sim steps, i.e. at
+	// shared.NetworkTickRate measured in simulated time (3 steps at 60Hz).
+	ticksPerNetworkSend = max(1, (shared.NetworkTickRate*shared.SimTickHz+500)/1000)
+)
+
 func (c *Client) localAnimState() uint8 {
 	if c.localAnim == nil {
 		return shared.AnimIdle
@@ -191,12 +205,21 @@ func main() {
 	// Reused every frame, so drawing allocates nothing once warmed up.
 	var players []drawnPlayer
 	var sprites []anim.Sprite
-	var lastFrameTime time.Time = time.Now()
+	lastFrameTime := time.Now()
+	var accumulator time.Duration
+	var ticksSinceSend uint32
+	// animCarry keeps the sub-millisecond remainder the animators whole-ms
+	// deltas can't express, so playback speed matches real time.
+	var animCarry time.Duration
 
 	for !rl.WindowShouldClose() {
 		now := time.Now()
-		deltaMs := uint32(now.Sub(lastFrameTime).Milliseconds())
+		frameTime := now.Sub(lastFrameTime)
 		lastFrameTime = now
+		if frameTime > maxFrameTime {
+			frameTime = maxFrameTime
+		}
+		accumulator += frameTime
 
 		// Input
 		input := PlayerInput{
@@ -208,18 +231,37 @@ func main() {
 		}
 
 		client.mutex.Lock()
-		client.controller.UpdatePrediction(&input, deltaMs)
+		for accumulator >= simStep {
+			client.controller.UpdatePrediction(&input, simStep)
+			accumulator -= simStep
+
+			// Network Send - TimeMs is the simulated time the reported
+			// movement covers, so the server's speed check divides distance
+			// by exactly the time it was simulated over.
+			ticksSinceSend++
+			if ticksSinceSend >= ticksPerNetworkSend {
+				simulated := time.Duration(ticksSinceSend) * simStep
+				client.SendMove(client.controller.PredictedPosition, uint32(simulated.Round(time.Millisecond).Milliseconds()))
+				ticksSinceSend = 0
+			}
+		}
+		alpha := float32(accumulator) / float32(simStep)
+		localPos := client.controller.RenderPosition(alpha)
 
 		for _, rp := range client.remotePlayers {
-			rp.Update(deltaMs)
+			rp.Update(frameTime)
 		}
 
-		// Animation
+		// Animation - presentation only, so it runs per frame on real time
+		// (not in sim steps), with the sub-ms remainder carried over.
+		animCarry += frameTime
+		animMs := uint32(animCarry / time.Millisecond)
+		animCarry -= time.Duration(animMs) * time.Millisecond
 		if la := client.localAnim; la != nil {
 			moving := client.controller.Velocity.X != 0 || client.controller.Velocity.Y != 0
-			la.Step(moving, input.Jump, client.controller.Direction, deltaMs)
+			la.Step(moving, input.Jump, client.controller.Direction, animMs)
 			for id, rp := range client.remotePlayers {
-				client.remoteAnim(id).Apply(rp.Animation, rp.AnimSeq, rp.Direction, deltaMs)
+				client.remoteAnim(id).Apply(rp.Animation, rp.AnimSeq, rp.Direction, animMs)
 			}
 			for id := range client.remoteAnims {
 				if client.remotePlayers[id] == nil {
@@ -228,15 +270,8 @@ func main() {
 			}
 		}
 
-		// Network Send
-		sinceLastSend := now.Sub(client.lastNetworkSend).Milliseconds()
-		if sinceLastSend >= int64(shared.NetworkTickRate) {
-			client.SendMove(client.controller.PredictedPosition, uint32(sinceLastSend))
-			client.lastNetworkSend = now
-		}
-
 		players = append(players[:0], drawnPlayer{
-			pos:       client.controller.PredictedPosition,
+			pos:       localPos,
 			direction: client.controller.Direction,
 			color:     rl.NewColor(client.colorR, client.colorG, client.colorB, 255),
 			anim:      client.localAnim,
