@@ -6,7 +6,7 @@ the named card for the full waterfall.
 | Changing... | Open these cards | Why |
 |---|---|---|
 | `shared/protocol.go` (message shapes) | [protocol.md](../objects/protocol.md), [client-prediction.md](../objects/client-prediction.md), [server-anticheat.md](../objects/server-anticheat.md) | Both binaries decode these structs independently; a mismatch fails silently at runtime, not at compile time. |
-| `shared/types.go` constants (`MaxSpeed`, `SpeedTolerance`, `Suspicion*`, `TileSize`) | [protocol.md](../objects/protocol.md), [server-anticheat.md](../objects/server-anticheat.md), `docs/ARCHITECTURE.md` | Anti-cheat thresholds and movement speed are compiled into both client and server; no runtime negotiation, no shared config file. |
+| `shared/types.go` constants (`MaxSpeed`, `SpeedTolerance`, `Suspicion*`, `TileSize`, `SpawnPoint`) | [protocol.md](../objects/protocol.md), [server-anticheat.md](../objects/server-anticheat.md), `docs/ARCHITECTURE.md` | Anti-cheat thresholds and movement speed are compiled into both client and server; no runtime negotiation, no shared config file. |
 | `client/prediction.go` | [client-prediction.md](../objects/client-prediction.md) | Self-contained to `client/`; does not affect `server/`. |
 | `client/anim/**`, `client/character.go` | [client-prediction.md](../objects/client-prediction.md), `docs/ANI_MAKER_SPEC.md` | Reads animaker's file formats without importing animaker — a format change in `animaker/pkg/file` must be mirrored in `client/anim/load.go` by hand. Tests load `assets/characters/baby/`. |
 | `server/validation.go` | [server-anticheat.md](../objects/server-anticheat.md) | Self-contained to `server/`; does not affect `client/`. |

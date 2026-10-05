@@ -24,6 +24,17 @@ instead of a hard allow/deny per packet.
   `ValidateMovement`, feeds any issues into the player's
   `SuspicionTracker`, and applies the new position **unless** the
   tracker's status is `SuspicionStatusAutoBan`. `server/main.go:57-115`.
+- **Spawn (2026-10-05):** a new player is created at `shared.SpawnPoint`
+  (`shared/types.go`), and their first `Move` is validated from there like
+  any other. The client starts its prediction at the same constant, so a
+  normal first move is clean. The spawn is deliberately *not* taken from
+  the first `Move`: a client-chosen spawn would be an unvalidated teleport,
+  available to anyone who sends a fresh `PlayerID` or goes quiet for
+  `playerTimeout` and rejoins. (Before this, new players started at (0,0)
+  and every connect was flagged TooFast at ~2800 px/s.) **Known gap:** a
+  client dropped by `dropIdle` that resumes sending is re-created at spawn,
+  but the client keeps its own position, so its next move is flagged � the
+  server has no "you were respawned" message to snap it back.
 - `MovementValidator.CheckSpeed` — straight-line distance/time vs.
   `MaxSpeed*TileSize*SpeedTolerance`. `server/validation.go:41-48`.
 - `MovementValidator.CheckWallPhase` — Bresenham line from `from` to
@@ -94,4 +105,6 @@ Tests: `server/validation_test.go` — covers `CheckSpeed`, `CheckWallPhase`
 `ValidateMovement`, and `SuspicionTracker` status thresholds.
 `server/statusboard_test.go` covers the board's latest-action-per-player
 rendering, forgetting disconnected players, and `describeMove`. `server/main.go`
-(the UDP loop itself) is untested — it's network glue, not scored logic.
+isn't tested over a real socket, but `server/main_test.go` drives
+`handlePacket` directly: idle-drop/rejoin, and that a first move near
+`SpawnPoint` is clean while one far from it is flagged TooFast.

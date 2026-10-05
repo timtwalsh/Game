@@ -103,6 +103,11 @@ type Level struct {
 	Objects      []GameObject   `json:"objects"`
 }
 
+// SpawnPoint is where every player starts. The server creates new players
+// here and validates their first Move from it, so the client must start its
+// prediction here too - a client-chosen spawn would be an unvalidated teleport.
+var SpawnPoint = Vec2{X: 100, Y: 100}
+
 const (
 	TileSize               float32 = 16.0
 	MaxSpeed               float32 = 5.0

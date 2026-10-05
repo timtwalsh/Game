@@ -110,7 +110,7 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 		if !exists {
 			player = &shared.PlayerState{
 				PlayerID:  playerID,
-				Position:  shared.Vec2{X: 0, Y: 0},
+				Position:  shared.SpawnPoint,
 				Animation: moveMsg.Animation,
 				Direction: moveMsg.Direction,
 				ColorR:    moveMsg.ColorR,
