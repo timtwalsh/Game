@@ -1,7 +1,7 @@
 # Level Maker & World Format — Technical Specification
 
 **Version**: 1.0
-**Status**: **Proposal as of 2026-10-05; build order step 1 (`shared/world`) built 2026-10-05** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
+**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
 **Language**: Go
 **Program**: `cmd/levelmaker` — a separate executable inside `module game`, rendering through the same `client/render` package the client uses
 **Rendering**: raylib (`github.com/gen2brain/raylib-go`), same as the client
@@ -508,10 +508,22 @@ The server imports this, so no graphics dependencies. Everything after it builds
 
 ### Step 2: `cmd/blobtemplate`, art templates and placeholder art
 
-- [ ] 2.1 `blobtemplate -terrain grass -out assets/templates/` writes the 8×6 template PNG: 47 cells in solver order plus 1 spare, each with a mini-diagram of its joined neighbours. The diagrams come from the solver's own table, so the template can't drift from it.
-- [ ] 2.2 `-placeholder <colour>` writes a usable flat-colour blob-47 sheet (edges drawn as a solid colour over transparency). The game and editor can then run with real-looking transitions before any art exists.
-- [ ] 2.3 Test: the generated sheet has the right size, and each cell's diagram matches its state's mask.
-- [ ] 2.4 Convert or replace `assets/tileset.png`, which is a JPEG, so all tile art is PNG (D8).
+**2.1–2.3 built 2026-10-05** (`cmd/blobtemplate/`, pure Go, no raylib). Committed output: `assets/templates/blob47_template.png` (+ `_x4` reference copy) and placeholder sheets for every sample terrain in `assets/tiles/`, regenerated with:
+
+```
+go run ./cmd/blobtemplate -out assets/templates            # and -scale 4
+go run ./cmd/blobtemplate -terrain water -placeholder 3a6fd0
+go run ./cmd/blobtemplate -terrain dirt  -placeholder 9c7448
+go run ./cmd/blobtemplate -terrain grass -placeholder 4a9c3b
+go run ./cmd/blobtemplate -terrain black -placeholder 000000   # edges = false: fills its single tile
+```
+
+`-placeholder` writes to the terrain's sheet path from `world/terrains.toml`, so names can't disagree. The template's layout is the same for every terrain, so `-terrain` is optional there and only names the file. A test fails if the committed placeholder sheets stop matching the generator.
+
+- [x] 2.1 `blobtemplate -terrain grass -out assets/templates/` writes the 8×6 template PNG: 47 cells in solver order plus 1 spare, each with a mini-diagram of its joined neighbours. The diagrams come from the solver's own table, so the template can't drift from it.
+- [x] 2.2 `-placeholder <colour>` writes a usable flat-colour blob-47 sheet (edges drawn as a solid colour over transparency). The game and editor can then run with real-looking transitions before any art exists.
+- [x] 2.3 Test: the generated sheet has the right size, and each cell's diagram matches its state's mask.
+- [ ] 2.4 Convert or replace `assets/tileset.png`, which is a JPEG, so all tile art is PNG (D8). *Not done in code on purpose (2026-10-05):* a straight conversion triples the file (0.8 → 2.2 MB) while keeping the JPEG smearing, and nothing reads it. Replace it when real tile art arrives; until then the placeholder sheets in `assets/tiles/` are what levels use.
 
 ### Step 3: client, rendering and loading levels
 
