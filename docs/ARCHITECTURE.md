@@ -516,6 +516,13 @@ there is no load test in this repo yet.)*
 
 ### Level File (TOML)
 
+> **Superseded 2026-10-05 by [LEVEL_MAKER_SPEC.md](LEVEL_MAKER_SPEC.md#file-formats).**
+> That spec keeps the shape of this sketch (metadata, collision, z-ranged
+> visual layers, objects) but splits each level into a TOML file plus a
+> gzip binary grid file, places levels on one seamless world plane, adds
+> terrain-based autotiling, and moves grids out of TOML strings. The sketch
+> below is kept for history only.
+
 ```toml
 [metadata]
 name = "area_1_lake"
@@ -673,8 +680,10 @@ F:\Game\
 There is no `tools/level_editor` or `tools/asset_compiler` — only
 `animaker/` exists today, and it is a sprite/animation editor
 (see `docs/ANI_MAKER_SPEC.md`), not a level editor or asset compiler. A
-level editor and asset compiler remain unbuilt; if you're picking up that
-work, it does not yet have a home in this tree.
+level editor and asset compiler remain unbuilt. The level editor is now
+designed in [LEVEL_MAKER_SPEC.md](LEVEL_MAKER_SPEC.md) (2026-10-05 proposal):
+it will live at `cmd/levelmaker` inside `module game`, next to a pure-Go
+`shared/world` package and a raylib `client/render` package shared with the client.
 
 ---
 
@@ -723,7 +732,7 @@ Logging:        <0.5ms per event (when enabled)
 - [ ] Attack synchronization
 - [ ] Arena/zone management
 ### Phase 4: Tooling
-- [ ] Level editor
+- [ ] Level editor (designed in `docs/LEVEL_MAKER_SPEC.md`, not built; its build order also covers Phase 1's level loading)
 - [x] Animation maker (`animaker/`, partial — see `docs/ANI_MAKER_SPEC.md`)
 - [ ] Asset compiler
 ### Phase 5: Anti-Cheat
@@ -833,7 +842,7 @@ server/
    - `client/prediction.go` — client-side logic
    - [map/CLAUDE.md](../map/CLAUDE.md) — a maintained map of what each piece does and what changing it hits
 2. **Start with what Phase 1 is missing:**
-   - Level loading (collision + visual layers from real data, not the hardcoded placeholder grid)
+   - Level loading (collision + visual layers from real data, not the hardcoded placeholder grid) — steps 1–4 of the [LEVEL_MAKER_SPEC.md build order](LEVEL_MAKER_SPEC.md#build-order)
 3. **Use Claude for:**
    - Implementing each module
    - Testing edge cases
