@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"game/shared"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -15,6 +16,7 @@ type Server struct {
 	players    map[uint64]*shared.PlayerState
 	suspicions map[uint64]*SuspicionTracker
 	lastSeen   map[uint64]time.Time // when each player's last Move arrived
+	board      *StatusBoard
 	mutex      sync.Mutex
 	validator  MovementValidator
 	nextID     uint64
@@ -26,6 +28,7 @@ func NewServer() *Server {
 		players:    make(map[uint64]*shared.PlayerState),
 		suspicions: make(map[uint64]*SuspicionTracker),
 		lastSeen:   make(map[uint64]time.Time),
+		board:      NewStatusBoard(),
 		validator:  NewMovementValidator(shared.NewCollisionLayer(100, 100)),
 		nextID:     1,
 	}
@@ -40,7 +43,8 @@ func (s *Server) ListenAndServe(addrStr string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Server listening on", addrStr)
+	s.board.SetHeader("Server listening on " + addrStr)
+	go s.board.Run(os.Stdout, nil)
 
 	go s.tickLoop()
 
@@ -48,7 +52,7 @@ func (s *Server) ListenAndServe(addrStr string) error {
 	for {
 		n, clientAddr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
-			fmt.Println("Error reading UDP:", err)
+			s.board.Event("Error reading UDP: %v", err)
 			continue
 		}
 
@@ -78,7 +82,7 @@ func (s *Server) dropIdle(now time.Time) {
 				delete(s.clients, addr)
 			}
 		}
-		fmt.Printf("Player %d timed out\n", id)
+		s.board.Disconnected(id, "timed out")
 	}
 }
 
@@ -115,8 +119,9 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 			}
 			s.players[playerID] = player
 			s.suspicions[playerID] = NewSuspicionTracker(playerID)
-			fmt.Printf("New player connected: %d from %s\n", playerID, addrStr)
+			s.board.Connected(playerID, addrStr)
 		}
+		action := describeMove(*player, moveMsg)
 
 		s.lastSeen[playerID] = time.Now()
 		tracker := s.suspicions[playerID]
@@ -126,10 +131,18 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 		for _, issue := range issues {
 			if issue.TooFast {
 				tracker.AddEvent(shared.SuspicionEvent{Type: shared.SuspicionEventTooFast, Speed: issue.Speed})
+				action = fmt.Sprintf("flagged: too fast (%.0f px/s)", issue.Speed)
 			}
 			if issue.WallPhase {
 				tracker.AddEvent(shared.SuspicionEvent{Type: shared.SuspicionEventWallPhase, TileX: issue.TileX, TileY: issue.TileY})
+				action = fmt.Sprintf("flagged: wall phase at tile (%d, %d)", issue.TileX, issue.TileY)
 			}
+		}
+		if tracker.GetStatus() == SuspicionStatusAutoBan {
+			action = "auto-banned (moves ignored)"
+		}
+		if action != "" {
+			s.board.Action(playerID, action)
 		}
 
 		if tracker.GetStatus() != SuspicionStatusAutoBan {

@@ -73,13 +73,25 @@ instead of a hard allow/deny per packet.
 
 ## Surfaces
 
-Runs headless as `server/main.go`'s `main()` → `ListenAndServe`. No UI.
+Runs as `server/main.go`'s `main()` → `ListenAndServe`. Its terminal is a
+live status board (`server/statusboard.go`), redrawn in place rather than
+scrolled: one block per player, in connect order — `Player N
+connected|disconnected` then `> latest action` (walking/turning, stopped,
+jumped, anti-cheat flags, auto-ban, timed out). Actions are derived from
+each `ClientMoveMsg` by `describeMove`; position changes alone aren't
+actions. Disconnected players stay listed for `boardForgetAfter` (1 min).
+Server-level messages (UDP errors) go to its `Event` "Recent" tail, not
+`fmt.Print` — anything printed directly would be overwritten by the next
+redraw. `ansi_windows.go` turns on VT processing for plain console
+windows; if stdout isn't a terminal, frames are printed in full instead.
 
 ## See
 
-`server/main.go`, `server/validation.go`
+`server/main.go`, `server/validation.go`, `server/statusboard.go`
 
 Tests: `server/validation_test.go` — covers `CheckSpeed`, `CheckWallPhase`
 (clean/blocked/feasible-detour/infeasible-detour/teleport-skip),
-`ValidateMovement`, and `SuspicionTracker` status thresholds. `server/main.go`
+`ValidateMovement`, and `SuspicionTracker` status thresholds.
+`server/statusboard_test.go` covers the board's latest-action-per-player
+rendering, forgetting disconnected players, and `describeMove`. `server/main.go`
 (the UDP loop itself) is untested — it's network glue, not scored logic.
