@@ -1,7 +1,7 @@
 # Level Maker & World Format — Technical Specification
 
 **Version**: 1.0
-**Status**: **Proposal as of 2026-10-05** — nothing in it is built. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
+**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
 **Language**: Go
 **Program**: `cmd/levelmaker` — a separate executable inside `module game`, rendering through the same `client/render` package the client uses
 **Rendering**: raylib (`github.com/gen2brain/raylib-go`), same as the client
@@ -166,12 +166,14 @@ Both live in `world/terrains.toml`, not per level, because autotiling across a l
 name = "grass_blob47"
 path = "assets/tiles/grass_blob47.png"
 base = 1            # global tiles 1..47
+cells = 47          # cells in use: reserves base..base+cells-1, so ranges can be checked for overlap
 flippable = false   # D4: default for every cell on this sheet
 
 [[sheets]]
 name = "dirt_blob47"
 path = "assets/tiles/dirt_blob47.png"
 base = 48
+cells = 47
 
 # Terrains: id 0 is reserved for "empty". Priority decides who draws on top at a border.
 [[terrains]]
@@ -251,6 +253,9 @@ surface = "wood"
 interaction = "normal"
 ```
 
+- Every sheet declares `cells`, so `LoadDefs` can check that tile ranges don't overlap without opening the PNG. A tile can also set `flippable` in its `tile_props` entry, overriding its sheet's default (D4).
+- Terrains with edges must have **distinct priorities**: two equal ones would join each other both ways and draw no border at all. `LoadDefs` rejects that.
+- Surface id 0 and interaction id 0 must exist; they're what a cell compiles to when nothing declares a value (conventionally `none` and `normal`).
 - Terrain ids are `uint8` (255 terrains). Tile indices are `uint16` (65,535 tiles across all sheets).
 - Surface sounds, effects and speed multipliers are accepted from day one, but nothing honours them until movement and audio code exists. Speed is the risky one: client prediction and the server's `CheckSpeed` must apply the same multiplier, or honest players get flagged.
 
@@ -457,27 +462,29 @@ Each step is one or more PRs and ends **tested and playable**:
 
 ### Step 0: housekeeping (before code)
 
-- [ ] 0.1 Commit this spec and the doc updates (ARCHITECTURE.md, docs/CONTEXT.md, CLAUDE.md).
-- [ ] 0.2 Add every new top-level Go folder to CI's gofmt list in `.github/workflows/test.yml`. It currently checks only `client server shared animaker`, so `cmd/` would be skipped silently.
+- [x] 0.1 Commit this spec and the doc updates (ARCHITECTURE.md, docs/CONTEXT.md, CLAUDE.md).
+- [x] 0.2 CI's gofmt step now runs `gofmt -l .` over the whole tree (it used to list `client server shared animaker` by hand, so `cmd/` would have been skipped silently).
 
 ### Step 1: `shared/world`, the world model (pure Go, no raylib)
 
+**Built 2026-10-05.** Code: `shared/world/` (`defs.go`, `level.go`, `file.go`, `autotile.go`, `props.go`, `world.go`); card: [map/objects/world.md](../map/objects/world.md). Small additions beyond the list below: `World.CheckPlacement` (for the editor's new-level overlap check), `World.SolveLevel`, `LoadDir(root)` (loads `world/` + `levels/`, or reports that there are none so callers keep their placeholder grid), and `DecodeLevel`/`EncodeLevel` on bytes for the future streaming client.
+
 The server imports this, so no graphics dependencies. Everything after it builds on it, so it gets the heaviest testing.
 
-- [ ] 1.1 **Definitions** (`defs.go`): types for sheets, terrains, surfaces, interactions and tile props. `LoadDefs("world/terrains.toml")` checks that ids are unique, sheet index ranges don't overlap, every name a terrain or prop uses exists, and that `edges = false` terrains have a `tile`. Blocking flags are `uint16` constants (`BlockGround`, `BlockProjectile`, `BlockFlight`, `BlockJump`, `BlockRoll`, `BlockEthereal`, `BlockMagic`).
-- [ ] 1.2 **Level model** (`level.go`):
+- [x] 1.1 **Definitions** (`defs.go`): types for sheets, terrains, surfaces, interactions and tile props. `LoadDefs("world/terrains.toml")` checks that ids are unique, sheet index ranges don't overlap, every name a terrain or prop uses exists, and that `edges = false` terrains have a `tile`. Blocking flags are `uint16` constants (`BlockGround`, `BlockProjectile`, `BlockFlight`, `BlockJump`, `BlockRoll`, `BlockEthereal`, `BlockMagic`).
+- [x] 1.2 **Level model** (`level.go`):
   - `Level{Name, Pos, Size, Isolated, Layers, Objects}`
   - a ground grid: terrain, tile, under, flags
   - upper-layer grids: tile, flags
   - override grids
   - compiled property grids
   - cell accessors by level-local `(x, y)`
-- [ ] 1.3 **File IO** (`file.go`):
+- [x] 1.3 **File IO** (`file.go`):
   - `LoadLevel` and `SaveLevel` for `.level.toml` and `.grid.gz` (gzip, little-endian, layout as in [File formats](#file-formats)).
   - Writes are atomic (temp file, then rename), so a crash never leaves half a level.
   - The version hash is SHA-256 over both files.
   - Tests: round-trip; a size or layer-count mismatch is an error; a bad magic number or version is an error; the hash is stable.
-- [ ] 1.4 **Autotile solver** (`autotile.go`):
+- [x] 1.4 **Autotile solver** (`autotile.go`):
   - the 256→47 reduction table and the state order;
   - `SolveCell` and `SolveRect`, which read neighbours through a `TerrainSource` interface so the same code solves across level edges;
   - skips locked cells and handles `edges = false`.
@@ -487,24 +494,36 @@ The server imports this, so no graphics dependencies. Everything after it builds
     - the underlay is the highest-priority lower terrain, and three terrains meeting behaves as described above;
     - locked cells are untouched but still count in their neighbours' masks;
     - void counts as joined, and empty cells don't.
-- [ ] 1.5 **Property compiler** (`props.go`): `Compile(level, defs)` runs the D30 rules. Blocking = OR of all flags, surface and interaction = topmost tile that declares one, then overrides; empty ground blocks everything. Tests: a fence blocks ground but not jump; a bridge over water becomes wood/normal; a bridge over a blocking chasm still blocks until overridden; an override on one map leaves the other two alone.
-- [ ] 1.6 **World** (`world.go`):
+- [x] 1.5 **Property compiler** (`props.go`): `Compile(level, defs)` runs the D30 rules. Blocking = OR of all flags, surface and interaction = topmost tile that declares one, then overrides; empty ground blocks everything. Tests: a fence blocks ground but not jump; a bridge over water becomes wood/normal; a bridge over a blocking chasm still blocks until overridden; an override on one map leaves the other two alone.
+- [x] 1.6 **World** (`world.go`):
   - `LoadWorld(levelsDir, defs)` scans for `*.level.toml`.
   - It rejects overlapping levels, naming both, and finds neighbours by geometry; `isolated` levels have none.
   - It answers queries in world tile coordinates as **signed `int`**: `LevelAt`, `BlockingAt`, `InteractionAt`, `SurfaceAt`. Negative positions are normal, and void blocks everything.
   - A helper converts world pixels to tiles with `floor`, never a `uint32` cast.
   - Tests: lookups across a boundary; void; negative coordinates; overlap error; isolated levels have no neighbours.
-- [ ] 1.7 **Border solving**: `SolveBorders(level, world)` re-solves the edge cells on both sides of every neighbour boundary. The editor uses it on save. Test: two levels painted independently have no seam after solving.
-- [ ] 1.8 **Sample content** for development and tests:
+- [x] 1.7 **Border solving**: `SolveBorders(level, world)` re-solves the edge cells on both sides of every neighbour boundary. The editor uses it on save. Test: two levels painted independently have no seam after solving.
+- [x] 1.8 **Sample content** for development and tests:
   - `world/terrains.toml` with placeholder terrains (water, dirt, grass, black) and the surface and interaction lists;
-  - two small adjoining exterior levels and one isolated interior in `levels/`, generated by a test helper so they always match the format.
+  - two small adjoining exterior levels and one isolated interior in `levels/`, generated by a test helper so they always match the format. (Built as `meadow`, `lake` and `house_1`; regenerate with `go test ./shared/world -run TestSampleLevels -update`.)
 
 ### Step 2: `cmd/blobtemplate`, art templates and placeholder art
 
-- [ ] 2.1 `blobtemplate -terrain grass -out assets/templates/` writes the 8×6 template PNG: 47 cells in solver order plus 1 spare, each with a mini-diagram of its joined neighbours. The diagrams come from the solver's own table, so the template can't drift from it.
-- [ ] 2.2 `-placeholder <colour>` writes a usable flat-colour blob-47 sheet (edges drawn as a solid colour over transparency). The game and editor can then run with real-looking transitions before any art exists.
-- [ ] 2.3 Test: the generated sheet has the right size, and each cell's diagram matches its state's mask.
-- [ ] 2.4 Convert or replace `assets/tileset.png`, which is a JPEG, so all tile art is PNG (D8).
+**2.1–2.3 built 2026-10-05** (`cmd/blobtemplate/`, pure Go, no raylib). Committed output: `assets/templates/blob47_template.png` (+ `_x4` reference copy) and placeholder sheets for every sample terrain in `assets/tiles/`, regenerated with:
+
+```
+go run ./cmd/blobtemplate -out assets/templates            # and -scale 4
+go run ./cmd/blobtemplate -terrain water -placeholder 3a6fd0
+go run ./cmd/blobtemplate -terrain dirt  -placeholder 9c7448
+go run ./cmd/blobtemplate -terrain grass -placeholder 4a9c3b
+go run ./cmd/blobtemplate -terrain black -placeholder 000000   # edges = false: fills its single tile
+```
+
+`-placeholder` writes to the terrain's sheet path from `world/terrains.toml`, so names can't disagree. The template's layout is the same for every terrain, so `-terrain` is optional there and only names the file. A test fails if the committed placeholder sheets stop matching the generator.
+
+- [x] 2.1 `blobtemplate -terrain grass -out assets/templates/` writes the 8×6 template PNG: 47 cells in solver order plus 1 spare, each with a mini-diagram of its joined neighbours. The diagrams come from the solver's own table, so the template can't drift from it.
+- [x] 2.2 `-placeholder <colour>` writes a usable flat-colour blob-47 sheet (edges drawn as a solid colour over transparency). The game and editor can then run with real-looking transitions before any art exists.
+- [x] 2.3 Test: the generated sheet has the right size, and each cell's diagram matches its state's mask.
+- [ ] 2.4 Convert or replace `assets/tileset.png`, which is a JPEG, so all tile art is PNG (D8). *Not done in code on purpose (2026-10-05):* a straight conversion triples the file (0.8 → 2.2 MB) while keeping the JPEG smearing, and nothing reads it. Replace it when real tile art arrives; until then the placeholder sheets in `assets/tiles/` are what levels use.
 
 ### Step 3: client, rendering and loading levels
 

@@ -11,10 +11,13 @@ the named card for the full waterfall.
 | `client/anim/**`, `client/character.go` | [client-prediction.md](../objects/client-prediction.md), `docs/ANI_MAKER_SPEC.md` | Reads animaker's file formats without importing animaker — a format change in `animaker/pkg/file` must be mirrored in `client/anim/load.go` by hand. Tests load `assets/characters/baby/`. |
 | `server/validation.go` | [server-anticheat.md](../objects/server-anticheat.md) | Self-contained to `server/`; does not affect `client/`. |
 | `animaker/pkg/**` | [animaker.md](../objects/animaker.md) | Isolated module; verified no import from/to `client/`, `server/`, `shared/`. |
+| `shared/world/**`, `world/terrains.toml`, `levels/`, `cmd/blobtemplate`, `assets/tiles/` | [world.md](../objects/world.md), `docs/LEVEL_MAKER_SPEC.md` | Not yet imported by client or server. A grid/TOML format change needs a version bump and regenerated `levels/`; the sample-levels test fails until you do. |
 | Level/collision format (`shared.Level`, `CollisionLayer`) | [protocol.md](../objects/protocol.md) | Both `client/main.go` and `server/main.go` currently construct a placeholder all-walkable `CollisionLayer` instead of loading one — adding real level loading touches both call sites. |
 
 ## Outside this tree
 
+- `build_local.ps1` does not build `cmd/blobtemplate` (a run-when-needed
+  generator, not part of the running game).
 - `build_local.ps1` builds all three: `./server`, `./client` (from the
   root `game` module), and `animaker` (from within `animaker/`, since
   it's a separate module) — and by default launches all of them. Adding a

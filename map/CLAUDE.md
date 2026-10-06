@@ -11,6 +11,7 @@ how to walk this and what "live/leftover/ghost" mean here.
 | Wire protocol & world model (shared by client+server) | [objects/protocol.md](objects/protocol.md) |
 | Client-side prediction, interpolation, rendering | [objects/client-prediction.md](objects/client-prediction.md) |
 | Server authority, movement validation, anti-cheat | [objects/server-anticheat.md](objects/server-anticheat.md) |
+| World model, level files, autotile, cell properties (`shared/world`) | [objects/world.md](objects/world.md) |
 | Animaker editor (separate tool) | [objects/animaker.md](objects/animaker.md) |
 
 Full one-line index: [objects/_index.md](objects/_index.md).

@@ -1,0 +1,25 @@
+format = 1
+name = "lake"
+pos = [32, 0]
+size = [24, 24]
+isolated = false
+
+[[layers]]
+name = "ground"
+z_min = 0
+z_max = 5
+
+[[layers]]
+name = "decor"
+z_min = 6
+z_max = 10
+
+[[layers]]
+name = "ysort"
+z_min = 11
+z_max = 50
+
+[[layers]]
+name = "overhead"
+z_min = 51
+z_max = 70

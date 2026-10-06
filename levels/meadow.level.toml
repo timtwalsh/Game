@@ -1,0 +1,45 @@
+format = 1
+name = "meadow"
+pos = [0, 0]
+size = [32, 24]
+isolated = false
+
+[[layers]]
+name = "ground"
+z_min = 0
+z_max = 5
+
+[[layers]]
+name = "decor"
+z_min = 6
+z_max = 10
+
+[[layers]]
+name = "ysort"
+z_min = 11
+z_max = 50
+
+[[layers]]
+name = "overhead"
+z_min = 51
+z_max = 70
+
+[[objects]]
+id = 1
+kind = "spawn"
+x = 100.0
+y = 100.0
+z = 0
+collision_type = "passthrough"
+
+[[objects]]
+id = 2
+kind = "warp"
+x = 336.0
+y = 80.0
+z = 0
+collision_type = "passthrough"
+[objects.properties]
+dest_x = "96.0"
+dest_y = "128.0"
+destination = "house_1"

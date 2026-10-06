@@ -1,0 +1,114 @@
+# World definitions shared by every level: tile sheets, terrains, and the
+# surface / interaction property lists. Format: docs/LEVEL_MAKER_SPEC.md,
+# "Terrains and tiles". Loaded by game/shared/world.LoadDefs.
+#
+# Placeholder content for development. The sheets' PNGs don't exist yet;
+# cmd/blobtemplate (build-order step 2) will generate placeholder art for them.
+# Terrain priorities are placeholders too (open question 1).
+
+# Tile sheets: 16x16 cells, numbered left-to-right, top-to-bottom.
+# A tile's global index is base + cell. Index 0 means "no tile".
+# cells reserves base .. base+cells-1; ranges may not overlap.
+[[sheets]]
+name = "water_blob47"
+path = "assets/tiles/water_blob47.png"
+base = 1
+cells = 47
+
+[[sheets]]
+name = "dirt_blob47"
+path = "assets/tiles/dirt_blob47.png"
+base = 48
+cells = 47
+
+[[sheets]]
+name = "grass_blob47"
+path = "assets/tiles/grass_blob47.png"
+base = 95
+cells = 47
+
+[[sheets]]
+name = "black_tiles"
+path = "assets/tiles/black_tiles.png"
+base = 142
+cells = 1
+
+# Terrains: id 0 is reserved for "empty". Higher priority draws on top at a border.
+[[terrains]]
+id = 1
+name = "water"
+priority = 10
+sheet = "water_blob47"
+surface = "water"
+interaction = "swimming"
+
+[[terrains]]
+id = 2
+name = "dirt"
+priority = 20
+sheet = "dirt_blob47"
+surface = "dirt"
+
+[[terrains]]
+id = 3
+name = "grass"
+priority = 30
+sheet = "grass_blob47"
+surface = "grass"
+
+[[terrains]]
+id = 4
+name = "black"            # D21: blacks out copied surroundings in interiors
+tile = "black_tiles:0"
+edges = false
+blocks = ["ground", "projectile", "flight", "jump", "roll", "ethereal", "magic"]
+surface = "none"
+
+# Surfaces drive footstep sound and effects (client-only). Id 0 is the default.
+[[surfaces]]
+id = 0
+name = "none"
+
+[[surfaces]]
+id = 1
+name = "grass"
+footstep_sfx = "step_grass"
+effect = "grass_rustle"
+
+[[surfaces]]
+id = 2
+name = "water"
+footstep_sfx = "water_splash"
+effect = "splash"
+
+[[surfaces]]
+id = 3
+name = "dirt"
+footstep_sfx = "step_dirt"
+effect = "dust"
+
+[[surfaces]]
+id = 4
+name = "wood"
+footstep_sfx = "step_wood"
+
+[[surfaces]]
+id = 5
+name = "stone"
+footstep_sfx = "step_stone"
+
+# Interactions say how movement behaves (server-authoritative). Id 0 is the default.
+[[interactions]]
+id = 0
+name = "normal"
+speed_multiplier = 1.0
+
+[[interactions]]
+id = 1
+name = "swimming"
+speed_multiplier = 0.5
+
+[[interactions]]
+id = 2
+name = "slow"
+speed_multiplier = 0.6
