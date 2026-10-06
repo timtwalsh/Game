@@ -85,6 +85,8 @@ func main() {
 	rl.SetWindowMinSize(800, 500)
 	rl.SetTargetFPS(60)
 	rl.SetExitKey(rl.KeyNull) // Esc closes dialogs; quitting asks about unsaved work
+	loadFonts()
+	defer unloadFonts()
 
 	ed, err := edit.Open(*root)
 	if err != nil {
@@ -126,7 +128,7 @@ func showFatal(err error) {
 		rl.BeginDrawing()
 		rl.ClearBackground(colPanel)
 		y := float32(40)
-		for _, l := range wrap(err.Error(), int32(rl.GetScreenWidth()-80)) {
+		for _, l := range wrap(err.Error(), float32(rl.GetScreenWidth()-80)) {
 			y += label(l, 40, y, colError)
 		}
 		label("Close the window or press Esc to quit.", 40, y+20, colDim)

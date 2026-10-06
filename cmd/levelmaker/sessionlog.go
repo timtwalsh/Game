@@ -54,10 +54,23 @@ func startLog(dir string) (*sessionLog, error) {
 		return nil, fmt.Errorf("creating log folder: %w", err)
 	}
 	prev := sessionLogs(dir)
-	path := filepath.Join(dir, logPrefix+time.Now().Format("20060102-150405.000")+logSuffix)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("creating log file: %w", err)
+	var err error
+	// Names are timestamps, so they sort in session order. Created
+	// exclusively: two sessions started in the same millisecond (two
+	// editors, or a test) must not share a file, so a clash waits for the
+	// next millisecond's name.
+	var path string
+	var f *os.File
+	for tries := 0; ; tries++ {
+		path = filepath.Join(dir, logPrefix+time.Now().Format("20060102-150405.000")+logSuffix)
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) || tries >= 100 {
+			return nil, fmt.Errorf("creating log file: %w", err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	s := &sessionLog{Path: path, f: f}
 	if len(prev) > 0 && !cleanlyClosed(prev[len(prev)-1]) {

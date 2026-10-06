@@ -54,10 +54,20 @@ level the game would read differently.
   first button, Esc = last, Tab/Shift+Tab move between fields).
   `textField` selects its contents on focus so typing replaces them
   (animaker convention). raygui wasn't used: its text box can't do that.
+- **Text** (`fonts.go`, 2026-10-06) — matches the animaker: Noto Sans
+  Regular and Bold (copied unmodified from Fyne v2.6.3, the animaker's
+  default theme font; SIL OFL 1.1 in `fonts/LICENSE.txt`), embedded with
+  `go:embed`, rasterised once at 13 px (the animaker theme's
+  `SizeNameText`) and drawn at whole pixels. Bold for the title, section
+  headers and dialog titles, where the animaker uses bold. Every widget
+  draws through `drawText`/`drawBold`/`measure`; don't call `rl.DrawText`
+  (raylib's built-in font) in this package. If the animaker's theme font
+  or text size changes, change these to match.
 - **Session log** (`sessionlog.go`) — `bin\logs\levelmaker-*.log`: errors
   shown to the artist, the standard logger, recovered panics with stacks,
   a clean-exit marker, the previous session's crash reported on start, 20
-  kept. Doesn't redirect stderr (unlike animaker's `applog`), so an
+  kept. Files are created exclusively, named to the millisecond; a clash
+  waits for the next millisecond, so two sessions never share a log. Doesn't redirect stderr (unlike animaker's `applog`), so an
   unrecoverable Go fatal error isn't captured.
 
 ## Connected to
@@ -75,7 +85,8 @@ level the game would read differently.
   validates movement against, so a bug in re-solving or compiling shows
   up as wrong walls or anti-cheat flags, not just wrong art.
 - **Hits:** `client/render` changes show in the editor too.
-- **Does not hit:** `animaker/` (separate module).
+- **Does not hit:** `animaker/` (separate module) — but the level maker's
+  font and text size copy the animaker's theme by hand (`fonts.go`).
 
 ## Not in v1
 

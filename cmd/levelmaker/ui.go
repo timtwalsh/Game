@@ -12,9 +12,8 @@ import (
 // another cgo dependency.
 
 const (
-	fontSize = 16
-	rowH     = 26
-	pad      = 10
+	rowH = 26
+	pad  = 10
 )
 
 var (
@@ -45,19 +44,25 @@ func button(r rl.Rectangle, label string, active, enabled bool) bool {
 	if !enabled {
 		fg = colDim
 	}
-	tw := rl.MeasureText(label, fontSize)
-	rl.DrawText(label, int32(r.X+(r.Width-float32(tw))/2), int32(r.Y+(r.Height-fontSize)/2), fontSize, fg)
+	drawText(label, r.X+(r.Width-measure(label))/2, r.Y+(r.Height-fontSize)/2, fg)
 	return enabled && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && mouseIn(r)
 }
 
-// label draws text and returns its height.
+// label draws text and returns its line height.
 func label(text string, x, y float32, col rl.Color) float32 {
-	rl.DrawText(text, int32(x), int32(y), fontSize, col)
-	return fontSize + 4
+	drawText(text, x, y, col)
+	return lineH
+}
+
+// heading draws bold text, as the animaker does for section headers and
+// titles, and returns its line height.
+func heading(text string, x, y float32, col rl.Color) float32 {
+	drawBold(text, x, y, col)
+	return lineH
 }
 
 // wrap breaks text into lines no wider than width pixels.
-func wrap(text string, width int32) []string {
+func wrap(text string, width float32) []string {
 	var lines []string
 	for _, para := range strings.Split(text, "\n") {
 		line := ""
@@ -66,7 +71,7 @@ func wrap(text string, width int32) []string {
 			if line != "" {
 				try = line + " " + word
 			}
-			if rl.MeasureText(try, fontSize) > width && line != "" {
+			if measure(try) > width && line != "" {
 				lines = append(lines, line)
 				line = word
 				continue
@@ -140,44 +145,44 @@ func (d *dialog) draw() int {
 	sw, sh := float32(rl.GetScreenWidth()), float32(rl.GetScreenHeight())
 	rl.DrawRectangle(0, 0, int32(sw), int32(sh), rl.Fade(rl.Black, 0.5))
 	w := float32(420)
-	msgLines := wrap(d.message, int32(w-2*pad))
-	errLines := wrap(d.err, int32(w-2*pad))
-	h := float32(pad*2+fontSize+8) + float32(len(msgLines))*(fontSize+4) + float32(len(d.fields))*(rowH+6) + rowH + pad
+	msgLines := wrap(d.message, w-2*pad)
+	errLines := wrap(d.err, w-2*pad)
+	h := float32(pad*2+lineH+4) + float32(len(msgLines))*lineH + float32(len(d.fields))*(rowH+6) + rowH + pad
 	if d.message == "" {
-		h -= fontSize + 4
+		h -= lineH
 	}
 	if d.checkbox != "" {
 		h += rowH + 6
 	}
 	if d.err != "" {
-		h += float32(len(errLines)) * (fontSize + 4)
+		h += float32(len(errLines)) * lineH
 	}
 	x, y := (sw-w)/2, (sh-h)/2
 	rl.DrawRectangleRec(rl.NewRectangle(x, y, w, h), colPanel)
 	rl.DrawRectangleLinesEx(rl.NewRectangle(x, y, w, h), 1, colDim)
 	cy := y + pad
-	cy += label(d.title, x+pad, cy, colAccent) + 4
+	cy += heading(d.title, x+pad, cy, colAccent) + 4
 	if d.message != "" {
 		for _, l := range msgLines {
 			cy += label(l, x+pad, cy, colText)
 		}
 	}
 	for i, f := range d.fields {
-		label(f.Label, x+pad, cy+5, colDim)
+		label(f.Label, x+pad, cy+(rowH-fontSize)/2, colDim)
 		box := rl.NewRectangle(x+130, cy, w-130-pad, rowH)
 		bg := colButton
 		if i == d.focus {
 			bg = colButtonHot
 		}
 		rl.DrawRectangleRec(box, bg)
+		textY := box.Y + (rowH-fontSize)/2
 		if f.Selected() && i == d.focus && f.Text != "" {
-			tw := rl.MeasureText(f.Text, fontSize)
-			rl.DrawRectangle(int32(box.X+5), int32(box.Y+4), tw+2, rowH-8, colActive)
+			rl.DrawRectangle(int32(box.X+5), int32(box.Y+4), int32(measure(f.Text))+2, rowH-8, colActive)
 		}
-		rl.DrawText(f.Text, int32(box.X+6), int32(box.Y+5), fontSize, colText)
+		drawText(f.Text, box.X+6, textY, colText)
 		if i == d.focus && !f.Selected() && (rl.GetTime()*2)-float64(int(rl.GetTime()*2)) < 0.5 {
-			cx := box.X + 7 + float32(rl.MeasureText(f.Text, fontSize))
-			rl.DrawRectangle(int32(cx), int32(box.Y+5), 2, fontSize, colText)
+			cx := box.X + 7 + measure(f.Text)
+			rl.DrawRectangle(int32(cx), int32(textY), 2, fontSize, colText)
 		}
 		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && mouseIn(box) {
 			d.focusField(i)
@@ -190,7 +195,7 @@ func (d *dialog) draw() int {
 		if d.checked {
 			rl.DrawRectangleRec(rl.NewRectangle(box.X+4, box.Y+4, box.Width-8, box.Height-8), colAccent)
 		}
-		label(d.checkbox, box.X+box.Width+8, cy+5, colText)
+		label(d.checkbox, box.X+box.Width+8, cy+(rowH-fontSize)/2, colText)
 		hit := rl.NewRectangle(box.X, box.Y, w-130-pad, box.Height)
 		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && mouseIn(hit) {
 			d.checked = !d.checked

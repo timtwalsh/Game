@@ -185,11 +185,16 @@ func (a *app) drawCanvas() {
 	r.DrawOverhead(view)
 
 	px := 1 / a.cam.Zoom // one screen pixel, in world units
+	type nameTag struct {
+		name string
+		at   rl.Vector2 // world pixels
+	}
+	var tags []nameTag
 	for _, n := range a.ed.Neighbours() {
 		rect := tileRectPixels(intersect(levelRect(n), strip))
 		rl.DrawRectangleRec(rect, colNeighbour)
 		rl.DrawRectangleLinesEx(tileRectPixels(levelRect(n)), px, colDim)
-		label(n.Name, rect.X+4*px, rect.Y+4*px, colDim) // drawn in world space; scales with zoom
+		tags = append(tags, nameTag{n.Name, rl.NewVector2(rect.X, rect.Y)})
 	}
 
 	if a.grid && a.cam.Zoom >= 0.5 {
@@ -222,6 +227,12 @@ func (a *app) drawCanvas() {
 		rl.DrawRectangleLinesEx(tileRectPixels(area), 1.5*px, colCursor)
 	}
 	rl.EndMode2D()
+	// Neighbour names in screen space, so they stay crisp at any zoom.
+	cam := a.camera2D()
+	for _, t := range tags {
+		p := rl.GetWorldToScreen2D(t.at, cam)
+		label(t.name, p.X+4, p.Y+4, colDim)
+	}
 }
 
 func (a *app) drawStatusBar() {

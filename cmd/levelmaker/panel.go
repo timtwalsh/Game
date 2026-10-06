@@ -40,9 +40,9 @@ func (a *app) panel() {
 		y += rowH + 4
 		return clicked
 	}
-	heading := func(s string) { y += 6; y += label(s, x, y, colDim) }
+	section := func(s string) { y += 6; y += heading(s, x, y, colDim) }
 
-	y += label("LEVEL MAKER", x, y, colAccent)
+	y += heading("Level maker", x, y, colAccent)
 	if l := a.ed.Current; l != nil {
 		name := l.Name
 		if contains(a.ed.DirtyLevels(), l.Name) {
@@ -53,12 +53,12 @@ func (a *app) panel() {
 		if l.Isolated {
 			info += "  isolated"
 		}
-		for _, line := range wrap(info, int32(w)) {
+		for _, line := range wrap(info, w) {
 			y += label(line, x, y, colDim)
 		}
 	}
 
-	heading("Levels")
+	section("Levels")
 	for _, l := range a.ed.World.Levels {
 		text := l.Name
 		if contains(a.ed.DirtyLevels(), l.Name) {
@@ -73,7 +73,7 @@ func (a *app) panel() {
 		a.newLevelDialog()
 	}
 
-	heading("Terrain  (1-9, E erases)")
+	section("Terrain  (1-9, E erases)")
 	for i, t := range a.ed.World.Defs.Terrains {
 		key := ""
 		if i < 9 {
@@ -88,18 +88,18 @@ func (a *app) panel() {
 			swatch = t.SheetBase + world.FullState
 		}
 		a.atlas.DrawRect(swatch, 0, rl.NewRectangle(x+4, y+3, rowH-6, rowH-6))
-		label(key+t.Name, x+rowH+6, y+5, colText)
+		label(key+t.Name, x+rowH+6, y+(rowH-fontSize)/2, colText)
 		y += rowH + 4
 	}
 	if btn("Eraser  (E)", a.paint == 0) {
 		a.paint = 0
 	}
 
-	heading("Tool  (B / R / F)")
+	section("Tool  (B / R / F)")
 	if i := row(toolNames, int(a.tool), nil); i >= 0 {
 		a.tool = tool(i)
 	}
-	heading("Brush size  ([ / ])")
+	section("Brush size  ([ / ])")
 	sizes := make([]string, len(edit.BrushSizes))
 	for i, s := range edit.BrushSizes {
 		sizes[i] = fmt.Sprint(s)
@@ -108,7 +108,7 @@ func (a *app) panel() {
 		a.brush = i
 	}
 
-	heading("View")
+	section("View")
 	if btn("Grid  (G)", a.grid) {
 		a.grid = !a.grid
 	}
@@ -118,7 +118,7 @@ func (a *app) panel() {
 		a.jumpDialog()
 	}
 
-	heading("Edit")
+	section("Edit")
 	switch row([]string{"Undo", "Redo"}, -1, []bool{a.ed.CanUndo(), a.ed.CanRedo()}) {
 	case 0:
 		a.undo()
@@ -138,7 +138,7 @@ func (a *app) panel() {
 		if a.isErr {
 			col = colError
 		}
-		for _, l := range wrap(a.status, int32(w)) {
+		for _, l := range wrap(a.status, w) {
 			y += label(l, x, y, col)
 		}
 	}
