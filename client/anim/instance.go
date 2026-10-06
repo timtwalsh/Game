@@ -22,6 +22,36 @@ type Character struct {
 	Name       string
 	Controller string
 	Animations map[string]*Animation
+
+	// Scale is world pixels per animation pixel; 0 when the file doesn't
+	// set one. Footprint (nil if unset) is the rectangle that blocks
+	// movement and Hitboxes are where the character can be hit: shapes
+	// fixed to the animation's origin, in animation pixels, shared by every
+	// animation (docs/ANI_MAKER_SPEC.md, "Footprint and hitboxes"). The
+	// game doesn't use the footprint or hitboxes yet.
+	Scale     float32
+	Footprint *Box
+	Hitboxes  []Hitbox
+}
+
+// Box is a rectangle relative to the animation's origin, in animation
+// pixels: X, Y its top-left. An oval or circle is the one inscribed in it.
+type Box struct{ X, Y, W, H float32 }
+
+// Shape is a hitbox's shape.
+type Shape int
+
+const (
+	ShapeRect Shape = iota
+	ShapeOval
+	ShapeCircle
+)
+
+// Hitbox is one named shape where a character can be hit.
+type Hitbox struct {
+	Name  string
+	Shape Shape
+	Box   Box
 }
 
 type Animation struct {

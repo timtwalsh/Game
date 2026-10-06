@@ -81,11 +81,22 @@ type CanvasWidget struct {
 	OnPartDragStart func(partIdx int)
 	OnPartDragged   func(partIdx int, dx, dy float32)
 	OnPartDragEnd   func()
+
+	// Character is the character whose footprint and hitboxes are drawn
+	// (canvas_shapes.go), or returns nil when the open track isn't one of
+	// a character's animations. SelectedShape is the one a drag edits.
+	Character     func() *editor.Character
+	SelectedShape ShapeRef
+	// OnShapeEdited fires while the selected shape is dragged, with its new
+	// box; OnShapeEditEnd when the drag ends.
+	OnShapeEdited  func(ShapeRef, editor.Box)
+	OnShapeEditEnd func()
+	shapeDrag      *shapeDrag
 }
 
 func NewCanvasWidget(project *editor.Project) *CanvasWidget {
 	cw := &CanvasWidget{project: project, zoom: 4.0, showGrid: true, draggingPartIdx: -1,
-		hoverPartIdx: -1}
+		hoverPartIdx: -1, SelectedShape: NoShape}
 	cw.ExtendBaseWidget(cw)
 	return cw
 }
@@ -222,12 +233,18 @@ func (cw *CanvasWidget) partExtents() map[*editor.Part]partExtent {
 }
 
 // contentBounds is what the view centres on, in animation coordinates: the
-// origin and the reference box, plus every keyframe of every part in the
-// active direction (not just the current frame, so it doesn't matter where
-// the playhead is when the view is centred).
+// origin and the reference box (or the character's footprint and
+// hitboxes), plus every keyframe of every part in the active direction
+// (not just the current frame, so it doesn't matter where the playhead is
+// when the view is centred).
 func (cw *CanvasWidget) contentBounds(ext map[*editor.Part]partExtent) (minX, minY, maxX, maxY float32) {
-	refW, refH := cw.refBox()
-	minX, minY, maxX, maxY = 0, 0, refW, refH
+	if c := cw.shapeCharacter(); c != nil && c.Footprint != nil {
+		minX, minY, maxX, maxY = 0, 0, 0, 0
+	} else {
+		refW, refH := cw.refBox()
+		minX, minY, maxX, maxY = 0, 0, refW, refH
+	}
+	minX, minY, maxX, maxY = cw.shapeBounds(minX, minY, maxX, maxY)
 
 	if dir := cw.project.ActiveDirection(); dir != nil {
 		for _, part := range cw.project.CurrentTrack.Parts {
@@ -405,7 +422,7 @@ var _ desktop.Mouseable = (*CanvasWidget)(nil)
 // fixed step per notch. Not while a part is held: its drag is measured in
 // the view it started in.
 func (cw *CanvasWidget) Scrolled(e *fyne.ScrollEvent) {
-	if cw.draggingPartIdx >= 0 {
+	if cw.draggingPartIdx >= 0 || cw.shapeDrag != nil {
 		return
 	}
 	switch {
@@ -434,8 +451,12 @@ func (cw *CanvasWidget) MouseUp(e *desktop.MouseEvent) {
 // canvas and whatever is selected; a left-button drag moves the selected
 // part.
 func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
-	if cw.panning && cw.draggingPartIdx < 0 {
+	if cw.panning && cw.draggingPartIdx < 0 && cw.shapeDrag == nil {
 		cw.panBy(e.Dragged)
+		return
+	}
+	if cw.shapeDrag != nil {
+		cw.dragShape(e.Position)
 		return
 	}
 	if cw.draggingPartIdx < 0 {
@@ -444,6 +465,12 @@ func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 		// Position instead would test a point a few pixels off, and miss a
 		// small part grabbed near its edge.
 		start := e.Position.Subtract(fyne.NewPos(e.Dragged.DX, e.Dragged.DY))
+		// The selected footprint or hitbox comes first: it's selected in
+		// the character panel on purpose, and is often drawn over a part.
+		if cw.startShapeDrag(start) {
+			cw.dragShape(e.Position)
+			return
+		}
 		cw.draggingPartIdx = cw.dragTarget(start)
 		if cw.draggingPartIdx < 0 {
 			return
@@ -467,6 +494,12 @@ func (cw *CanvasWidget) Dragged(e *fyne.DragEvent) {
 }
 
 func (cw *CanvasWidget) DragEnd() {
+	if cw.shapeDrag != nil {
+		cw.shapeDrag = nil
+		if cw.OnShapeEditEnd != nil {
+			cw.OnShapeEditEnd()
+		}
+	}
 	if cw.draggingPartIdx >= 0 && cw.OnPartDragEnd != nil {
 		cw.OnPartDragEnd()
 	}
@@ -559,20 +592,10 @@ func (r *canvasRenderer) buildScene() []fyne.CanvasObject {
 		objs = append(objs, r.buildGrid(size, origin)...)
 	}
 
-	// Character-sized reference box, filling the crosshair's bottom-right
-	// quadrant — parts are placed relative to it.
-	refW, refH := cw.refBox()
-	refRect := canvas.NewRectangle(color.RGBA{0, 0, 0, 0})
-	refRect.StrokeColor = ColorRefBox
-	refRect.StrokeWidth = 1
-	refRect.Resize(fyne.NewSize(refW*cw.zoom, refH*cw.zoom))
-	refRect.Move(origin)
-	objs = append(objs, refRect)
-
-	refLabel := canvas.NewText(fmt.Sprintf("%.0fx%.0f", refW, refH), ColorRefBox)
-	refLabel.TextSize = 9
-	refLabel.Move(fyne.NewPos(origin.X+2, origin.Y+refH*cw.zoom+2))
-	objs = append(objs, refLabel)
+	// The character's footprint behind the art, or, without one, the
+	// track's character-sized reference box in the crosshair's
+	// bottom-right quadrant.
+	objs = append(objs, r.buildFootprint(origin)...)
 
 	// Origin crosshair, spanning the whole canvas so 0,0 stays findable
 	// while it's anywhere in view.
@@ -587,7 +610,7 @@ func (r *canvasRenderer) buildScene() []fyne.CanvasObject {
 	objs = append(objs, hLine, vLine)
 
 	if cw.project.ActiveDirection() == nil {
-		return objs
+		return append(objs, r.buildHitboxes(origin)...)
 	}
 
 	draws := cw.resolvedDrawsAt(ext, origin)
@@ -604,6 +627,8 @@ func (r *canvasRenderer) buildScene() []fyne.CanvasObject {
 		selected := sel != nil && sel.PartIndex == d.partIdx
 		objs = append(objs, r.drawPart(d, origin, selected)...)
 	}
+	// Hitboxes over the art, so they show where it's covered.
+	objs = append(objs, r.buildHitboxes(origin)...)
 	// The hovered part's outline follows it as the animation plays.
 	h := cw.hoverOutline()
 	h.on = false

@@ -74,3 +74,49 @@ func TestCharacterAddAndSelectAnimations(t *testing.T) {
 		t.Error("closing the character should keep the track and drop its markers")
 	}
 }
+
+// The character's footprint and hitboxes show on the canvas only while one
+// of its animations is open, and a drag there saves the .anichar.
+func TestCharacterShapesOnCanvas(t *testing.T) {
+	dir := t.TempDir()
+	walk := editor.NewTrack("ogre_walk")
+	walkPath := filepath.Join(dir, "ogre_walk.anif")
+	if err := file.SaveTrack(walk, walkPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	a := testApp(t)
+	a.build()
+	charPath := filepath.Join(dir, "ogre.anichar")
+	c := editor.NewCharacter("ogre")
+	c.SetFootprint(editor.Box{X: -10, Y: -5, W: 20, H: 10})
+	a.openCharacter(c, charPath)
+	if a.canvasWidget.Character() != nil {
+		t.Error("shapes show while no animation of the character is open")
+	}
+	if !a.addAnimation("walk", walkPath) {
+		t.Fatal("adding walk failed")
+	}
+	a.selectAnimation("walk")
+	if a.canvasWidget.Character() != c {
+		t.Fatal("shapes don't show while the character's walk is open")
+	}
+
+	a.characterPanel.OnSelectShape(ui.FootprintRef())
+	if !a.canvasWidget.SelectedShape.Footprint {
+		t.Fatal("selecting the footprint in the panel didn't select it on the canvas")
+	}
+	a.canvasWidget.OnShapeEdited(ui.FootprintRef(), editor.Box{X: -12, Y: -4, W: 24, H: 8})
+	a.canvasWidget.OnShapeEditEnd()
+	saved, err := file.LoadCharacter(charPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Footprint == nil || *saved.Footprint != (editor.Box{X: -12, Y: -4, W: 24, H: 8}) {
+		t.Errorf("saved footprint = %+v", saved.Footprint)
+	}
+
+	a.onCloseCharacter()
+	if a.canvasWidget.Character() != nil || !a.canvasWidget.SelectedShape.IsNone() {
+		t.Error("closing the character left its shapes on the canvas")
+	}
+}

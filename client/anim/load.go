@@ -90,7 +90,26 @@ type tomlSheet struct {
 type tomlCharacter struct {
 	Name       string                       `toml:"name"`
 	Controller string                       `toml:"controller"`
+	Scale      float32                      `toml:"scale"`
+	Footprint  *tomlBox                     `toml:"footprint"`
+	Hitboxes   []tomlHitbox                 `toml:"hitboxes"`
 	Animations map[string]tomlCharAnimation `toml:"animations"`
+}
+
+type tomlBox struct {
+	X float32 `toml:"x"`
+	Y float32 `toml:"y"`
+	W float32 `toml:"w"`
+	H float32 `toml:"h"`
+}
+
+type tomlHitbox struct {
+	Name  string  `toml:"name"`
+	Shape string  `toml:"shape"`
+	X     float32 `toml:"x"`
+	Y     float32 `toml:"y"`
+	W     float32 `toml:"w"`
+	H     float32 `toml:"h"`
 }
 
 type tomlCharAnimation struct {
@@ -128,7 +147,26 @@ func (l *Library) LoadCharacter(path string) (*Character, error) {
 	if _, err := toml.DecodeFile(path, &tc); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	c := &Character{Name: tc.Name, Controller: tc.Controller, Animations: map[string]*Animation{}}
+	c := &Character{Name: tc.Name, Controller: tc.Controller, Scale: tc.Scale, Animations: map[string]*Animation{}}
+	if tc.Scale < 0 {
+		return nil, fmt.Errorf("%s: scale %g must be positive", path, tc.Scale)
+	}
+	if b := tc.Footprint; b != nil {
+		if b.W <= 0 || b.H <= 0 {
+			return nil, fmt.Errorf("%s: footprint size %gx%g must be positive", path, b.W, b.H)
+		}
+		c.Footprint = &Box{X: b.X, Y: b.Y, W: b.W, H: b.H}
+	}
+	for _, th := range tc.Hitboxes {
+		kind, err := parseShape(th.Shape)
+		if err != nil {
+			return nil, fmt.Errorf("%s: hitbox %q: %w", path, th.Name, err)
+		}
+		if th.W <= 0 || th.H <= 0 {
+			return nil, fmt.Errorf("%s: hitbox %q: size %gx%g must be positive", path, th.Name, th.W, th.H)
+		}
+		c.Hitboxes = append(c.Hitboxes, Hitbox{Name: th.Name, Shape: kind, Box: Box{X: th.X, Y: th.Y, W: th.W, H: th.H}})
+	}
 	for name, ta := range tc.Animations {
 		mode, err := parseMode(ta.Mode)
 		if err != nil {
@@ -500,4 +538,17 @@ func parseDirMode(s string) NestedDirMode {
 		return NestedDirPerKeyframe
 	}
 	return NestedDirInherit
+}
+
+// parseShape reads a hitbox shape as written in an .anichar; "" is rect.
+func parseShape(s string) (Shape, error) {
+	switch s {
+	case "", "rect":
+		return ShapeRect, nil
+	case "oval":
+		return ShapeOval, nil
+	case "circle":
+		return ShapeCircle, nil
+	}
+	return ShapeRect, fmt.Errorf("unknown shape %q (want rect, oval or circle)", s)
 }

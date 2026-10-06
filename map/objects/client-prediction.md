@@ -191,7 +191,8 @@ loads the real baby assets (modes, sheets, direction mapping, cell
 stepping, loop wrap, jump interpolation, prop fallback);
 `client/character_test.go` covers the state machine (one-shots run to
 the end, back-to-back jumps bump `AnimSeq`, remote restarts on seq,
-unknown states show idle).
+unknown states show idle). `client/anim/anim_test.go` `TestLoadCharacterShapes` covers the
+.anichar footprint, hitboxes and scale (read, not yet used by the game).
 `client/render/render_test.go` covers camera zoom/clamp, visible range,
 screen-to-world, pixel snapping, layer passes, source rects with flips,
 and ysort items sorting with players (no window needed; atlas loading

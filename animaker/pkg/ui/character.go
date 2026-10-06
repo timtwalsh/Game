@@ -30,16 +30,21 @@ type CharacterPanel struct {
 	OnChanged func() // mode, markers or controller edited
 	// PlayheadMs is where "Add Marker" places a new marker.
 	PlayheadMs func() uint32
+	// Selected is the footprint or hitbox selected for dragging on the
+	// canvas; OnSelectShape fires when it changes (character_shapes.go).
+	Selected      ShapeRef
+	OnSelectShape func(ShapeRef)
 
 	title      *widget.Label
 	controller *selectAllEntry
 	list       *fyne.Container
 	openBox    *fyne.Container
+	shapesBox  *fyne.Container
 	root       fyne.CanvasObject
 }
 
 // NewCharacterPanel returns an empty panel; Build makes its widgets.
-func NewCharacterPanel() *CharacterPanel { return &CharacterPanel{} }
+func NewCharacterPanel() *CharacterPanel { return &CharacterPanel{Selected: NoShape} }
 
 // Build assembles the panel.
 func (cp *CharacterPanel) Build() fyne.CanvasObject {
@@ -64,11 +69,14 @@ func (cp *CharacterPanel) Build() fyne.CanvasObject {
 	})
 	cp.list = container.NewVBox()
 	cp.openBox = container.NewVBox()
+	cp.shapesBox = container.NewVBox()
 	cp.root = container.NewVScroll(container.NewVBox(
 		cp.title,
 		container.NewBorder(nil, nil, widget.NewLabel("Controller"), nil, cp.controller),
 		add,
 		cp.list,
+		widget.NewSeparator(),
+		cp.shapesBox,
 		widget.NewSeparator(),
 		cp.openBox,
 	))
@@ -83,11 +91,13 @@ func (cp *CharacterPanel) Refresh() {
 	}
 	cp.list.RemoveAll()
 	cp.openBox.RemoveAll()
+	cp.shapesBox.RemoveAll()
 	c := cp.Character
 	if c == nil {
 		cp.title.SetText("CHARACTER")
 		return
 	}
+	cp.buildShapes()
 	cp.title.SetText("CHARACTER: " + c.Name)
 	if cp.controller.Text != c.Controller {
 		cp.controller.SetText(c.Controller)

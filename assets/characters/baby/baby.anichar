@@ -1,5 +1,6 @@
 name = "baby"
 controller = "baby_controller"
+scale = 0.3
 
 [animations]
   [animations.dead]

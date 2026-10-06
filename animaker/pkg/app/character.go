@@ -31,10 +31,52 @@ func (a *Application) buildCharacterPanel() {
 	cp.OnChanged = func() {
 		a.saveCharacter()
 		a.refreshCharacterMarkers()
+		a.canvasWidget.Refresh() // a footprint or hitbox may have changed
 	}
 	cp.PlayheadMs = func() uint32 { return a.Project.Playback.ElapsedMs }
+	cp.OnSelectShape = func(r ui.ShapeRef) {
+		a.canvasWidget.SelectedShape = r
+		a.canvasWidget.Refresh()
+	}
 	a.characterPanel = cp
 	a.characterView = cp.Build()
+
+	// The character's footprint and hitboxes show on the canvas while one
+	// of its animations is open, and the selected one drags there. A drag
+	// edits the character live and saves when it ends, like the panel.
+	a.canvasWidget.Character = func() *editor.Character {
+		if a.openAnimation() == nil {
+			return nil
+		}
+		return a.character
+	}
+	a.canvasWidget.OnShapeEdited = func(r ui.ShapeRef, b editor.Box) {
+		if a.character == nil {
+			return
+		}
+		if r.Footprint {
+			a.character.SetFootprint(b)
+		} else if r.Hitbox >= 0 && r.Hitbox < len(a.character.Hitboxes) {
+			h := a.character.Hitboxes[r.Hitbox]
+			h.Box = b
+			a.character.SetHitbox(r.Hitbox, h)
+		}
+		a.canvasWidget.Refresh()
+	}
+	a.canvasWidget.OnShapeEditEnd = func() {
+		if a.character == nil {
+			return
+		}
+		a.saveCharacter()
+		a.characterPanel.Refresh()
+	}
+}
+
+// selectShape selects a footprint or hitbox in both the panel and the
+// canvas.
+func (a *Application) selectShape(r ui.ShapeRef) {
+	a.characterPanel.Selected = r
+	a.canvasWidget.SelectedShape = r
 }
 
 // openAnimation is the character's animation whose track is open, or nil.
@@ -134,13 +176,17 @@ func (a *Application) onOpenCharacter() {
 
 func (a *Application) openCharacter(c *editor.Character, path string) {
 	a.character, a.characterPath = c, path
+	a.selectShape(ui.NoShape)
 	a.refreshCharacter()
+	a.canvasWidget.Refresh()
 }
 
 // onCloseCharacter hides the character; the open track stays open.
 func (a *Application) onCloseCharacter() {
 	a.character, a.characterPath = nil, ""
+	a.selectShape(ui.NoShape)
 	a.refreshCharacter()
+	a.canvasWidget.Refresh()
 }
 
 // selectAnimation opens an animation's track, asking first about unsaved

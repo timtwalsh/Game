@@ -570,3 +570,71 @@ func TestSelfNestingStops(t *testing.T) {
 		t.Errorf("self-nesting drew %d sprites, want one per level up to %d", len(s), maxNestDepth)
 	}
 }
+
+// The game reads the footprint, hitboxes and scale the animaker writes to
+// an .anichar.
+func TestLoadCharacterShapes(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"baby_walk.anif", "sprite.sprsh", "sprite.png"} {
+		data, err := os.ReadFile(filepath.Join("../../assets/characters/baby", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, f), data, 0o644)
+	}
+	path := filepath.Join(dir, "ogre.anichar")
+	os.WriteFile(path, []byte(`name = "ogre"
+scale = 0.5
+
+[footprint]
+x = -20.0
+y = -6.0
+w = 40.0
+h = 12.0
+
+[[hitboxes]]
+name = "body"
+shape = "oval"
+x = -30.0
+y = -90.0
+w = 60.0
+h = 90.0
+
+[[hitboxes]]
+name = "head"
+shape = "circle"
+x = -10.0
+y = -110.0
+w = 20.0
+h = 20.0
+
+[animations.walk]
+anif = "baby_walk.anif"
+mode = "loop"
+`), 0o644)
+	c, err := NewLibrary().LoadCharacter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Scale != 0.5 || c.Footprint == nil || *c.Footprint != (Box{-20, -6, 40, 12}) {
+		t.Errorf("scale %v footprint %+v", c.Scale, c.Footprint)
+	}
+	if len(c.Hitboxes) != 2 || c.Hitboxes[0] != (Hitbox{"body", ShapeOval, Box{-30, -90, 60, 90}}) || c.Hitboxes[1].Shape != ShapeCircle {
+		t.Errorf("hitboxes %+v", c.Hitboxes)
+	}
+
+	bad := strings.Replace(mustRead(t, path), `shape = "oval"`, `shape = "star"`, 1)
+	os.WriteFile(path, []byte(bad), 0o644)
+	if _, err := NewLibrary().LoadCharacter(path); err == nil {
+		t.Error("an unknown hitbox shape loaded")
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

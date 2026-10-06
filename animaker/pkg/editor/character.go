@@ -19,6 +19,17 @@ type Character struct {
 	Controller string
 	// Animations in name order (kept sorted by AddAnimation/RenameAnimation).
 	Animations []*CharAnim
+
+	// Scale is game pixels per animation pixel: how big the character is
+	// drawn in the world. 0 means not set; the editor then shows sizes in
+	// animation pixels only.
+	Scale float32
+	// Footprint is the rectangle that blocks movement, relative to the
+	// origin; nil when not set. Hitboxes are where the character can be
+	// hit. Both are fixed to the origin and shared by every animation
+	// (shapes.go).
+	Footprint *Box
+	Hitboxes  []Hitbox
 }
 
 // CharAnim is one named animation of a character.

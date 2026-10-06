@@ -624,6 +624,46 @@ feedback after using the previous version:
     - `viewBounds`, quantizing and `SetViewFrozen` (entry 8) are gone:
       the origin only moves when the view does, so a drag can't shift it.
 
+28. **Footprint and hitboxes on the `.anichar`** (2026-10-06). Requested:
+    the background box should show the character's real footprint, and
+    artists should define hitboxes as one or more simple shapes not tied
+    to sprites or tracks. Decided with the user: one fixed footprint per
+    character (artists keep art within it; animations are authored in
+    place) and hitboxes that are not the footprint.
+    - Model `editor/shapes.go`: `Character.Footprint *Box` (the rect that
+      blocks movement), `Character.Hitboxes []Hitbox` (named
+      rect/oval/circle; a circle's box is kept square), `Character.Scale`
+      (game px per animation px, 0 = unset). Shapes are in animation
+      pixels relative to the origin, the keyframes' space. `Box.Moved`,
+      `Box.Resized` (corner handle, opposite corner fixed, min 1px,
+      optional square), `Box.Contains` (ovals by their ellipse).
+    - File `file/anichar.go`: `scale` (`omitzero`), `[footprint]` x/y/w/h,
+      `[[hitboxes]]` name/shape/x/y/w/h; a character without them writes
+      none. Load refuses non-positive sizes, unknown shapes, bad or
+      duplicate names, a negative scale. `client/anim/load.go` mirrors it.
+    - Canvas (`ui/canvas_shapes.go`): while one of the open character's
+      animations is open (`CanvasWidget.Character`), the footprint is
+      drawn filled behind the art in place of the track's reference box,
+      labelled with its size (and game px when there's a scale); hitboxes
+      are outlined over the art with their names (ovals as line segments:
+      Fyne's circle in a non-square box is a rounded rect). The shape
+      selected in the panel shows a frame and corner handles over the art;
+      dragging it moves it, dragging a handle resizes it, ahead of part
+      dragging. Edits are whole pixels, applied live
+      (`OnShapeEdited`) and saved on drag end (`OnShapeEditEnd`).
+      Colours are `color.NRGBA`: translucent `color.RGBA` values that
+      aren't premultiplied drew text in the wrong colour.
+    - Panel (`ui/character_shapes.go`): a FOOTPRINT & HITBOXES section in
+      the character panel - scale, the footprint (select, x/y/w/h, game
+      size, remove / add) and each hitbox (select, name, shape, x/y/w/h,
+      remove), plus Add Hitbox. Fields apply on Enter or focus loss; rows
+      find their hitbox again by name. Saved on every change, like
+      markers, so not on the track's undo stack.
+    - `assets/characters/baby/baby.anichar` got `scale = 0.3` (the value
+      the client hard-coded); the client now takes a character's scale
+      from its `.anichar` when set. The baby has no footprint or hitboxes
+      yet - drawing them is the artist's call.
+
 ## Shape
 
 - Entry point wires a dark editor theme into a Fyne app and delegates to
@@ -778,7 +818,9 @@ feedback after using the previous version:
   its own family, plus its markers (`character.go`).
 - `.anichar` (entry 26): `editor/character.go`, `file/anichar.go`,
   `app/character.go` (open/add/select, saves on every change),
-  `ui/character.go` (the panel and its dialogs).
+  `ui/character.go` (the panel and its dialogs). Footprint, hitboxes and
+  scale (entry 28): `editor/shapes.go`, `ui/canvas_shapes.go`,
+  `ui/character_shapes.go`.
 - `pkg/applog/` — per-session log files and crash reporting.
 
 ## Known gaps (not bugs)
@@ -941,6 +983,20 @@ markers), `pkg/file/anichar_test.go` (round trip, the issue's example
 file, bad input refused), `pkg/lint/character_test.go`, and
 `pkg/app/character_test.go` (add from rig, select, markers on the
 timeline, close).
+
+Added with entry 28: `pkg/editor/shapes_test.go` (shape names, resize
+from each corner and clamping, square resize, oval containment, hitbox
+names/circles/sizes, footprint, game size), `pkg/file/anichar_shapes_test.go`
+(round trip, nothing written when unset, bad shapes refused),
+`pkg/ui/canvas_shapes_test.go` (drag moves the selected footprint,
+corner resizes a hitbox, unselected shapes don't move, ovals grab by
+their ellipse, circles stay square, footprint replaces the reference box
+with its game size, hitbox names and selection handles over the art,
+view bounds), `pkg/ui/character_shapes_test.go` (select/deselect, add
+and remove, fields apply and refuse a zero size), and
+`TestCharacterShapesOnCanvas` in `pkg/app/character_test.go` (shapes
+only with the character's animation open; a canvas drag saves the
+`.anichar`).
 
 ## See
 

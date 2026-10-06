@@ -13,9 +13,30 @@ import (
 // ---- TOML structure for .anichar files (a Character) ----
 
 type tomlCharacter struct {
-	Name       string                       `toml:"name"`
-	Controller string                       `toml:"controller,omitempty"`
+	Name       string `toml:"name"`
+	Controller string `toml:"controller,omitempty"`
+	// Scale, Footprint and Hitboxes: see editor/shapes.go. Shapes are in
+	// animation pixels relative to the origin.
+	Scale      float32                      `toml:"scale,omitzero"`
+	Footprint  *tomlBox                     `toml:"footprint,omitempty"`
+	Hitboxes   []tomlHitbox                 `toml:"hitboxes,omitempty"`
 	Animations map[string]tomlCharAnimation `toml:"animations"`
+}
+
+type tomlBox struct {
+	X float32 `toml:"x"`
+	Y float32 `toml:"y"`
+	W float32 `toml:"w"`
+	H float32 `toml:"h"`
+}
+
+type tomlHitbox struct {
+	Name  string  `toml:"name"`
+	Shape string  `toml:"shape"`
+	X     float32 `toml:"x"`
+	Y     float32 `toml:"y"`
+	W     float32 `toml:"w"`
+	H     float32 `toml:"h"`
 }
 
 type tomlCharAnimation struct {
@@ -29,7 +50,13 @@ type tomlCharAnimation struct {
 // SaveCharacter writes a character to an .anichar, with each animation's
 // .anif relative to it.
 func SaveCharacter(c *editor.Character, path string) error {
-	tc := tomlCharacter{Name: c.Name, Controller: c.Controller, Animations: map[string]tomlCharAnimation{}}
+	tc := tomlCharacter{Name: c.Name, Controller: c.Controller, Scale: c.Scale, Animations: map[string]tomlCharAnimation{}}
+	if b := c.Footprint; b != nil {
+		tc.Footprint = &tomlBox{b.X, b.Y, b.W, b.H}
+	}
+	for _, h := range c.Hitboxes {
+		tc.Hitboxes = append(tc.Hitboxes, tomlHitbox{h.Name, h.Kind.String(), h.Box.X, h.Box.Y, h.Box.W, h.Box.H})
+	}
 	for _, a := range c.Animations {
 		ta := tomlCharAnimation{Anif: relAnimPath(path, a.AnifPath), Mode: a.Mode.String()}
 		for name, times := range a.MarkerTimes() {
@@ -63,6 +90,27 @@ func LoadCharacter(path string) (*editor.Character, error) {
 		return nil, fmt.Errorf("failed to decode character: %w", err)
 	}
 	c := &editor.Character{Name: tc.Name, Controller: tc.Controller}
+	if tc.Scale < 0 {
+		return nil, fmt.Errorf("scale %g must be positive", tc.Scale)
+	}
+	c.Scale = tc.Scale
+	if b := tc.Footprint; b != nil {
+		if err := c.SetFootprint(editor.Box{X: b.X, Y: b.Y, W: b.W, H: b.H}); err != nil {
+			return nil, err
+		}
+	}
+	for _, th := range tc.Hitboxes {
+		kind, err := editor.ParseShapeKind(th.Shape)
+		if err != nil {
+			return nil, fmt.Errorf("hitbox %q: %w", th.Name, err)
+		}
+		i := len(c.Hitboxes)
+		c.Hitboxes = append(c.Hitboxes, editor.Hitbox{})
+		h := editor.Hitbox{Name: th.Name, Kind: kind, Box: editor.Box{X: th.X, Y: th.Y, W: th.W, H: th.H}}
+		if err := c.SetHitbox(i, h); err != nil {
+			return nil, err
+		}
+	}
 	names := make([]string, 0, len(tc.Animations))
 	for n := range tc.Animations {
 		names = append(names, n)

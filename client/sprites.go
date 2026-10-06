@@ -15,7 +15,7 @@ import (
 // rather than in animaker's formats.
 type lookDef struct {
 	path  string  // the .anichar, relative to the assets folder
-	scale float32 // screen pixels per animation pixel
+	scale float32 // screen pixels per animation pixel; the .anichar's scale, if it sets one, wins
 	// origin is where the animation's (0,0) sits, in animation pixels
 	// from the centre of the player's 16x16 collision box.
 	origin shared.Vec2
@@ -111,6 +111,11 @@ func loadLook(lib *anim.Library, def lookDef) (*characterLook, error) {
 	c, err := lib.LoadCharacter(filepath.Join(dir, filepath.FromSlash(def.path)))
 	if err != nil {
 		return nil, err
+	}
+	// The .anichar's own scale, which the animaker shows sizes with, wins
+	// over the engine-side default.
+	if c.Scale > 0 {
+		def.scale = c.Scale
 	}
 	return &characterLook{lookDef: def, char: c}, nil
 }

@@ -44,7 +44,7 @@ Track (= one .anif file, one named motion — "human_walk.anif")
 - **Track = one file, one motion.** `human_walk.anif`, `human_idle.anif`, `human_attack_sword.anif`, `human_hurt.anif`, `base_wood_torch.anif` are each their own `Track`, complete on its own. A character's tracks can be grouped by an optional [`.anichar`](#anichar-a-character--toml) manifest that *names* them (`walk` plays `human_walk.anif`) and adds play mode and markers, but owns nothing a track needs: the rig and props stay in each `.anif` — see [Props](#props) for why, and what that costs.
 - **Direction is first-class, not a prop, and is a plain int, not a name.** A track declares how many directions it has, `DirectionCount` N = 1, 2, 4, 8 or 16 (16 is the limit), and its keys are `0..N-1` clockwise from north: key k faces k×360/N degrees. The one exception is N=2, for side-scrolling: its keys are 0=E and 1=W (added 2026-10-04). Each is named from the 16-point compass (N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW), so a 4-direction track's keys are N/E/S/W and an 8-direction track's are N, NE, E … NW. **8 is exactly the game's own facing** (`client/prediction.go`: 0=N, 1=NE, 2=E … 7=NW), and 4 is exactly what tracks always used (0=up, 1=right, 2=down, 3=left), so files without a recorded count are read by their keys. A non-directional thing (a treasure chest) has N=1 and just key `0`. (Corrected 2026-10-03, #46: this section used to claim 0=up/1=right/2=down/3=left *was* the game's convention, which never matched the game's 8-way numbering.) Anything consuming a track maps a facing to the nearest direction the track has, by angle; a facing exactly between two (NE on a 4-direction track) goes to the sideways one (E/W).
 - **Parts belong to the Track; Directions hold only keyframes.** The rig's slot list is declared once on the `Track` and exists in every direction. What differs per facing is the *keyframes*, which each `Direction` stores keyed by `Part.ID` — art commonly differs enough by facing (back of the head vs. front of it) that sharing one timeline across directions doesn't hold up, but the slot list itself does hold up. Switching direction in the editor therefore only changes which canvas and keyframes you see. A part with no keyframes in a given direction simply isn't drawn there; posing it in each facing is the artist's work, and which facings they pose is their call. (Corrected 2026-09-19: Parts previously lived *inside* each Direction, which meant importing a sheet produced a part visible only in direction 0 and forced the artist to maintain four parallel copies of the same slot list.)
-- **A Track carries a reference box, not a working area.** `RefBoxWidth`/`RefBoxHeight` (48x64 by default) size a character-sized guide the editor draws from the origin down-right, so parts can be placed relative to a real body footprint. It is *only* a guide: the coordinate space is unbounded and parts may sit at negative coordinates above or left of the origin (a raised sword, a trailing cape). These replaced the `CanvasWidth`/`CanvasHeight` "working area" of 2026-09-18, which implied a bound that never actually existed and forced the editor's canvas to clip rather than grow. Files written with the old `canvas_width`/`canvas_height` keys load with the defaults.
+- **A Track carries a reference box, not a working area.** (Inside a character with a footprint, the canvas shows the footprint instead: see [Footprint and hitboxes](#footprint-and-hitboxes).) `RefBoxWidth`/`RefBoxHeight` (48x64 by default) size a character-sized guide the editor draws from the origin down-right, so parts can be placed relative to a real body footprint. It is *only* a guide: the coordinate space is unbounded and parts may sit at negative coordinates above or left of the origin (a raised sword, a trailing cape). These replaced the `CanvasWidth`/`CanvasHeight` "working area" of 2026-09-18, which implied a bound that never actually existed and forced the editor's canvas to clip rather than grow. Files written with the old `canvas_width`/`canvas_height` keys load with the defaults.
 - **Posing is the artist's to manage.** A new Track starts with a single direction, 0 (changed 2026-10-03: seeding all four left non-directional assets like a torch with three empty facings by accident); the artist sets the direction count (1/2/4/8/16) when the animation needs facings, and the editor moves existing directions to keep their facing. The editor shares *structure* across directions freely (the part list, each part's sheet binding, the props) but never invents *authored content*: it does not copy keyframes between facings on its own, so an animation may legitimately be posed in only some of them. On switching to an empty direction it offers to copy another one — keyframe times only (the default) or the keyframes whole — and copies only if the artist picks one.
 - **A palette drop keys the selected part, or creates a part when nothing is selected.** A rig is normally several pieces visible at once, so dropping a cell from the sheet palette onto the canvas with nothing selected *adds* a part, placed at the origin rather than where it was dropped (since 2026-10-03: a rig's sheets share a grid, so 0,0 is almost always right) (decided 2026-09-24, after dragging repeatedly produced extra keyframes on a single part instead of a rig). With a part selected, the drop instead becomes that part's keyframe at the playhead, so swapping frames of one sprite over time is just scrub-and-drop (decided 2026-10-01, after always-new-part turned each frame into its own part). A cell from a different sheet than the selected part's always makes a new part. Esc or clicking empty canvas deselects. The other jobs have their own gestures: drag a part already on the canvas to move it — which keys it at the playhead if it isn't keyed there yet (decided 2026-10-01; an explicit "New Keyframe" first was required before, and a drag anywhere else silently did nothing) — click a palette tile to re-cell the selected keyframe, and drag a timeline marker to retime it. These are editor interaction rules, not data-model constraints — nothing about `Track.Parts` requires them.
 - **Parts are free-form per Track.** No fixed schema/template of "every character always has exactly these 10 parts" — each `.anif` declares whatever named parts it needs.
@@ -308,6 +308,72 @@ mode = "hold"
 - **controller** names the engine controller that drives the character,
   which decides the animation names it needs (`humanoid`: idle, walk, run,
   sword_attack). Lint will check them once controllers exist in the engine.
+
+#### Footprint and hitboxes
+
+Added 2026-10-06. A character's physical presence belongs to the
+character, not to any one animation:
+
+```toml
+scale = 0.3                 # game pixels per animation pixel (optional)
+
+[footprint]                 # what blocks movement: one rectangle
+x = -24.0                   # top-left, relative to the origin
+y = 60.0
+w = 48.0
+h = 24.0
+
+[[hitboxes]]                # where it can be hit: any number of shapes
+name = "body"
+shape = "oval"              # rect | oval | circle
+x = -45.0
+y = -20.0
+w = 90.0
+h = 105.0
+
+[[hitboxes]]
+name = "head"
+shape = "circle"            # its box is kept square
+x = -45.0
+y = -85.0
+w = 90.0
+h = 90.0
+```
+
+- **Fixed to the origin, shared by every animation, never animated.** The
+  game moves the character and the shapes move with it, so animations are
+  authored in place: a walk bobs over the origin but doesn't travel, and
+  art is kept within the footprint. A movement that really travels (a
+  lunge, a dodge) is the game moving the character, which the server
+  validates, not the art drifting off its footprint. This was weighed
+  against per-animation boxes and against boxes that follow a part; both
+  would make collision depend on animation state, which the server would
+  have to know and trust.
+- **The footprint is not a hitbox.** It's what the character occupies on
+  the ground. Hitboxes are separate so a big creature can have a big
+  presence without blocking a doorway. Neither is tied to sprites or
+  tracks.
+- **Units** are animation pixels relative to the origin, the same space
+  as keyframe positions, so what's drawn is what's saved. `scale` says
+  how big that is in the game; the editor uses it to show sizes in game
+  pixels, and the client draws the character at it.
+- **Nested animations don't contribute.** A torch carried in a hand is a
+  part; only the top-level character has a footprint and hitboxes.
+- **The game doesn't use them yet.** `client/anim` reads them (and the
+  client takes `scale` from here); collision still uses the fixed player
+  box, and combat doesn't exist. Using the footprint for collision means
+  the server checking the whole box rather than one point.
+- A standalone object (a chest, a torch) isn't a character, so it has
+  none of these yet; a footprint for objects is a likely follow-up.
+
+In the editor, while one of the character's animations is open, the
+footprint is drawn behind the art in place of the track's reference box
+(which still shows for tracks outside a character, or before a footprint
+is added), and the hitboxes are outlined over it. The character panel's
+**Footprint & Hitboxes** section edits the scale, adds and removes the
+footprint and hitboxes, and types exact values; selecting one lets it be
+dragged on the canvas, or resized by its corners. Like the rest of the
+manifest it's saved on every change.
 
 In the editor: **File › New Character / Open Character** shows the
 character's animations above the palette. Clicking one opens its track;
