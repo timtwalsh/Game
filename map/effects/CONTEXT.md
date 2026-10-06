@@ -16,8 +16,12 @@ the named card for the full waterfall.
 
 ## Outside this tree
 
-- `build_local.ps1` does not build `cmd/blobtemplate` (a run-when-needed
-  generator, not part of the running game).
+- `build_local.ps1` (updated 2026-10-06) also builds `cmd/blobtemplate`
+  (not launched; a run-when-needed generator), passes the same `-root`
+  (its `-Root` parameter, default the repo) to the server and both
+  clients, and stops before starting clients if the server exits at
+  startup (a broken world is fatal to it). A new flag on the server or
+  client that both must agree on belongs in that shared argument list.
 - `build_local.ps1` builds all three: `./server`, `./client` (from the
   root `game` module), and `animaker` (from within `animaker/`, since
   it's a separate module) — and by default launches all of them. Adding a

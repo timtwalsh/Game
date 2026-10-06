@@ -1,6 +1,19 @@
 param (
-    [switch]$NoRun = $false
+    [switch]$NoRun = $false,
+    # Folder holding world/ and levels/. The server and both clients are all
+    # given the same one: predicting and validating against different maps
+    # would flag honest players. Without those folders the game runs on a
+    # blank grid.
+    [string]$Root = $PSScriptRoot
 )
+
+# Absolute and without a trailing slash: the processes start in the repo
+# root, not the caller's folder, and a trailing backslash would escape the
+# closing quote around the -root argument.
+if (Test-Path $Root) {
+    $Root = (Resolve-Path $Root).Path
+}
+$Root = $Root.TrimEnd('\', '/')
 
 Write-Host "Checking for Go..." -ForegroundColor Cyan
 if (!(Get-Command "go" -ErrorAction SilentlyContinue)) {
@@ -32,6 +45,17 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Building tools..." -ForegroundColor Cyan
+
+# blobtemplate is pure Go in the game module, so it builds whenever the game
+# does. It's a generator for tile templates and placeholder art (see
+# docs/LEVEL_MAKER_SPEC.md step 2), run by hand when needed, so it isn't
+# launched below.
+Write-Host "Building blobtemplate..." -ForegroundColor Cyan
+go build -o "$binDir\blobtemplate.exe" ./cmd/blobtemplate
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "blobtemplate build failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
 # Animaker (Fyne) needs cgo, which needs a real C compiler. Find one even
 # if it's not on PATH, rather than failing outright - this machine has
@@ -72,16 +96,32 @@ Write-Host "Build complete! Binaries are located in .\bin\" -ForegroundColor Gre
 if (-not $NoRun) {
     Write-Host "Starting local test environment..." -ForegroundColor Cyan
 
-    # Start the server
-    Start-Process -FilePath "$binDir\server.exe" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
+    $worldDir = Join-Path $Root "world"
+    $levelsDir = Join-Path $Root "levels"
+    if ((Test-Path $worldDir) -and (Test-Path $levelsDir)) {
+        Write-Host "World: $Root" -ForegroundColor Cyan
+    } else {
+        Write-Host "No world\ and levels\ under $Root - the game will run on a blank grid." -ForegroundColor Yellow
+    }
 
-    # Give the server a moment to start up
+    # Start the server
+    $server = Start-Process -FilePath "$binDir\server.exe" -ArgumentList "-root", "`"$Root`"" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
+    $null = $server.Handle # Windows PowerShell only reports ExitCode if the handle was opened before exit
+
+    # Give the server a moment to start up. A world that's present but
+    # broken makes it exit straight away (its window closes before it can
+    # be read), so check for that rather than starting clients against
+    # nothing.
     Start-Sleep -Seconds 1
+    if ($server.HasExited) {
+        Write-Host "The server exited at startup (code $($server.ExitCode)). Usually that's a broken world - run '.\bin\server.exe -root `"$Root`"' in a terminal to see why, or 'go test ./shared/world' to check the sample levels." -ForegroundColor Red
+        exit 1
+    }
 
     # Start two clients, so you can see multiplayer sync locally
-    Start-Process -FilePath "$binDir\client.exe" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
+    Start-Process -FilePath "$binDir\client.exe" -ArgumentList "-root", "`"$Root`"" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
     Start-Sleep -Milliseconds 500
-    Start-Process -FilePath "$binDir\client.exe" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
+    Start-Process -FilePath "$binDir\client.exe" -ArgumentList "-root", "`"$Root`"" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
 
     # Start every tool that built successfully
     if ($animakerOk) {

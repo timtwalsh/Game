@@ -42,10 +42,17 @@ integration is not wired up in code — see [map/effects/CONTEXT.md](map/effects
 ## Build
 
 ```powershell
-.\build_local.ps1          # builds bin\server.exe, bin\client.exe, bin\animaker.exe,
-                            # then launches server + 2 test clients + animaker
+.\build_local.ps1          # builds bin\server.exe, bin\client.exe, bin\blobtemplate.exe,
+                            # bin\animaker.exe, then launches server + 2 test clients + animaker
 .\build_local.ps1 -NoRun   # build only, don't launch anything
+.\build_local.ps1 -Root D:\other-world   # play a different world/ + levels/ (default: the repo)
 ```
+
+The server and both clients are given the same `-root`, since predicting
+and validating against different maps would flag honest players. If the
+server exits within a second of starting (usually a broken world), the
+script stops and says how to see why instead of launching clients.
+`blobtemplate` is built but not launched; it's a generator run by hand.
 
 Animaker is built as one of the "tools" in the same script (from within
 `animaker/`, since it's a separate module). It needs cgo (`CGO_ENABLED=1`)
