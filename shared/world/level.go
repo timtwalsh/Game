@@ -53,6 +53,7 @@ func DefaultLayers() []LayerInfo {
 type GroundGrid struct {
 	Terrain []uint8  // 0 = empty
 	Tile    []uint16 // 0 = none
+	Mid     []uint16 // a lower terrain's edge tile between Under and Tile; 0 = none
 	Under   []uint16 // what shows through Tile's transparent parts; 0 = none
 	Flags   []uint8  // GroundLocked
 }
@@ -157,6 +158,7 @@ func (l *Level) allocate() {
 	l.Ground = GroundGrid{
 		Terrain: make([]uint8, n),
 		Tile:    make([]uint16, n),
+		Mid:     make([]uint16, n),
 		Under:   make([]uint16, n),
 		Flags:   make([]uint8, n),
 	}

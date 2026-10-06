@@ -43,7 +43,12 @@ func LoadWorld(dir string, defs *Defs) (*World, error) {
 		if err := w.Add(l); err != nil {
 			return nil, err
 		}
-		Compile(l, defs)
+	}
+	// Ground tiles are derived from terrain, like the properties (D32), so
+	// re-solve on load: a solver fix or an older grid file then never shows
+	// stale transitions. Locked cells are untouched.
+	for _, l := range w.Levels {
+		w.SolveLevel(l)
 	}
 	return w, nil
 }
@@ -219,11 +224,12 @@ func (w *World) SolveBorders(l *Level) []*Level {
 	var changed []*Level
 	for _, n := range w.Neighbours(l) {
 		before := append([]uint16(nil), n.Ground.Tile...)
+		beforeMid := append([]uint16(nil), n.Ground.Mid...)
 		beforeUnder := append([]uint16(nil), n.Ground.Under...)
 		// l's footprint grown by one, in n's local coordinates.
 		x0, y0 := l.Pos.X-1-n.Pos.X, l.Pos.Y-1-n.Pos.Y
 		SolveRect(n, x0, y0, x0+l.W+2, y0+l.H+2, w.SourceFor(n), defs)
-		if !slices.Equal(before, n.Ground.Tile) || !slices.Equal(beforeUnder, n.Ground.Under) {
+		if !slices.Equal(before, n.Ground.Tile) || !slices.Equal(beforeMid, n.Ground.Mid) || !slices.Equal(beforeUnder, n.Ground.Under) {
 			Compile(n, defs)
 			changed = append(changed, n)
 		}

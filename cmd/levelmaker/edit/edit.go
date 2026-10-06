@@ -19,18 +19,19 @@ import (
 type Cell struct {
 	Terrain uint8
 	Tile    uint16
+	Mid     uint16
 	Under   uint16
 	Flags   uint8
 }
 
 func cellAt(l *world.Level, i int) Cell {
 	g := &l.Ground
-	return Cell{g.Terrain[i], g.Tile[i], g.Under[i], g.Flags[i]}
+	return Cell{g.Terrain[i], g.Tile[i], g.Mid[i], g.Under[i], g.Flags[i]}
 }
 
 func setCell(l *world.Level, i int, c Cell) {
 	g := &l.Ground
-	g.Terrain[i], g.Tile[i], g.Under[i], g.Flags[i] = c.Terrain, c.Tile, c.Under, c.Flags
+	g.Terrain[i], g.Tile[i], g.Mid[i], g.Under[i], g.Flags[i] = c.Terrain, c.Tile, c.Mid, c.Under, c.Flags
 }
 
 // change is one cell's before and after across a stroke.

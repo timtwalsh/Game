@@ -1,6 +1,9 @@
 package world
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // Neighbour bits of an autotile mask.
 const (
@@ -96,9 +99,9 @@ func (s LevelSource) TerrainAt(wx, wy int) (uint8, bool) {
 	return l.TerrainAt(wx-l.Pos.X, wy-l.Pos.Y), false
 }
 
-// SolveCell picks the ground tile and underlay for level-local (x, y).
-// Locked cells (D3) are left alone; they still take part in their
-// neighbours' masks through their terrain.
+// SolveCell picks the ground tile and what draws beneath it for
+// level-local (x, y). Locked cells (D3) are left alone; they still take
+// part in their neighbours' masks through their terrain.
 func SolveCell(l *Level, x, y int, src TerrainSource, defs *Defs) {
 	if !l.In(x, y) {
 		return
@@ -107,45 +110,86 @@ func SolveCell(l *Level, x, y int, src TerrainSource, defs *Defs) {
 	if l.Ground.Flags[i]&GroundLocked != 0 {
 		return
 	}
-	tile, under := solve(l.Ground.Terrain[i], l.Pos.X+x, l.Pos.Y+y, src, defs)
+	tile, mid, under := solve(l.Ground.Terrain[i], l.Pos.X+x, l.Pos.Y+y, src, defs)
 	l.Ground.Tile[i] = tile
+	l.Ground.Mid[i] = mid
 	l.Ground.Under[i] = under
 }
 
-func solve(id uint8, wx, wy int, src TerrainSource, defs *Defs) (tile, under uint16) {
+// solve returns the cell's own tile and the stack beneath it. Every lower
+// terrain around the cell is drawn as it would be here, with its own edge
+// tile, lowest first: under is the lowest drawn terrain's full centre, mid
+// the next one's edge tile. So where grass crosses a dirt/water border the
+// dirt's edge carries on under the grass instead of filling the cell.
+func solve(id uint8, wx, wy int, src TerrainSource, defs *Defs) (tile, mid, under uint16) {
 	t := defs.Terrain(id)
 	if t == nil {
-		return 0, 0 // empty, or a terrain these defs don't know
+		return 0, 0, 0 // empty, or a terrain these defs don't know
 	}
 	if !t.Edges {
-		return t.TileIndex, 0
+		return t.TileIndex, 0, 0
 	}
-	var mask uint8
-	var below *Terrain // highest-priority neighbour that draws under t
-	for _, n := range neighbours {
+	var around [8]*Terrain // nil: empty; void is voidTerrain
+	var lower []*Terrain   // distinct lower terrains, highest first
+	for k, n := range neighbours {
 		nid, void := src.TerrainAt(wx+n.dx, wy+n.dy)
 		if void {
-			mask |= n.bit
+			around[k] = &voidTerrain
 			continue
 		}
 		nt := defs.Terrain(nid)
-		switch {
-		case nt == nil:
-			// Empty: not joined, and nothing to show through.
-		case !nt.Edges || nt.Priority >= t.Priority:
-			mask |= n.bit
-		default:
-			if below == nil || nt.Priority > below.Priority {
-				below = nt
-			}
+		around[k] = nt
+		if nt != nil && nt.Edges && nt.Priority < t.Priority && !slices.Contains(lower, nt) {
+			lower = append(lower, nt)
 		}
 	}
-	tile = t.SheetBase + uint16(StateOf(mask))
-	if below != nil {
-		under = below.SheetBase + FullState
+	slices.SortFunc(lower, func(a, b *Terrain) int { return b.Priority - a.Priority })
+
+	// maskFor is the reduced mask of a terrain at priority p drawn here.
+	maskFor := func(p int) uint8 {
+		var m uint8
+		for k, n := range neighbours {
+			if a := around[k]; a != nil && (!a.Edges || a.Priority >= p) {
+				m |= n.bit
+			}
+		}
+		return ReduceMask(m)
 	}
-	return tile, under
+	above := maskFor(t.Priority)
+	tile = t.SheetBase + uint16(StateOf(above))
+
+	// A lower terrain whose mask matches the one above it is entirely
+	// covered here (it only touches at a corner an edge already hides), so
+	// it's skipped. Masks only grow going down, so the lowest drawn one is
+	// near-full and draws as the plain centre.
+	var drawn []*Terrain // top-down
+	var edge uint8       // mask of drawn[0]
+	for _, lt := range lower {
+		m := maskFor(lt.Priority)
+		if m == above {
+			continue
+		}
+		if len(drawn) == 0 {
+			edge = m
+		}
+		drawn = append(drawn, lt)
+		above = m
+	}
+	switch len(drawn) {
+	case 0:
+	case 1:
+		under = drawn[0].SheetBase + FullState
+	default:
+		// Only one edge layer fits between under and tile; with four or
+		// more terrains around one cell, the lowest ones are dropped.
+		mid = drawn[0].SheetBase + uint16(StateOf(edge))
+		under = drawn[1].SheetBase + FullState
+	}
+	return tile, mid, under
 }
+
+// voidTerrain stands in for world void around a cell: joined to everything.
+var voidTerrain = Terrain{Edges: false}
 
 // SolveRect solves every cell in the level-local rectangle [x0,x1) x
 // [y0,y1), clipped to the level. After painting a cell, solve it and its 8

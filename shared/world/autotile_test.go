@@ -102,13 +102,79 @@ func TestThreeTerrainsMeeting(t *testing.T) {
 	if l.Ground.Under[l.Index(2, 0)] != 0 {
 		t.Error("water is lowest; it should have no underlay")
 	}
-	// Grass with both dirt and water around it takes the higher (dirt).
+	// Grass with both dirt and water around it stacks them: water full,
+	// then dirt's own edge (open to the water on the west), then grass.
 	l = solved(t, d,
 		"wg",
 		"dd",
 	)
-	if got, want := l.Ground.Under[l.Index(1, 0)], 48+uint16(FullState); got != want {
-		t.Errorf("underlay = %d, want the highest lower terrain (dirt) %d", got, want)
+	i := l.Index(1, 0)
+	if got, want := l.Ground.Under[i], 1+uint16(FullState); got != want {
+		t.Errorf("underlay = %d, want water centre %d", got, want)
+	}
+	dirtMask := MaskN | MaskNE | MaskE | MaskSE | MaskS
+	if got, want := l.Ground.Mid[i], 48+uint16(StateOf(dirtMask)); got != want {
+		t.Errorf("mid = %d, want dirt edge %d (mask %08b)", got, want, dirtMask)
+	}
+}
+
+func TestLowerEdgeCarriesOnUnderGrass(t *testing.T) {
+	d := testDefs(t)
+	// Grass crosses a dirt/water border: under each grass cell the lower
+	// terrains continue as they would without it, rather than one of them
+	// filling the cell.
+	l := solved(t, d,
+		"dwd",
+		"ggg",
+		"dwd",
+	)
+	// West grass: dirt above and below, water at its NE/SE corners, so a
+	// dirt piece with water inner corners over water.
+	i := l.Index(0, 1)
+	if got, want := l.Ground.Under[i], 1+uint16(FullState); got != want {
+		t.Errorf("west grass underlay = %d, want water centre %d", got, want)
+	}
+	dirtMask := ReduceMask(MaskN | MaskS | MaskE | MaskW | MaskNW | MaskSW)
+	if got, want := l.Ground.Mid[i], 48+uint16(StateOf(dirtMask)); got != want {
+		t.Errorf("west grass mid = %d, want dirt with water corners %d", got, want)
+	}
+	// Middle grass: only water shows, and the dirt only touches corners
+	// the water edges already cover, so no mid layer.
+	i = l.Index(1, 1)
+	if got, want := l.Ground.Under[i], 1+uint16(FullState); got != want {
+		t.Errorf("middle grass underlay = %d, want water centre %d", got, want)
+	}
+	if l.Ground.Mid[i] != 0 {
+		t.Errorf("middle grass mid = %d, want none", l.Ground.Mid[i])
+	}
+}
+
+func TestDiagonalOnlyLowerTerrainIsNotTheUnderlay(t *testing.T) {
+	d := testDefs(t)
+	// Each grass cell touches dirt only at a corner its open edges already
+	// cover, so what shows through is the water beside it, not the dirt.
+	l := solved(t, d,
+		"wwwww",
+		"wwwww",
+		"wwdww",
+		"wgwgw",
+		"wwwww",
+	)
+	for _, p := range []Point{{1, 3}, {3, 3}} {
+		if got, want := l.Ground.Under[l.Index(p.X, p.Y)], 1+uint16(FullState); got != want {
+			t.Errorf("grass at %v underlay = %d, want water centre %d", p, got, want)
+		}
+	}
+	if got, want := l.Ground.Under[l.Index(2, 2)], 1+uint16(FullState); got != want {
+		t.Errorf("dirt underlay = %d, want water centre %d", got, want)
+	}
+	// A corner between two joined edges does show through.
+	l = solved(t, d,
+		"gg",
+		"gd",
+	)
+	if got, want := l.Ground.Under[l.Index(0, 0)], 48+uint16(FullState); got != want {
+		t.Errorf("grass with an inner dirt corner underlay = %d, want dirt centre %d", got, want)
 	}
 }
 
