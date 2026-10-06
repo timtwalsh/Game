@@ -732,7 +732,7 @@ Logging:        <0.5ms per event (when enabled)
 - [ ] Attack synchronization
 - [ ] Arena/zone management
 ### Phase 4: Tooling
-- [ ] Level editor (designed in `docs/LEVEL_MAKER_SPEC.md`; world model, art templates and game-side loading built, the editor itself is step 5)
+- [x] Level editor (`cmd/levelmaker` v1: terrain painting + autotile, 2026-10-06; hand placement, objects and warps are LEVEL_MAKER_SPEC.md steps 7-8)
 - [x] Animation maker (`animaker/`, partial — see `docs/ANI_MAKER_SPEC.md`)
 - [ ] Asset compiler
 ### Phase 5: Anti-Cheat

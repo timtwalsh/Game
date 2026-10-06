@@ -86,24 +86,28 @@ var missingTile = rl.NewColor(255, 0, 255, 255)
 // Draw draws one tile with its top-left at world pixel (x, y). Flips are
 // ignored for tiles that may not flip (D4).
 func (a *Atlas) Draw(tile uint16, flags uint8, x, y float32) {
+	a.DrawRect(tile, flags, rl.NewRectangle(x, y, shared.TileSize, shared.TileSize))
+}
+
+// DrawRect draws one tile stretched over dst, e.g. a palette swatch.
+func (a *Atlas) DrawRect(tile uint16, flags uint8, dst rl.Rectangle) {
 	if tile == 0 {
 		return
 	}
 	s, cell := a.defs.SheetOf(tile)
 	if s == nil {
-		rl.DrawRectangle(int32(x), int32(y), int32(shared.TileSize), int32(shared.TileSize), missingTile)
+		rl.DrawRectangleRec(dst, missingTile)
 		return
 	}
 	t, ok := a.tex[s.Name]
 	if !ok {
-		rl.DrawRectangle(int32(x), int32(y), int32(shared.TileSize), int32(shared.TileSize), missingTile)
+		rl.DrawRectangleRec(dst, missingTile)
 		return
 	}
 	if !a.defs.MayFlip(tile) {
 		flags &^= world.TileFlipH | world.TileFlipV
 	}
 	cols := max(1, int(t.Width)/int(shared.TileSize))
-	dst := rl.NewRectangle(x, y, shared.TileSize, shared.TileSize)
 	rl.DrawTexturePro(t, SourceRect(cell, cols, flags), dst, rl.Vector2{}, 0, rl.White)
 }
 

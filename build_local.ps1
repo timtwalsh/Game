@@ -50,6 +50,15 @@ Write-Host "Building tools..." -ForegroundColor Cyan
 # does. It's a generator for tile templates and placeholder art (see
 # docs/LEVEL_MAKER_SPEC.md step 2), run by hand when needed, so it isn't
 # launched below.
+# The level maker is in the game module and uses the same raylib as the
+# client, so it builds whenever the client does.
+Write-Host "Building Level maker..." -ForegroundColor Cyan
+go build -o "$binDir\levelmaker.exe" ./cmd/levelmaker
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Level maker build failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 Write-Host "Building blobtemplate..." -ForegroundColor Cyan
 go build -o "$binDir\blobtemplate.exe" ./cmd/blobtemplate
 if ($LASTEXITCODE -ne 0) {
@@ -123,7 +132,11 @@ if (-not $NoRun) {
     Start-Sleep -Milliseconds 500
     Start-Process -FilePath "$binDir\client.exe" -ArgumentList "-root", "`"$Root`"" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
 
-    # Start every tool that built successfully
+    # Start every tool that built successfully. The level maker edits the
+    # same world the game just loaded; restart the server and clients to
+    # play what it saves.
+    Start-Sleep -Milliseconds 500
+    Start-Process -FilePath "$binDir\levelmaker.exe" -ArgumentList "-root", "`"$Root`"" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
     if ($animakerOk) {
         Start-Sleep -Milliseconds 500
         Start-Process -FilePath "$binDir\animaker.exe" -WorkingDirectory (Join-Path $PSScriptRoot "animaker") -WindowStyle Normal -PassThru

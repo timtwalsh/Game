@@ -76,8 +76,9 @@ dense per-layer slices indexed `y*W+x` (D2), not per-cell structs.
   `cmd/blobtemplate` draws the template and placeholders from it, and its
   `TestCommittedPlaceholders` fails until `assets/tiles/` is regenerated.
 - **Blocking flag bits:** stored in grid files; never renumber, only add.
-- **Hits** `cmd/blobtemplate`, `client/` (prediction, `client/render`) and
-  `server/` (validation, spawn) — all import it. A change to `Compile`,
+- **Hits** `cmd/blobtemplate`, `cmd/levelmaker` (edits and saves through
+  it), `client/` (prediction, `client/render`) and `server/` (validation,
+  spawn) — all import it. A change to `Compile`,
   the blocking flags or `SpeedMultiplier` changes what the anti-cheat
   flags; read `server-anticheat.md` first. **Does not hit** `animaker/`.
 

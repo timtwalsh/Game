@@ -1,7 +1,7 @@
 # Level Maker & World Format — Technical Specification
 
 **Version**: 1.0
-**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05, steps 3–4 (game loads, draws and validates against levels) built 2026-10-06** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
+**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05, steps 3–4 (game loads, draws and validates against levels) and 5 (`cmd/levelmaker` v1) built 2026-10-06** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
 **Language**: Go
 **Program**: `cmd/levelmaker` — a separate executable inside `module game`, rendering through the same `client/render` package the client uses
 **Rendering**: raylib (`github.com/gen2brain/raylib-go`), same as the client
@@ -430,7 +430,7 @@ The new UDP message gets a row in [PROTOCOL_REFERENCE.md](PROTOCOL_REFERENCE.md)
 - Undo/redo per stroke.
 - Every error and crash goes to a session log, following the animaker convention.
 
-**Not in v1:** manual tile stamping, flip tools, property overlays and override painting, the `ysort`/`overhead` layers, objects, warps, copy area to new level. (The `isolated` flag is read and honoured by the game from step 1; only the tool that sets it comes later. The `black` terrain can be painted in v1 like any other.)
+**Not in v1:** manual tile stamping, flip tools, property overlays and override painting, the `ysort`/`overhead` layers, objects, warps, copy area to new level. (The `isolated` flag is read and honoured by the game from step 1, and v1's New level dialog can set it. The `black` terrain can be painted in v1 like any other.)
 
 ---
 
@@ -553,15 +553,24 @@ go run ./cmd/blobtemplate -terrain black -placeholder 000000   # edges = false: 
 
 The editing logic lives in a non-raylib package (e.g. `cmd/levelmaker/edit`) so it's testable in CI. The raylib side only draws and routes input.
 
-- [ ] 5.1 **Skeleton**: a raylib window that renders through `client/render`, loads `world/` and `levels/`, and has a level picker. A session log records every error and crash (as animaker does).
-- [ ] 5.2 **UI widgets**: try `raygui` (`github.com/gen2brain/raylib-go/raygui`) for buttons, lists and text fields, after checking it builds with our raylib-go version (v0.60.1). Fallback: a few hand-made immediate-mode widgets. Text fields select their contents when tabbed into (animaker convention).
-- [ ] 5.3 **New level**: name, position, size and isolated, refused with a clear message if it overlaps another level.
-- [ ] 5.4 **View**: the shared camera (D33) in free mode, with pan, zoom, jump-to and a wider zoom range than the game; grid toggle; read-only dimmed strips of neighbouring levels (D16).
-- [ ] 5.5 **Painting**: terrain palette from the definitions; brush sizes 1/3/5, rectangle fill, flood fill and eraser. Each stroke re-solves locally, including across into neighbouring levels held in memory.
-- [ ] 5.6 **Undo/redo** per stroke, storing each changed cell's before and after values (terrain, tile, under, plus any neighbour-level cells touched).
-- [ ] 5.7 **Save**: compile properties, then write the level and any neighbour levels whose border cells changed. Show which files were written; this is open question 2's default until decided. Unsaved-changes marker and confirm-on-quit.
-- [ ] 5.8 Add `levelmaker.exe` to `build_local.ps1` (built and launched with the others).
-- [ ] 5.9 Tests for the edit package: brush and fill results, undo/redo, cross-level stroke, and save then reload being identical.
+**Built 2026-10-06.** `cmd/levelmaker/edit` holds every editing rule (open, new level, paint/erase/rect/flood with local re-solve across level edges, per-stroke undo, save); `cmd/levelmaker` is the raylib UI. Card: [map/objects/levelmaker.md](../map/objects/levelmaker.md). Decisions made while building it:
+- **5.2:** hand-made widgets, not `raygui`, because raygui's text box can't select its contents on focus and these few widgets avoid another cgo dependency.
+- **Creating a level isn't undoable.** Undo covers strokes. A new level re-solves its neighbours' borders straight away (their edges now face empty cells rather than void), so those neighbours are marked unsaved too.
+- **Open question 2 default:** saving writes every changed level, neighbours included, and the status line and session log name every file written, calling out neighbours rewritten for border changes.
+- **It opens on the level holding the spawn**, not the alphabetically first one, since interiors usually sort first.
+- **The session log** follows animaker's (a log per run beside the executable, clean-exit marker, crash detection, the last 20 kept) but doesn't redirect stderr, so an unrecoverable Go fatal error isn't captured; recovered panics are.
+
+Checked by hand on 2026-10-06 under a virtual display: selecting levels, zooming, a 3-wide drag stroke across meadow's east edge re-solving lake's border, undo/redo, Ctrl+S writing both levels, the New level dialog by keyboard, and the unsaved-changes prompt on quit. The game server then loaded the saved world with every border consistent.
+
+- [x] 5.1 **Skeleton**: a raylib window that renders through `client/render`, loads `world/` and `levels/`, and has a level picker. A session log records every error and crash (as animaker does).
+- [x] 5.2 **UI widgets**: try `raygui` (`github.com/gen2brain/raylib-go/raygui`) for buttons, lists and text fields, after checking it builds with our raylib-go version (v0.60.1). Fallback: a few hand-made immediate-mode widgets. Text fields select their contents when tabbed into (animaker convention).
+- [x] 5.3 **New level**: name, position, size and isolated, refused with a clear message if it overlaps another level.
+- [x] 5.4 **View**: the shared camera (D33) in free mode, with pan, zoom, jump-to and a wider zoom range than the game; grid toggle; read-only dimmed strips of neighbouring levels (D16).
+- [x] 5.5 **Painting**: terrain palette from the definitions; brush sizes 1/3/5, rectangle fill, flood fill and eraser. Each stroke re-solves locally, including across into neighbouring levels held in memory.
+- [x] 5.6 **Undo/redo** per stroke, storing each changed cell's before and after values (terrain, tile, under, plus any neighbour-level cells touched).
+- [x] 5.7 **Save**: compile properties, then write the level and any neighbour levels whose border cells changed. Show which files were written; this is open question 2's default until decided. Unsaved-changes marker and confirm-on-quit.
+- [x] 5.8 Add `levelmaker.exe` to `build_local.ps1` (built and launched with the others).
+- [x] 5.9 Tests for the edit package: brush and fill results, undo/redo, cross-level stroke, and save then reload being identical.
 
 ### Step 6: streaming levels from the server (D15)
 
