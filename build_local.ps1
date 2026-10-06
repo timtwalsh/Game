@@ -113,6 +113,15 @@ if (-not $NoRun) {
         Write-Host "No world\ and levels\ under $Root - the game will run on a blank grid." -ForegroundColor Yellow
     }
 
+    # A server left running from an earlier run still holds the port, and
+    # the new one would die on bind - say so rather than blame the world.
+    $holder = Get-NetUDPEndpoint -LocalPort 8080 -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($holder) {
+        $proc = Get-Process -Id $holder.OwningProcess -ErrorAction SilentlyContinue
+        Write-Host "UDP port 8080 is already in use by $($proc.ProcessName) (PID $($holder.OwningProcess)) - probably a server from an earlier run. Close it (Stop-Process -Id $($holder.OwningProcess)) and try again." -ForegroundColor Red
+        exit 1
+    }
+
     # Start the server
     $server = Start-Process -FilePath "$binDir\server.exe" -ArgumentList "-root", "`"$Root`"" -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
     $null = $server.Handle # Windows PowerShell only reports ExitCode if the handle was opened before exit

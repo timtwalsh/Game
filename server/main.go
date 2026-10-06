@@ -204,6 +204,7 @@ func main() {
 		server.board.Event("No world/ and levels/ under %s: running on a blank %dx%d grid", *root, world.FallbackSize, world.FallbackSize)
 	}
 	if err := server.ListenAndServe("0.0.0.0:8080"); err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, "Can't serve:", err)
+		os.Exit(1)
 	}
 }

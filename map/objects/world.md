@@ -22,7 +22,7 @@ dense per-layer slices indexed `y*W+x` (D2), not per-cell structs.
   `Interaction` (`SpeedMultiplier`), per-tile `TileProps`. Blocking flags
   `BlockGround`…`BlockMagic`, `BlockAll`. `shared/world/defs.go`
 - **Level** — `Level{Name, Pos, W, H, Isolated, Layers, Ground, Upper,
-  Overrides, Props, Objects, Hash}`; `Ground` has terrain/tile/under/flags
+  Overrides, Props, Objects, Hash}`; `Ground` has terrain/tile/mid/under/flags
   (`GroundLocked`), each upper layer tile/flags (`TileFlipH/V`).
   `NewLevel`, `SetTerrain` (unlocks), `SetOverride`/`ClearOverride`.
   `shared/world/level.go`, `props.go`
@@ -36,7 +36,10 @@ dense per-layer slices indexed `y*W+x` (D2), not per-cell structs.
   read neighbours through `TerrainSource` (`LevelSource` = one level, void
   outside; `World.SourceFor` = level + neighbours). Void and `edges=false`
   terrains are joined, empty cells are not (D20); locked cells untouched
-  (D3). `shared/world/autotile.go`
+  (D3). Beneath the tile: a stack of the lower terrains each drawn with
+  its own mask, `under` (full centre) + `mid` (one edge layer).
+  `LoadWorld` re-solves every level on load, so stale tiles and v1 grids
+  (no `mid`) never show. `shared/world/autotile.go`
 - **Properties** — `Compile(level, defs)`: blocking = OR of terrain + every
   tile (strictest wins), surface/interaction = topmost tile that declares
   one, else terrain; overrides win; empty/unknown ground blocks all (D30).

@@ -270,10 +270,10 @@ interaction = "normal"
 1. **Neighbour mask.** Each of the 8 neighbours counts as *joined* if it is a world-void cell (D20), has an `edges = false` terrain such as `black`, or its terrain's priority is **≥** T's. A cell whose own terrain has `edges = false` skips the solver and just draws its single tile. Neighbours across a level edge are read from the neighbouring level. Bits are N=1, NE=2, E=4, SE=8, S=16, SW=32, W=64, NW=128.
 2. **Reduce to 47.** A corner bit (NE, SE, SW, NW) is kept only if both edges next to it are also set. For example, NE counts only when N and E are both joined, because otherwise the corner is already covered by an edge. This turns 256 raw masks into exactly 47. *(The designer's solver skipped this step, which is why its tile ids ran to 256.)*
 3. **Pick the tile.** The 47 reduced masks are sorted ascending. A mask's position in that list is its cell on the sheet, so tile = `sheet.base + state`. The template generator draws the same order, so art and solver can't disagree.
-4. **Underlay.** If any neighbour has a lower-priority terrain, the cell also gets an *under* tile: the full centre tile (state 46, mask 255) of the highest-priority such terrain. That's what shows through the transparent parts of T's edge tile. The renderer draws `under`, then `tile`.
+4. **What draws beneath (stacked underlay, 2026-10-06).** Each lower-priority terrain L around the cell is drawn *as it would be here*: its own reduced mask, where a neighbour is joined if it's void, `edges = false`, or priority ≥ L's. Going down from T, a lower terrain whose mask equals the mask of the layer above it is skipped: it only touches at a corner an edge already covers. The lowest terrain left becomes `under` (its full centre tile, state 46), and the next one up becomes `mid` (its edge tile for its mask). The renderer draws `under`, `mid`, then `tile`. So where grass crosses a dirt/water border, the dirt's edge carries on beneath the grass instead of one terrain filling the cell. *(This replaces "the full centre of the highest-priority lower neighbour", which put dirt under grass that only touched dirt diagonally, and broke dirt/water borders under a grass strip.)*
 5. **Locked cells** (D3) are skipped: their tile and underlay are the artist's. They still take part in their neighbours' masks through their terrain.
 
-**Three terrains meeting** (grass over dirt over water): the grass cell gets a dirt underlay and a grass edge, and the dirt cell gets a water underlay and a dirt edge. No three-way tiles are needed. The known artefact: a grass cell diagonally touching water, with dirt on its other sides, shows grass-over-dirt at that corner rather than grass-over-water. Small at 16 px, and fixable with a locked cell. Or, if it matters somewhere, the artist covers it with custom art on a layer above (D3).
+**Three terrains meeting** (grass over dirt over water): a grass cell bordering both gets water under, dirt's edge piece as mid, then its grass edge. A dirt cell gets a water underlay and a dirt edge. No three-way tiles are needed. The known limit: there's one `mid` slot, so with four or more terrains around a single cell the lowest ones are dropped (the second-lowest drawn terrain becomes the full `under`). Fixable with a locked cell. Small at 16 px, and fixable with a locked cell. Or, if it matters somewhere, the artist covers it with custom art on a layer above (D3).
 
 **Re-solving is local.** Painting a cell re-solves that cell and its 8 neighbours, never the whole layer.
 
@@ -363,12 +363,13 @@ dest_y = "32.0"
 
 ```
 "LVLG"            4 bytes magic
-version           u16   = 1
+version           u16   = 2       (1 = no mid section; still read, mid left empty)
 width, height     u32, u32         must match the TOML size
 layer_count       u8               must match the TOML layer list, same order
 ground layer (always layer 0, D23):
   terrain         [w*h]u8          0 = empty
   tile            [w*h]u16         0 = none
+  mid             [w*h]u16         0 = none; a lower terrain's edge tile between under and tile (version 2+)
   under           [w*h]u16         0 = none (locked cells: the hand-picked underlay)
   flags           [w*h]u8          bit0 locked; bits 1-7 reserved (elevation, D11)
 each other layer:
@@ -491,7 +492,7 @@ The server imports this, so no graphics dependencies. Everything after it builds
   - Tests:
     - exactly 47 states exist;
     - a single grass cell in dirt gives the isolated state, and 2×2 grass in dirt gives the four outer corners;
-    - the underlay is the highest-priority lower terrain, and three terrains meeting behaves as described above;
+    - the underlay stack (under + mid) follows the rule above, including a grass strip across a dirt/water border, and three terrains meeting behaves as described above;
     - locked cells are untouched but still count in their neighbours' masks;
     - void counts as joined, and empty cells don't.
 - [x] 1.5 **Property compiler** (`props.go`): `Compile(level, defs)` runs the D30 rules. Blocking = OR of all flags, surface and interaction = topmost tile that declares one, then overrides; empty ground blocks everything. Tests: a fence blocks ground but not jump; a bridge over water becomes wood/normal; a bridge over a blocking chasm still blocks until overridden; an override on one map leaves the other two alone.
@@ -532,7 +533,7 @@ go run ./cmd/blobtemplate -terrain black -placeholder 000000   # edges = false: 
 - [x] 3.1 **`client/render` package** (next to `client/anim`, importable by the editor):
   - a tile atlas that loads sheets and finds the source rect for a global tile index, including flips;
   - the shared camera (D33) in follow mode, tracking the local player (there's no camera today);
-  - culled drawing of the visible cells per layer: ground (under, then tile) and decor;
+  - culled drawing of the visible cells per layer: ground (under, mid, then tile) and decor;
   - `ysort` tiles emitted as sortable items, keyed by the bottom edge of their cell;
   - `overhead` drawn last;
   - background clear colour black instead of `rl.RayWhite`.

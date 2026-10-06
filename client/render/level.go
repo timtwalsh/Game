@@ -162,11 +162,12 @@ func (r *Renderer) drawUpper(view TileRect, pass Pass) {
 	})
 }
 
-// DrawUnder draws the ground (underlay, then tile) and every layer below
+// DrawUnder draws the ground (underlay, mid, then tile) and every layer below
 // the ysort range, such as decor.
 func (r *Renderer) DrawUnder(view TileRect) {
 	r.eachCell(view, func(l *world.Level, i int, x, y float32) {
 		r.Atlas.Draw(l.Ground.Under[i], 0, x, y)
+		r.Atlas.Draw(l.Ground.Mid[i], 0, x, y)
 		r.Atlas.Draw(l.Ground.Tile[i], 0, x, y)
 	})
 	r.drawUpper(view, PassUnder)

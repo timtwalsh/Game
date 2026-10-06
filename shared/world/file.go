@@ -21,8 +21,9 @@ import (
 // FormatVersion is the level TOML's `format` value.
 const FormatVersion = 1
 
-// GridVersion is the grid file's version field.
-const GridVersion = 1
+// GridVersion is the grid file's version field. Version 1 had no ground
+// mid section; it's still read, with mid left empty until re-solved.
+const GridVersion = 2
 
 const gridMagic = "LVLG"
 
@@ -258,10 +259,15 @@ type gridHeader struct {
 	LayerCount uint8
 }
 
-// gridSections lists every grid in file order (docs/LEVEL_MAKER_SPEC.md,
-// "File formats"). Encode and decode both walk it, so they can't disagree.
-func (l *Level) gridSections() []any {
-	s := []any{l.Ground.Terrain, l.Ground.Tile, l.Ground.Under, l.Ground.Flags}
+// gridSections lists every grid in file order for a grid version
+// (docs/LEVEL_MAKER_SPEC.md, "File formats"). Encode and decode both walk
+// it, so they can't disagree.
+func (l *Level) gridSections(version uint16) []any {
+	s := []any{l.Ground.Terrain, l.Ground.Tile}
+	if version >= 2 {
+		s = append(s, l.Ground.Mid)
+	}
+	s = append(s, l.Ground.Under, l.Ground.Flags)
 	for _, u := range l.Upper {
 		s = append(s, u.Tile, u.Flags)
 	}
@@ -286,7 +292,7 @@ func (l *Level) encodeGrid() ([]byte, error) {
 	if err := binary.Write(zw, binary.LittleEndian, hdr); err != nil {
 		return nil, err
 	}
-	for _, s := range l.gridSections() {
+	for _, s := range l.gridSections(GridVersion) {
 		if err := binary.Write(zw, binary.LittleEndian, s); err != nil {
 			return nil, err
 		}
@@ -311,8 +317,8 @@ func (l *Level) decodeGrid(gz []byte) error {
 	if string(hdr.Magic[:]) != gridMagic {
 		return fmt.Errorf("bad magic %q", hdr.Magic[:])
 	}
-	if hdr.Version != GridVersion {
-		return fmt.Errorf("version %d, this build reads %d", hdr.Version, GridVersion)
+	if hdr.Version < 1 || hdr.Version > GridVersion {
+		return fmt.Errorf("version %d, this build reads 1-%d", hdr.Version, GridVersion)
 	}
 	if int(hdr.Width) != l.W || int(hdr.Height) != l.H {
 		return fmt.Errorf("size %dx%d does not match the TOML's %dx%d", hdr.Width, hdr.Height, l.W, l.H)
@@ -320,7 +326,7 @@ func (l *Level) decodeGrid(gz []byte) error {
 	if int(hdr.LayerCount) != len(l.Layers) {
 		return fmt.Errorf("%d layers, the TOML lists %d", hdr.LayerCount, len(l.Layers))
 	}
-	for _, s := range l.gridSections() {
+	for _, s := range l.gridSections(hdr.Version) {
 		if err := binary.Read(zr, binary.LittleEndian, s); err != nil {
 			return fmt.Errorf("truncated: %w", err)
 		}
