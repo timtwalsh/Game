@@ -1,7 +1,7 @@
 # Level Maker & World Format — Technical Specification
 
 **Version**: 1.0
-**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
+**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05, steps 3–4 (game loads, draws and validates against levels) and 5 (`cmd/levelmaker` v1) built 2026-10-06** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
 **Language**: Go
 **Program**: `cmd/levelmaker` — a separate executable inside `module game`, rendering through the same `client/render` package the client uses
 **Rendering**: raylib (`github.com/gen2brain/raylib-go`), same as the client
@@ -430,7 +430,7 @@ The new UDP message gets a row in [PROTOCOL_REFERENCE.md](PROTOCOL_REFERENCE.md)
 - Undo/redo per stroke.
 - Every error and crash goes to a session log, following the animaker convention.
 
-**Not in v1:** manual tile stamping, flip tools, property overlays and override painting, the `ysort`/`overhead` layers, objects, warps, copy area to new level. (The `isolated` flag is read and honoured by the game from step 1; only the tool that sets it comes later. The `black` terrain can be painted in v1 like any other.)
+**Not in v1:** manual tile stamping, flip tools, property overlays and override painting, the `ysort`/`overhead` layers, objects, warps, copy area to new level. (The `isolated` flag is read and honoured by the game from step 1, and v1's New level dialog can set it. The `black` terrain can be painted in v1 like any other.)
 
 ---
 
@@ -527,39 +527,50 @@ go run ./cmd/blobtemplate -terrain black -placeholder 000000   # edges = false: 
 
 ### Step 3: client, rendering and loading levels
 
-- [ ] 3.1 **`client/render` package** (next to `client/anim`, importable by the editor):
+**Built 2026-10-06, together with step 4** (3.6 and 4.2 had to ship together). Both binaries take `-root` (default `.`) and call `world.LoadMap`, which loads `world/` + `levels/`, recompiles every level's properties from the files (D32), and finds the spawn. Without those folders both fall back to the open 100×100 grid at `shared.SpawnPoint`; a world that is present but broken is fatal for both, since predicting and validating on different geometry flags honest players. Movement code takes `world.Collider` (`Blocks(tx, ty, flag)` plus `SpeedMultiplier(tx, ty)`), implemented by `World` and by `world.Grid` (the fallback and a test helper). Prediction collides a 12 px box anchored at the position: it contains the one point the server checks, so prediction is never looser than validation. Checked by hand on 2026-10-06 under a virtual display: walking from the spawn, swimming the meadow pond at half speed, stopping at the world's edge, and crossing from meadow into lake all ran with no server flags.
+
+- [x] 3.1 **`client/render` package** (next to `client/anim`, importable by the editor):
   - a tile atlas that loads sheets and finds the source rect for a global tile index, including flips;
   - the shared camera (D33) in follow mode, tracking the local player (there's no camera today);
   - culled drawing of the visible cells per layer: ground (under, then tile) and decor;
   - `ysort` tiles emitted as sortable items, keyed by the bottom edge of their cell;
   - `overhead` drawn last;
   - background clear colour black instead of `rl.RayWhite`.
-- [ ] 3.2 **Y-sorting with players**: merge ysort tiles and players into one sort by foot position, replacing the players-only sort in `client/main.go`.
-- [ ] 3.3 **Load at startup**: if `world/` and `levels/` exist, the client loads the whole world (D18, from disk in this step); otherwise it falls back to today's blank grid.
-- [ ] 3.4 **Prediction against the world**: `PlayerController` takes a small `Collider` interface (`Blocks(tileX, tileY int, flag uint16) bool`) instead of `shared.CollisionLayer`, and walking tests the `ground` flag. Coordinates switch to signed and floored, fixing the `uint32` wraparound. Existing tests move to a fake collider.
-- [ ] 3.5 **Spawn point**: a `spawn` object in a level replaces the `shared.SpawnPoint` constant (100, 100). The server already creates new players there and validates their first move from it, and the client starts its prediction there, so both must read the same spawn from the world.
-- [ ] 3.6 **Speed from interaction**: prediction multiplies speed by the cell's interaction `speed_multiplier`. **Ship this in the same PR as 4.2**, or honest swimmers get flagged by the server.
+- [x] 3.2 **Y-sorting with players**: merge ysort tiles and players into one sort by foot position, replacing the players-only sort in `client/main.go`.
+- [x] 3.3 **Load at startup**: if `world/` and `levels/` exist, the client loads the whole world (D18, from disk in this step); otherwise it falls back to today's blank grid.
+- [x] 3.4 **Prediction against the world**: `PlayerController` takes a small `Collider` interface (`Blocks(tileX, tileY int, flag uint16) bool`) instead of `shared.CollisionLayer`, and walking tests the `ground` flag. Coordinates switch to signed and floored, fixing the `uint32` wraparound. Existing tests move to a fake collider.
+- [x] 3.5 **Spawn point**: a `spawn` object in a level replaces the `shared.SpawnPoint` constant (100, 100). The server already creates new players there and validates their first move from it, and the client starts its prediction there, so both must read the same spawn from the world.
+- [x] 3.6 **Speed from interaction**: prediction multiplies speed by the cell's interaction `speed_multiplier`. **Ship this in the same PR as 4.2**, or honest swimmers get flagged by the server.
 
 ### Step 4: server, real geometry for anti-cheat
 
-- [ ] 4.1 The server loads the world at startup (path flag, same defaults as the client) and compiles `blocking` and `interaction` from its own files (D32). It falls back to the blank grid if there are no levels.
-- [ ] 4.2 `MovementValidator` takes the same `Collider`. `CheckWallPhase` uses signed tile coordinates and tests the `ground` flag for walking and the `jump` flag for `MovementTypeJump`. The speed check allows the larger multiplier of the start and end cells, to avoid false positives at water edges.
-- [ ] 4.3 Tests: wall-phase is caught across a level boundary; jumping a fence (ground+roll flags) is allowed but walking through it is caught; swimming at swim speed is clean while walking speed in water is flagged.
-- [ ] 4.4 Retire `shared.TileType` and `shared.CollisionLayer` once nothing uses them, or keep `CollisionLayer` only as a test helper that satisfies `Collider`. Update ARCHITECTURE.md's "Level loading" roadmap item and the `map/` cards.
+- [x] 4.1 The server loads the world at startup (path flag, same defaults as the client) and compiles `blocking` and `interaction` from its own files (D32). It falls back to the blank grid if there are no levels.
+- [x] 4.2 `MovementValidator` takes the same `Collider`. `CheckWallPhase` uses signed tile coordinates and tests the `ground` flag for walking and the `jump` flag for `MovementTypeJump`. The speed check allows the larger multiplier of the start and end cells, to avoid false positives at water edges.
+- [x] 4.3 Tests: wall-phase is caught across a level boundary; jumping a fence (ground+roll flags) is allowed but walking through it is caught; swimming at swim speed is clean while walking speed in water is flagged.
+- [ ] 4.4 Retire `shared.TileType` and `shared.CollisionLayer` once nothing uses them, or keep `CollisionLayer` only as a test helper that satisfies `Collider`. Update ARCHITECTURE.md's "Level loading" roadmap item and the `map/` cards. *Partly done 2026-10-06:* the client and server no longer use them (`world.Grid` is the test helper), and the docs and cards are updated. The types themselves stay for now, because `shared.Level` embeds them and the unwired `ServerLevelLoadedMsg` embeds `shared.Level`; removing them is a protocol change best made with step 6, which defines the real level-streaming messages.
 
 ### Step 5: `cmd/levelmaker` v1 (terrain painting + autotile)
 
 The editing logic lives in a non-raylib package (e.g. `cmd/levelmaker/edit`) so it's testable in CI. The raylib side only draws and routes input.
 
-- [ ] 5.1 **Skeleton**: a raylib window that renders through `client/render`, loads `world/` and `levels/`, and has a level picker. A session log records every error and crash (as animaker does).
-- [ ] 5.2 **UI widgets**: try `raygui` (`github.com/gen2brain/raylib-go/raygui`) for buttons, lists and text fields, after checking it builds with our raylib-go version (v0.60.1). Fallback: a few hand-made immediate-mode widgets. Text fields select their contents when tabbed into (animaker convention).
-- [ ] 5.3 **New level**: name, position, size and isolated, refused with a clear message if it overlaps another level.
-- [ ] 5.4 **View**: the shared camera (D33) in free mode, with pan, zoom, jump-to and a wider zoom range than the game; grid toggle; read-only dimmed strips of neighbouring levels (D16).
-- [ ] 5.5 **Painting**: terrain palette from the definitions; brush sizes 1/3/5, rectangle fill, flood fill and eraser. Each stroke re-solves locally, including across into neighbouring levels held in memory.
-- [ ] 5.6 **Undo/redo** per stroke, storing each changed cell's before and after values (terrain, tile, under, plus any neighbour-level cells touched).
-- [ ] 5.7 **Save**: compile properties, then write the level and any neighbour levels whose border cells changed. Show which files were written; this is open question 2's default until decided. Unsaved-changes marker and confirm-on-quit.
-- [ ] 5.8 Add `levelmaker.exe` to `build_local.ps1` (built and launched with the others).
-- [ ] 5.9 Tests for the edit package: brush and fill results, undo/redo, cross-level stroke, and save then reload being identical.
+**Built 2026-10-06.** `cmd/levelmaker/edit` holds every editing rule (open, new level, paint/erase/rect/flood with local re-solve across level edges, per-stroke undo, save); `cmd/levelmaker` is the raylib UI. Card: [map/objects/levelmaker.md](../map/objects/levelmaker.md). Decisions made while building it:
+- **5.2:** hand-made widgets, not `raygui`, because raygui's text box can't select its contents on focus and these few widgets avoid another cgo dependency.
+- **Creating a level isn't undoable.** Undo covers strokes. A new level re-solves its neighbours' borders straight away (their edges now face empty cells rather than void), so those neighbours are marked unsaved too.
+- **Open question 2 default:** saving writes every changed level, neighbours included, and the status line and session log name every file written, calling out neighbours rewritten for border changes.
+- **It opens on the level holding the spawn**, not the alphabetically first one, since interiors usually sort first.
+- **The session log** follows animaker's (a log per run beside the executable, clean-exit marker, crash detection, the last 20 kept) but doesn't redirect stderr, so an unrecoverable Go fatal error isn't captured; recovered panics are.
+
+Checked by hand on 2026-10-06 under a virtual display: selecting levels, zooming, a 3-wide drag stroke across meadow's east edge re-solving lake's border, undo/redo, Ctrl+S writing both levels, the New level dialog by keyboard, and the unsaved-changes prompt on quit. The game server then loaded the saved world with every border consistent.
+
+- [x] 5.1 **Skeleton**: a raylib window that renders through `client/render`, loads `world/` and `levels/`, and has a level picker. A session log records every error and crash (as animaker does).
+- [x] 5.2 **UI widgets**: try `raygui` (`github.com/gen2brain/raylib-go/raygui`) for buttons, lists and text fields, after checking it builds with our raylib-go version (v0.60.1). Fallback: a few hand-made immediate-mode widgets. Text fields select their contents when tabbed into (animaker convention).
+- [x] 5.3 **New level**: name, position, size and isolated, refused with a clear message if it overlaps another level.
+- [x] 5.4 **View**: the shared camera (D33) in free mode, with pan, zoom, jump-to and a wider zoom range than the game; grid toggle; read-only dimmed strips of neighbouring levels (D16).
+- [x] 5.5 **Painting**: terrain palette from the definitions; brush sizes 1/3/5, rectangle fill, flood fill and eraser. Each stroke re-solves locally, including across into neighbouring levels held in memory.
+- [x] 5.6 **Undo/redo** per stroke, storing each changed cell's before and after values (terrain, tile, under, plus any neighbour-level cells touched).
+- [x] 5.7 **Save**: compile properties, then write the level and any neighbour levels whose border cells changed. Show which files were written; this is open question 2's default until decided. Unsaved-changes marker and confirm-on-quit.
+- [x] 5.8 Add `levelmaker.exe` to `build_local.ps1` (built and launched with the others).
+- [x] 5.9 Tests for the edit package: brush and fill results, undo/redo, cross-level stroke, and save then reload being identical.
 
 ### Step 6: streaming levels from the server (D15)
 

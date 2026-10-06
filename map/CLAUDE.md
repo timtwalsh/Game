@@ -12,6 +12,7 @@ how to walk this and what "live/leftover/ghost" mean here.
 | Client-side prediction, interpolation, rendering | [objects/client-prediction.md](objects/client-prediction.md) |
 | Server authority, movement validation, anti-cheat | [objects/server-anticheat.md](objects/server-anticheat.md) |
 | World model, level files, autotile, cell properties (`shared/world`) | [objects/world.md](objects/world.md) |
+| Level maker tool (`cmd/levelmaker`) | [objects/levelmaker.md](objects/levelmaker.md) |
 | Animaker editor (separate tool) | [objects/animaker.md](objects/animaker.md) |
 
 Full one-line index: [objects/_index.md](objects/_index.md).

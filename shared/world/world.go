@@ -24,7 +24,10 @@ type World struct {
 func NewWorld(defs *Defs) *World { return &World{Defs: defs} }
 
 // LoadWorld loads every *.level.toml in dir. There is no central index:
-// adding a level means adding its two files (D14).
+// adding a level means adding its two files (D14). Each level's property
+// grids are recompiled from its terrain, tiles and overrides with these
+// defs, so the stored compiled grids are never trusted (D32) and always
+// reflect the current definitions.
 func LoadWorld(dir string, defs *Defs) (*World, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*"+LevelSuffix))
 	if err != nil {
@@ -40,6 +43,7 @@ func LoadWorld(dir string, defs *Defs) (*World, error) {
 		if err := w.Add(l); err != nil {
 			return nil, err
 		}
+		Compile(l, defs)
 	}
 	return w, nil
 }

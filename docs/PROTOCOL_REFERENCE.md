@@ -73,9 +73,10 @@ type ClientLoadLevelMsg struct {
 }
 ```
 - Design intent: server responds with `ServerLevelLoadedMsg{Level}`. In
-  code today there is no level to load — both client and server construct
-  a hardcoded all-walkable `shared.CollisionLayer` in-process
-  (`client/main.go:48`, `server/main.go:27`) instead of loading one.
+  code today nothing is sent: client and server each load the same level
+  files from disk (`world.LoadMap`, as of 2026-10-06). Level streaming is
+  designed in `docs/LEVEL_MAKER_SPEC.md` (step 6) and will replace this
+  message.
 #### Chat — **defined, not wired up**
 ```go
 type ClientChatMsg struct {
@@ -355,12 +356,10 @@ T+~100ms: Server receives move (live: CheckWallPhase)
     ├─ If not feasible: flagged WallPhase, Score += SuspicionWallPhase (2.0)
     └─ Position is still applied (broadcast as normal)
 ```
-> **Caveat that applies to both scenarios above:** both client and server
-> currently run against the same hardcoded all-walkable placeholder
-> collision grid (`shared.NewCollisionLayer(100, 100)`), not a real loaded
-> level. Wall-phase detection cannot actually trigger in the running game
-> today because there are no walls to phase through yet — this scenario
-> becomes real once level loading is implemented.
+> **Note:** since 2026-10-06 both client and server load the same level
+> files (`world/` + `levels/`), so wall-phase detection runs against real
+> geometry. Without those folders both fall back to an open 100×100 grid,
+> where it can only trigger at the grid's edge.
 
 ---
 
@@ -512,8 +511,10 @@ Server receives: Move to position outside level bounds
 ├─ Server: still applies the position if not flagged
 └─ Client: receives and renders it
 ```
-Moot today in the sense that there is no real level with bounds to be
-outside of — this remains a real gap once level loading exists.
+Since 2026-10-06 levels are loaded and void outside them blocks
+everything, so a move whose path or destination is in void is flagged as
+a wall phase. As with every other flag, the position is still applied
+unless the player is auto-banned.
 
 ---
 
@@ -523,7 +524,7 @@ outside of — this remains a real gap once level loading exists.
 - [ ] Multiple clients see each other move
 - [ ] Attack hits registered correctly — blocked on Attack being implemented at all
 - [ ] Chat broadcasts to nearby players — blocked on Chat being implemented at all
-- [ ] Level change works (zone transition) — blocked on level loading existing
+- [ ] Level change works (zone transition) — blocked on warps (LEVEL_MAKER_SPEC.md step 8)
 - [ ] Lag simulation: Add 100ms+ delay
   - [ ] Movement still feels responsive
   - [ ] Other players still interpolate smoothly

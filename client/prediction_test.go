@@ -2,6 +2,7 @@ package main
 
 import (
 	"game/shared"
+	"game/shared/world"
 	"math"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestGetDirection(t *testing.T) {
 }
 
 func TestPlayerControllerMovesOnOpenGround(t *testing.T) {
-	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(10, 10))
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, world.NewGrid(10, 10))
 	input := PlayerInput{Right: true}
 
 	pc.UpdatePrediction(&input, 100*time.Millisecond)
@@ -81,27 +82,71 @@ func TestPlayerControllerMovesOnOpenGround(t *testing.T) {
 }
 
 func TestPlayerControllerStopsAtWall(t *testing.T) {
-	collision := shared.NewCollisionLayer(10, 10)
-	collision.Set(2, 0, shared.TileTypeBlocked) // covers x in [32,48)
+	collision := world.NewGrid(10, 10)
+	collision.SetBlocking(3, 0, world.BlockGround) // covers x in [48,64)
 
 	pc := NewPlayerController(shared.Vec2{X: 20, Y: 0}, collision)
 	input := PlayerInput{Right: true}
 
-	// First step: 20 -> 28, still inside tile 1 (walkable).
+	// 20 -> 28 -> 36: the 12px box's far edge reaches 47.98, still in tile 2.
 	pc.UpdatePrediction(&input, 100*time.Millisecond)
-	if !almostEqual(pc.PredictedPosition.X, 28) {
-		t.Fatalf("after first step, PredictedPosition.X = %v, want 28", pc.PredictedPosition.X)
+	pc.UpdatePrediction(&input, 100*time.Millisecond)
+	if !almostEqual(pc.PredictedPosition.X, 36) {
+		t.Fatalf("after two steps, PredictedPosition.X = %v, want 36", pc.PredictedPosition.X)
 	}
 
-	// Second step would land at 36, inside the blocked tile 2 - must be stopped.
+	// The next step would put the box's far edge in the blocked tile 3.
 	pc.UpdatePrediction(&input, 100*time.Millisecond)
-	if !almostEqual(pc.PredictedPosition.X, 28) {
-		t.Errorf("after moving into a wall, PredictedPosition.X = %v, want unchanged at 28", pc.PredictedPosition.X)
+	if !almostEqual(pc.PredictedPosition.X, 36) {
+		t.Errorf("after moving into a wall, PredictedPosition.X = %v, want unchanged at 36", pc.PredictedPosition.X)
+	}
+}
+
+func TestPlayerControllerBoxCannotOverlapAWall(t *testing.T) {
+	// A wall below the player: moving down stops while the box's bottom
+	// edge is still above it, not when the top-left point reaches it.
+	collision := world.NewGrid(10, 10)
+	collision.SetBlocking(0, 2, world.BlockGround) // y in [32,48)
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, collision)
+	input := PlayerInput{Down: true}
+	for i := 0; i < 60; i++ {
+		pc.UpdatePrediction(&input, simStep)
+	}
+	if bottom := pc.PredictedPosition.Y + playerHull; bottom > 32 {
+		t.Errorf("box bottom = %v, overlaps the wall starting at y=32", bottom)
+	}
+	if pc.PredictedPosition.Y < 32-playerHull-2 {
+		t.Errorf("stopped at y=%v, well short of the wall", pc.PredictedPosition.Y)
+	}
+}
+
+func TestPlayerControllerNegativeCoordinatesFloor(t *testing.T) {
+	// Tile -1 blocks; standing at x=1 (tile 0) and stepping left to x=-0.5
+	// puts the box's left edge in tile -1, which must stop the move. A
+	// truncating conversion would read -0.5 as tile 0 and let it through.
+	collision := world.NewGrid(10, 10) // everything outside 0..9 blocks
+	pc := NewPlayerController(shared.Vec2{X: 1, Y: 0}, collision)
+	if pc.CanMoveTo(-0.5, 0) {
+		t.Error("CanMoveTo(-0.5, 0) = true; -0.5 px is tile -1, outside the grid")
+	}
+}
+
+func TestPlayerControllerSwimsAtTheWatersSpeed(t *testing.T) {
+	collision := world.NewGrid(10, 10)
+	for x := 0; x < 10; x++ {
+		collision.SetSpeed(x, 0, 0.5)
+	}
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, collision)
+	input := PlayerInput{Right: true}
+	pc.UpdatePrediction(&input, 100*time.Millisecond)
+	// Half of 80 px/s for 100ms.
+	if !almostEqual(pc.PredictedPosition.X, 4) {
+		t.Errorf("PredictedPosition.X = %v, want 4 at half speed", pc.PredictedPosition.X)
 	}
 }
 
 func TestPlayerControllerServerCorrection(t *testing.T) {
-	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(10, 10))
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, world.NewGrid(10, 10))
 	pc.ServerCorrection(shared.Vec2{X: 42, Y: 7})
 
 	if pc.Position.X != 42 || pc.Position.Y != 7 {
@@ -184,7 +229,7 @@ func TestPlayerControllerMovementIsFrameRateIndependent(t *testing.T) {
 	// moved ~13% slower than MaxSpeed, and the error varied with frame rate.
 	// The simulation now always advances in fixed simSteps, so one second of
 	// simulated time covers exactly MaxSpeed tiles.
-	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(100, 100))
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, world.NewGrid(100, 100))
 	input := PlayerInput{Right: true}
 
 	for i := uint32(0); i < shared.SimTickHz; i++ {
@@ -198,7 +243,7 @@ func TestPlayerControllerMovementIsFrameRateIndependent(t *testing.T) {
 }
 
 func TestPlayerControllerRenderPositionBlendsSteps(t *testing.T) {
-	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, shared.NewCollisionLayer(10, 10))
+	pc := NewPlayerController(shared.Vec2{X: 0, Y: 0}, world.NewGrid(10, 10))
 	input := PlayerInput{Right: true}
 	pc.UpdatePrediction(&input, 100*time.Millisecond) // 0 -> 8
 

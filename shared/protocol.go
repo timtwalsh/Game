@@ -111,7 +111,7 @@ const (
 type SuspicionEvent struct {
 	Type   SuspicionEventType
 	Speed  float32
-	TileX  uint32
-	TileY  uint32
+	TileX  int // signed world tile coordinates
+	TileY  int
 	Reason string
 }

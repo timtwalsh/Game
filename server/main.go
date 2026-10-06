@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"game/shared"
+	"game/shared/world"
 	"net"
 	"os"
 	"sync"
@@ -19,17 +21,23 @@ type Server struct {
 	board      *StatusBoard
 	mutex      sync.Mutex
 	validator  MovementValidator
-	nextID     uint64
+	// spawn is where new players start: the world's spawn object, read
+	// from the server's own level files, or shared.SpawnPoint without any.
+	spawn  shared.Vec2
+	nextID uint64
 }
 
-func NewServer() *Server {
+// NewServer makes a server validating movement against m, which the server
+// loads from its own files (D32), never from a client.
+func NewServer(m *world.Map) *Server {
 	return &Server{
 		clients:    make(map[string]uint64),
 		players:    make(map[uint64]*shared.PlayerState),
 		suspicions: make(map[uint64]*SuspicionTracker),
 		lastSeen:   make(map[uint64]time.Time),
 		board:      NewStatusBoard(),
-		validator:  NewMovementValidator(shared.NewCollisionLayer(100, 100)),
+		validator:  NewMovementValidator(m.Collider),
+		spawn:      m.Spawn,
 		nextID:     1,
 	}
 }
@@ -110,7 +118,7 @@ func (s *Server) handlePacket(data []byte, addr *net.UDPAddr) {
 		if !exists {
 			player = &shared.PlayerState{
 				PlayerID:  playerID,
-				Position:  shared.SpawnPoint,
+				Position:  s.spawn,
 				Animation: moveMsg.Animation,
 				Direction: moveMsg.Direction,
 				ColorR:    moveMsg.ColorR,
@@ -182,7 +190,19 @@ func (s *Server) tickLoop() {
 }
 
 func main() {
-	server := NewServer()
+	root := flag.String("root", ".", "folder holding world/ and levels/; without them the server runs on a blank grid")
+	flag.Parse()
+	m, err := world.LoadMap(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Can't load the world:", err)
+		os.Exit(1)
+	}
+	server := NewServer(m)
+	if m.World != nil {
+		server.board.Event("Loaded %d levels from %s; spawn at (%.0f, %.0f)", len(m.World.Levels), *root, m.Spawn.X, m.Spawn.Y)
+	} else {
+		server.board.Event("No world/ and levels/ under %s: running on a blank %dx%d grid", *root, world.FallbackSize, world.FallbackSize)
+	}
 	if err := server.ListenAndServe("0.0.0.0:8080"); err != nil {
 		panic(err)
 	}

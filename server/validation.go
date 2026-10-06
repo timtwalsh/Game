@@ -2,6 +2,7 @@ package main
 
 import (
 	"game/shared"
+	"game/shared/world"
 	"math"
 )
 
@@ -14,11 +15,12 @@ const (
 	MovementTypeJump
 )
 
+// WallPhaseResult's tile is in signed world tile coordinates.
 type WallPhaseResult struct {
 	Clean   bool
 	Cheated bool
-	TileX   uint32
-	TileY   uint32
+	TileX   int
+	TileY   int
 }
 
 type MovementValidation struct {
@@ -26,16 +28,42 @@ type MovementValidation struct {
 	TooFast   bool
 	Speed     float32
 	WallPhase bool
-	TileX     uint32
-	TileY     uint32
+	TileX     int
+	TileY     int
 }
 
+// MovementValidator checks moves against the server's own copy of the map
+// (D32): blocking and speed multipliers come from the Collider, never from
+// the client.
 type MovementValidator struct {
-	Collision shared.CollisionLayer
+	Collision world.Collider
 }
 
-func NewMovementValidator(collision shared.CollisionLayer) MovementValidator {
+func NewMovementValidator(collision world.Collider) MovementValidator {
 	return MovementValidator{Collision: collision}
+}
+
+// blockFlag is the blocking flag a movement type must not cross: walking
+// tests ground, a jump tests jump (so it clears a fence that blocks only
+// ground and roll).
+func blockFlag(mType MovementType) uint16 {
+	if mType == MovementTypeJump {
+		return world.BlockJump
+	}
+	return world.BlockGround
+}
+
+// MaxSpeedBetween is the fastest an honest player may move from one
+// position to another, in px/s: walking speed times the larger speed
+// multiplier of the start and end tiles. Taking the larger one avoids
+// flagging someone who stepped out of water onto grass, where the client
+// switched to full speed partway through the move.
+func (mv *MovementValidator) MaxSpeedBetween(from, to shared.Vec2) float32 {
+	m := max(
+		mv.Collision.SpeedMultiplier(world.TileOf(from.X), world.TileOf(from.Y)),
+		mv.Collision.SpeedMultiplier(world.TileOf(to.X), world.TileOf(to.Y)),
+	)
+	return shared.MaxSpeed * shared.TileSize * m
 }
 
 func (mv *MovementValidator) CheckSpeed(from, to shared.Vec2, timeMs uint32) float32 {
@@ -52,11 +80,11 @@ func (mv *MovementValidator) CheckWallPhase(from, to shared.Vec2, timeMs uint32,
 		return WallPhaseResult{Clean: true}
 	}
 
-	// Basic line drawing approximation
-	fromX := int(from.X / shared.TileSize)
-	fromY := int(from.Y / shared.TileSize)
-	toX := int(to.X / shared.TileSize)
-	toY := int(to.Y / shared.TileSize)
+	// Basic line drawing approximation, in signed world tiles: floor, not a
+	// truncating cast, so -0.5 px is tile -1 rather than tile 0.
+	fromX, fromY := world.TileOf(from.X), world.TileOf(from.Y)
+	toX, toY := world.TileOf(to.X), world.TileOf(to.Y)
+	flag := blockFlag(mType)
 
 	dx := math.Abs(float64(toX - fromX))
 	dy := math.Abs(float64(toY - fromY))
@@ -72,21 +100,19 @@ func (mv *MovementValidator) CheckWallPhase(from, to shared.Vec2, timeMs uint32,
 	x, y := fromX, fromY
 
 	for {
-		if x >= 0 && y >= 0 {
-			if mv.Collision.IsBlocked(uint32(x), uint32(y)) {
-				// Simple cheat check: could they go around?
-				directDist := from.DistanceTo(to)
+		if mv.Collision.Blocks(x, y, flag) {
+			// Simple cheat check: could they go around?
+			directDist := from.DistanceTo(to)
 
-				// Estimate detour
-				rightDist := directDist + shared.TileSize // Simplified
-				timeSec := float32(timeMs) / 1000.0
-				speedForDetour := rightDist / timeSec
+			// Estimate detour
+			rightDist := directDist + shared.TileSize // Simplified
+			timeSec := float32(timeMs) / 1000.0
+			speedForDetour := rightDist / timeSec
 
-				if speedForDetour > shared.MaxSpeed*shared.TileSize {
-					return WallPhaseResult{Clean: false, Cheated: true, TileX: uint32(x), TileY: uint32(y)}
-				}
-				return WallPhaseResult{Clean: false, Cheated: false, TileX: uint32(x), TileY: uint32(y)}
+			if speedForDetour > mv.MaxSpeedBetween(from, to) {
+				return WallPhaseResult{Clean: false, Cheated: true, TileX: x, TileY: y}
 			}
+			return WallPhaseResult{Clean: false, Cheated: false, TileX: x, TileY: y}
 		}
 
 		if x == toX && y == toY {
@@ -110,7 +136,7 @@ func (mv *MovementValidator) ValidateMovement(from, to shared.Vec2, timeMs uint3
 	var issues []MovementValidation
 
 	speed := mv.CheckSpeed(from, to, timeMs)
-	if speed > shared.MaxSpeed*shared.TileSize*shared.SpeedTolerance {
+	if speed > mv.MaxSpeedBetween(from, to)*shared.SpeedTolerance {
 		issues = append(issues, MovementValidation{TooFast: true, Speed: speed})
 	}
 
