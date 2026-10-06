@@ -24,10 +24,12 @@ instead of a hard allow/deny per packet.
   `ValidateMovement`, feeds any issues into the player's
   `SuspicionTracker`, and applies the new position **unless** the
   tracker's status is `SuspicionStatusAutoBan`. `server/main.go:57-115`.
-- **Spawn (2026-10-05):** a new player is created at `shared.SpawnPoint`
-  (`shared/types.go`), and their first `Move` is validated from there like
-  any other. The client starts its prediction at the same constant, so a
-  normal first move is clean. The spawn is deliberately *not* taken from
+- **Spawn (2026-10-05; from the world 2026-10-06):** a new player is
+  created at `Server.spawn` — the world's first `spawn` object
+  (`world.Map.Spawn`), or `shared.SpawnPoint` without level files — and
+  their first `Move` is validated from there like any other. The client
+  reads the same spawn from the same files, so a normal first move is
+  clean. The spawn is deliberately *not* taken from
   the first `Move`: a client-chosen spawn would be an unvalidated teleport,
   available to anyone who sends a fresh `PlayerID` or goes quiet for
   `playerTimeout` and rejoins. (Before this, new players started at (0,0)
@@ -35,13 +37,26 @@ instead of a hard allow/deny per packet.
   client dropped by `dropIdle` that resumes sending is re-created at spawn,
   but the client keeps its own position, so its next move is flagged � the
   server has no "you were respawned" message to snap it back.
-- `MovementValidator.CheckSpeed` — straight-line distance/time vs.
-  `MaxSpeed*TileSize*SpeedTolerance`. `server/validation.go:41-48`.
+- `MovementValidator{Collision world.Collider}` — the server's own map
+  (D32): `main` takes `-root` (default `.`) and `world.LoadMap`s it at
+  startup, recompiling every level's properties from the files; a broken
+  world is fatal, no `world/`+`levels/` means the open 100x100
+  `world.Grid`. The status board's Recent log says which.
+- `MovementValidator.CheckSpeed` — straight-line distance/time.
+  `ValidateMovement` flags it above `MaxSpeedBetween(from, to) *
+  SpeedTolerance`, where `MaxSpeedBetween` is `MaxSpeed*TileSize` times
+  the larger interaction speed multiplier of the two ends' tiles (so
+  stepping out of water isn't flagged). With `SpeedTolerance` 2.0 and
+  swimming at 0.5, walking speed in water is exactly the limit — only
+  more than twice swim speed is caught.
 - `MovementValidator.CheckWallPhase` — Bresenham line from `from` to
-  `to` in tile space; if a blocked tile lies on the path, estimates
-  whether a detour was speed-feasible to decide `Cheated` vs. merely
-  `!Clean`. `server/validation.go:50-95`. Teleport/knockback movement
-  types skip this check.
+  `to` in signed, floored world tiles (`world.TileOf`); a tile blocking
+  the movement type's flag (`BlockGround` for walking, `BlockJump` for
+  `MovementTypeJump`) on the path, including void outside every level,
+  is `!Clean`, and a detour estimate against `MaxSpeedBetween` decides
+  `Cheated`. `ValidateMovement` flags both. Teleport/knockback movement
+  types skip this check. The server only ever passes
+  `MovementTypeWalk` today.
 - `SuspicionTracker{Score, Events, ReportCount}` — `AddEvent` adds a
   fixed weight per `SuspicionEventType` (`shared.Suspicion*` constants);
   `GetStatus` buckets the running score into
@@ -66,10 +81,11 @@ instead of a hard allow/deny per packet.
   `shared.ServerPlayerStatesMsg`, `shared.SuspicionEvent`,
   `shared.MaxSpeed`/`SpeedTolerance`/`Suspicion*` constants — see
   `protocol.md`.
-- The `validator`'s `Collision` is `shared.NewCollisionLayer(100, 100)`
-  (`server/main.go:27`) — same all-walkable placeholder as the client's,
-  so `CheckWallPhase` cannot currently trigger against real level
-  geometry either.
+- Consumes `shared/world` (`LoadMap`, `Collider`, `TileOf`, the
+  `Block*` flags) — see `world.md`. The client loads the same files; if
+  the two ever run from different `-root`s, honest players get flagged.
+- `shared.SuspicionEvent.TileX/TileY` are signed `int` world tiles
+  (server-internal; never sent).
 
 ## If you change this
 
@@ -80,6 +96,9 @@ instead of a hard allow/deny per packet.
 - **Hits:** `client-prediction.md`'s `ServerCorrection` path — any
   change to what position the server accepts/echoes back changes what
   the client snaps to.
+- **Hits:** `client-prediction.md` — prediction must stay at least as
+  strict as these checks (collision box containing the checked point,
+  speed within `MaxSpeedBetween`), or honest players get flagged.
 - **Does not hit:** `animaker/` — no dependency in either direction.
 
 ## Surfaces
@@ -102,9 +121,16 @@ windows; if stdout isn't a terminal, frames are printed in full instead.
 
 Tests: `server/validation_test.go` — covers `CheckSpeed`, `CheckWallPhase`
 (clean/blocked/feasible-detour/infeasible-detour/teleport-skip),
-`ValidateMovement`, and `SuspicionTracker` status thresholds.
+`ValidateMovement`, `SuspicionTracker` status thresholds, and against a
+real `World` built from `world/terrains.toml`: wall phase across a level
+boundary, negative coordinates and void; jumping a fence (ground+roll)
+allowed while walking through it is caught; swimming at swim speed clean,
+1.5x walking speed flagged in water but not on grass, and stepping out of
+water clean.
 `server/statusboard_test.go` covers the board's latest-action-per-player
 rendering, forgetting disconnected players, and `describeMove`. `server/main.go`
 isn't tested over a real socket, but `server/main_test.go` drives
 `handlePacket` directly: idle-drop/rejoin, and that a first move near
-`SpawnPoint` is clean while one far from it is flagged TooFast.
+`SpawnPoint` is clean while one far from it is flagged TooFast, players
+spawn at the world's spawn, and a walk from the repo's sample spawn is
+clean.

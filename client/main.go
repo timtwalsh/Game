@@ -1,14 +1,17 @@
 package main
 
 import (
-	"cmp"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"game/client/anim"
+	"game/client/render"
 	"game/shared"
+	"game/shared/world"
 	"math"
 	"math/rand"
 	"net"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -37,7 +40,9 @@ type Client struct {
 	mutex       sync.Mutex
 }
 
-func NewClient(serverAddrStr string) *Client {
+// NewClient connects to the server and starts the local player at the
+// map's spawn, predicting against the map's collider.
+func NewClient(serverAddrStr string, m *world.Map) *Client {
 	serverAddr, err := net.ResolveUDPAddr("udp", serverAddrStr)
 	if err != nil {
 		panic(err)
@@ -56,7 +61,7 @@ func NewClient(serverAddrStr string) *Client {
 		colorR:        uint8(rand.Intn(256)),
 		colorG:        uint8(rand.Intn(256)),
 		colorB:        uint8(rand.Intn(256)),
-		controller:    NewPlayerController(shared.SpawnPoint, shared.NewCollisionLayer(100, 100)),
+		controller:    NewPlayerController(m.Spawn, m.Collider),
 		remotePlayers: make(map[uint64]*PlayerInterpolation),
 		remoteAnims:   make(map[uint64]*CharacterAnimator),
 		assets:        anim.NewLibrary(),
@@ -185,8 +190,9 @@ func (c *Client) remoteAnim(id uint64) *CharacterAnimator {
 }
 
 // drawnPlayer is one player to draw this frame, snapshotted under the lock
-// so drawing doesn't hold it; players are drawn in order of Y so the one
-// nearer the bottom of the screen is in front.
+// so drawing doesn't hold it. Players are sorted together with the ysort
+// layer's tiles by foot position, so whatever is nearer the bottom of the
+// screen is in front.
 type drawnPlayer struct {
 	pos       shared.Vec2
 	direction uint8
@@ -194,16 +200,43 @@ type drawnPlayer struct {
 	anim      *CharacterAnimator // nil: draw a circle
 }
 
+// playerFootY is how far below a player's position their feet are: the
+// bottom of their 16x16 box, the y they're sorted by.
+const playerFootY = 16
+
 func main() {
+	root := flag.String("root", ".", "folder holding world/ and levels/ (the same files the server loads); without them the client runs on a blank grid")
+	flag.Parse()
+	// The client must predict against the same map the server validates
+	// against, so a world that's present but broken is fatal rather than
+	// silently replaced by the blank grid.
+	m, err := world.LoadMap(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Can't load the world:", err)
+		os.Exit(1)
+	}
+
 	rl.InitWindow(800, 600, "2D MMO Client")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(144)
 
-	client := NewClient("127.0.0.1:8080")
+	var levels *render.Renderer
+	if m.World != nil {
+		atlas, problems := render.NewAtlas(m.World.Defs, *root)
+		for _, p := range problems {
+			fmt.Println("Tile problem:", p)
+		}
+		defer atlas.Unload()
+		levels = &render.Renderer{World: m.World, Atlas: atlas}
+	}
+	camera := render.NewFollowCamera()
+
+	client := NewClient("127.0.0.1:8080", m)
 	textures := textureCache{}
 	defer textures.unload()
 	// Reused every frame, so drawing allocates nothing once warmed up.
 	var players []drawnPlayer
+	var items []render.Item
 	var sprites []anim.Sprite
 	lastFrameTime := time.Now()
 	var accumulator time.Duration
@@ -286,35 +319,69 @@ func main() {
 		}
 		client.mutex.Unlock()
 
+		// Camera: follows the local player's centre; the mouse wheel zooms
+		// within the player's limits.
+		camera.ZoomBy(rl.GetMouseWheelMove())
+		camera.CentreOn(shared.Vec2{X: localPos.X + 8, Y: localPos.Y + 8})
+		screenW, screenH := rl.GetScreenWidth(), rl.GetScreenHeight()
+		view := camera.Visible(screenW, screenH)
+
 		// Rendering, outside the lock: the snapshot above and the
-		// animators are only touched by this goroutine.
+		// animators are only touched by this goroutine. Outside every
+		// level is void, which draws as the black background.
 		rl.BeginDrawing()
-		rl.ClearBackground(rl.RayWhite)
-		slices.SortStableFunc(players, func(a, b drawnPlayer) int { return cmp.Compare(a.pos.Y, b.pos.Y) })
-		for _, p := range players {
-			// The player's 16x16 box is at pos; the animation's origin
-			// and the fallback circle both sit at its centre.
-			centerX, centerY := p.pos.X+8, p.pos.Y+8
-			if p.anim != nil {
-				sprites = p.anim.AppendSprites(sprites[:0])
-				// A shadow in the player's colour at their feet: it tells
-				// identical characters apart, and stays on the ground
-				// while they jump.
-				look := p.anim.look
-				originX := centerX + look.origin.X*look.scale
-				originY := centerY + look.origin.Y*look.scale
-				footY := originY + groundOffset(sprites, look.scale)
-				rl.DrawEllipse(int32(centerX), int32(footY), 9, 3, rl.Fade(p.color, 0.6))
-				textures.drawCharacter(sprites, originX, originY, look.scale)
+		rl.ClearBackground(rl.Black)
+		rl.BeginMode2D(camera.Raylib(screenW, screenH))
+		items = items[:0]
+		if levels != nil {
+			levels.DrawUnder(view)
+			items = levels.AppendYSort(items, view)
+		} else {
+			// No level files: the blank fallback grid is open floor.
+			size := int32(world.FallbackSize * shared.TileSize)
+			rl.DrawRectangle(0, 0, size, size, rl.RayWhite)
+		}
+		for i, p := range players {
+			items = append(items, render.Item{Key: p.pos.Y + playerFootY, Player: i})
+		}
+		render.SortItems(items)
+		for _, it := range items {
+			if it.Player < 0 {
+				levels.DrawItem(it)
 				continue
 			}
-			drawCircle(int32(centerX), int32(centerY), p.color, p.direction)
+			drawPlayer(players[it.Player], textures, &sprites)
 		}
+		if levels != nil {
+			levels.DrawOverhead(view)
+		}
+		rl.EndMode2D()
 
-		rl.DrawText("WASD to move, Space to jump", 10, 10, 20, rl.DarkGray)
+		rl.DrawText("WASD to move, Space to jump, wheel to zoom", 10, 10, 20, rl.LightGray)
 
 		rl.EndDrawing()
 	}
+}
+
+// drawPlayer draws one player in world coordinates. sprites is scratch
+// space reused across calls.
+func drawPlayer(p drawnPlayer, textures textureCache, sprites *[]anim.Sprite) {
+	// The player's 16x16 box is at pos; the animation's origin and the
+	// fallback circle both sit at its centre.
+	centerX, centerY := p.pos.X+8, p.pos.Y+8
+	if p.anim == nil {
+		drawCircle(int32(centerX), int32(centerY), p.color, p.direction)
+		return
+	}
+	*sprites = p.anim.AppendSprites((*sprites)[:0])
+	// A shadow in the player's colour at their feet: it tells identical
+	// characters apart, and stays on the ground while they jump.
+	look := p.anim.look
+	originX := centerX + look.origin.X*look.scale
+	originY := centerY + look.origin.Y*look.scale
+	footY := originY + groundOffset(*sprites, look.scale)
+	rl.DrawEllipse(int32(centerX), int32(footY), 9, 3, rl.Fade(p.color, 0.6))
+	textures.drawCharacter(*sprites, originX, originY, look.scale)
 }
 
 // drawCircle is how a player is drawn without a character: a circle with

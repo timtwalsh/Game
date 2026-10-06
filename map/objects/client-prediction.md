@@ -111,24 +111,48 @@ instead of truncated ms.
   `remoteAnims` is main-goroutine-only for that reason. `applyPlayerStates`
   drops any remote player missing from a broadcast (the server's list is
   complete, and it times players out - see server-anticheat.md).
+- **Levels & camera (2026-10-06).** `main` takes `-root` (default `.`)
+  and loads `world.LoadMap` before opening the window; a broken world is
+  fatal, missing `world/`+`levels/` falls back to the open 100x100 grid
+  (drawn as a white floor). `client/render` (raylib, reusable by the level
+  maker): `Atlas` (one texture per sheet, point-filtered; missing sheets
+  draw magenta), `Camera` (D33: `Follow` with whole-number zoom 1-4 on the
+  wheel, `Free` for tools; target snapped to screen pixels), and
+  `Renderer` drawing culled cells: `DrawUnder` (ground under-then-tile,
+  decor), `AppendYSort` (ysort tiles as `Item`s keyed by their cell's
+  bottom edge), `DrawOverhead`. Layers are bucketed by z-range
+  (`LayerPass`). The frame merges ysort items and players (keyed by foot
+  y, `pos.Y+16`) into one stable sort, replacing the players-only sort.
+  Background is black: void draws nothing.
+- **Collision & speed (2026-10-06).** `PlayerController.Collision` is a
+  `world.Collider` (the loaded `World`, or `world.Grid`). `CanMoveTo`
+  tests a `playerHull` (12px) box anchored at the position against
+  `BlockGround`, in signed floored tiles; the box contains the position,
+  the one point the server checks, so prediction is never looser than
+  validation. Each step's speed is `MaxSpeed*TileSize` times the
+  `SpeedMultiplier` of the tile under the position.
 - `RenderableObject` / `SortObjectsForRendering` in `client/renderer.go` —
   Z-based draw-order and shadow-length calc for world objects
   (`shared.GameObject`), independent of players.
 
 ## Connected to
 
-- Consumes `shared.Vec2`, `shared.CollisionLayer`, `shared.PlayerState`,
-  `shared.ClientMoveMsg`, `shared.ServerPlayerStatesMsg` — see
-  `protocol.md`.
-- `PlayerController`'s own `Collision` is a fresh
-  `shared.NewCollisionLayer(100, 100)` (`client/main.go:48`) — an
-  all-walkable placeholder, **not** loaded from any real level data.
-  Wall-sliding today can't actually hit a wall.
+- Consumes `shared.Vec2`, `shared.PlayerState`, `shared.ClientMoveMsg`,
+  `shared.ServerPlayerStatesMsg` — see `protocol.md`.
+- Consumes `shared/world` (`LoadMap`, `Collider`, `TileOf`, level grids)
+  — see `world.md`. The server loads the same files, so the client and
+  server must run from the same `-root` (`build_local.ps1` starts both in
+  the repo root).
 
 ## If you change this
 
 - **Hits:** nothing outside `client/` — `PlayerController` and
   `PlayerInterpolation` are not imported by `server/` or `animaker/`.
+  `client/render` will be imported by the level maker (`cmd/levelmaker`,
+  spec step 5).
+- **Hits:** anti-cheat false positives — prediction must stay at least as
+  strict as `server/validation.go`: the collision box must contain the
+  position, and speed must not exceed what `MaxSpeedBetween` allows.
 - **Hits:** perceived movement feel everywhere — `client/main.go`'s
   `ticksPerNetworkSend` (send interval), `server/main.go`'s `tickLoop`
   (broadcast interval), and this file's `InterpolationDuration` all derive
@@ -151,11 +175,12 @@ simulation in fixed 60Hz steps inside it. No other consumer.
 
 ## See
 
-`client/prediction.go`, `client/main.go`, `client/renderer.go`,
+`client/prediction.go`, `client/main.go`, `client/render/`, `client/renderer.go`,
 `client/character.go`, `client/sprites.go`, `client/anim/`
 
 Tests: `client/prediction_test.go` — covers `PlayerInput` direction/vector
-math, `PlayerController` movement + wall-stopping + server correction,
+math, `PlayerController` movement + wall-stopping (box can't overlap a
+wall, negative coordinates floor) + swim speed + server correction,
 frame-rate-independent stepping (1s of sim steps = exactly `MaxSpeed`
 tiles), `RenderPosition` blending, the send-interval tick math,
 `PlayerInterpolation` easing, and (as regression coverage for the jitter
@@ -167,6 +192,10 @@ stepping, loop wrap, jump interpolation, prop fallback);
 `client/character_test.go` covers the state machine (one-shots run to
 the end, back-to-back jumps bump `AnimSeq`, remote restarts on seq,
 unknown states show idle).
+`client/render/render_test.go` covers camera zoom/clamp, visible range,
+screen-to-world, pixel snapping, layer passes, source rects with flips,
+and ysort items sorting with players (no window needed; atlas loading
+and drawing are not tested).
 `client/main.go`, `client/sprites.go` and
 `client/renderer.go` are untested (network/render glue and depth-sort
 only, respectively).

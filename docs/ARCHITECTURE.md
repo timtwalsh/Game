@@ -82,8 +82,9 @@ Key principle: Client predicts everything locally for responsiveness. Server tru
 
 > **Status:** "Level State" collision/objects/NPCs and "Player Manager" inventory in
 > this diagram are the *design target*. Today's server (`server/main.go`) only holds
-> `map[uint64]*shared.PlayerState` and a single hardcoded all-walkable
-> `shared.CollisionLayer` — there is no level loading, no NPCs, and no inventory yet.
+> `map[uint64]*shared.PlayerState` and the world loaded from `world/` + `levels/`
+> by `shared/world` (as of 2026-10-06; see `docs/LEVEL_MAKER_SPEC.md`) — there are
+> no NPCs and no inventory yet.
 > "Event logging" and "Ban management" are likewise designed but not built; see
 > [Anti-Cheat System](#anti-cheat-system) and [Server Architecture](#server-architecture) below.
 
@@ -231,10 +232,11 @@ Every movement check:
 - **Catches:** Wall-phasing, clipping through geometry
 - **FP Rate:** <1% (edge cases at level boundaries)
 - **Implemented as:** `MovementValidator.CheckWallPhase` (`server/validation.go:50-95`).
-  Since both client and server currently run against a hardcoded all-walkable
-  collision grid (no real level loaded), this check cannot actually trigger
-  against real geometry yet — it only becomes meaningful once level loading
-  exists.
+  As of 2026-10-06 both client and server load the same level files and the
+  check runs against their compiled `blocking` grid, across level edges, in
+  signed world tiles (walking tests the `ground` flag, a jump the `jump`
+  flag). Speed limits use the larger interaction speed multiplier of a move's
+  start and end tiles (swimming is half speed).
 #### Layer C: Escalation Thresholds
 ```
 Suspicion Score Ranges:
@@ -584,14 +586,12 @@ collision_type = "solid"
 destination = "cave_1"
 ```
 
-> **Not implemented on the game side.** `shared.Level`, `shared.CollisionLayer`,
-> `shared.VisualLayer`, and `shared.GameObject` exist as Go structs
-> (`shared/types.go:69-104`) with JSON tags, but nothing in `client/` or
-> `server/` reads a TOML level file or populates these from disk — both
-> binaries build a level in memory via `shared.NewCollisionLayer(100, 100)`
-> instead (`client/main.go:48`, `server/main.go:27`). `animaker` (see
-> `docs/ANI_MAKER_SPEC.md`) uses TOML for its own project files via
-> `github.com/BurntSushi/toml`, unrelated to this level format.
+> **Superseded.** This sketch was replaced by `docs/LEVEL_MAKER_SPEC.md`
+> (a `.level.toml` plus a binary `.grid.gz` per level), which the client and
+> server load through `shared/world` as of 2026-10-06. The old
+> `shared.Level`/`CollisionLayer`/`VisualLayer` structs are no longer used
+> by either binary; they remain only because the unwired
+> `ServerLevelLoadedMsg` embeds `shared.Level`.
 
 ### Attack Definition (TOML)
 
@@ -718,7 +718,7 @@ Logging:        <0.5ms per event (when enabled)
 
 ### Phase 1: Core Loop
 - [x] Network transport (UDP, JSON envelope)
-- [ ] Level loading (collision + visual)
+- [x] Level loading (collision + visual) — from disk via `shared/world` and `client/render` (2026-10-06); streaming from the server is LEVEL_MAKER_SPEC.md step 6
 - [x] Basic movement (prediction + server-applied position)
 - [x] Speed detection
 ### Phase 2: Combat
@@ -732,11 +732,11 @@ Logging:        <0.5ms per event (when enabled)
 - [ ] Attack synchronization
 - [ ] Arena/zone management
 ### Phase 4: Tooling
-- [ ] Level editor (designed in `docs/LEVEL_MAKER_SPEC.md`, not built; its build order also covers Phase 1's level loading)
+- [ ] Level editor (designed in `docs/LEVEL_MAKER_SPEC.md`; world model, art templates and game-side loading built, the editor itself is step 5)
 - [x] Animation maker (`animaker/`, partial — see `docs/ANI_MAKER_SPEC.md`)
 - [ ] Asset compiler
 ### Phase 5: Anti-Cheat
-- [x] Wall-phase detection (logic exists; can't trigger against real geometry until level loading exists)
+- [x] Wall-phase detection (against real level geometry since 2026-10-06)
 - [x] Suspicion tracking
 - [ ] Event logging
 - [ ] Ban system (persistence, login check, appeal)

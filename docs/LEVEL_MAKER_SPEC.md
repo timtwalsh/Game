@@ -1,7 +1,7 @@
 # Level Maker & World Format — Technical Specification
 
 **Version**: 1.0
-**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
+**Status**: **Proposal as of 2026-10-05; build order steps 1 (`shared/world`) and 2 (`cmd/blobtemplate`) built 2026-10-05, steps 3–4 (game loads, draws and validates against levels) built 2026-10-06** — see the checkboxes under [Build order](#build-order). Nothing renders or loads levels in the game yet. It merges three sources: the level-file sketch in [ARCHITECTURE.md](ARCHITECTURE.md#level-file-toml) (which this replaces), an associate designer's tilemap/autotile draft (Python, reviewed 2026-10-05), and a decision interview held the same day. Every decision below records where it came from so it can be revisited knowingly.
 **Language**: Go
 **Program**: `cmd/levelmaker` — a separate executable inside `module game`, rendering through the same `client/render` package the client uses
 **Rendering**: raylib (`github.com/gen2brain/raylib-go`), same as the client
@@ -527,25 +527,27 @@ go run ./cmd/blobtemplate -terrain black -placeholder 000000   # edges = false: 
 
 ### Step 3: client, rendering and loading levels
 
-- [ ] 3.1 **`client/render` package** (next to `client/anim`, importable by the editor):
+**Built 2026-10-06, together with step 4** (3.6 and 4.2 had to ship together). Both binaries take `-root` (default `.`) and call `world.LoadMap`, which loads `world/` + `levels/`, recompiles every level's properties from the files (D32), and finds the spawn. Without those folders both fall back to the open 100×100 grid at `shared.SpawnPoint`; a world that is present but broken is fatal for both, since predicting and validating on different geometry flags honest players. Movement code takes `world.Collider` (`Blocks(tx, ty, flag)` plus `SpeedMultiplier(tx, ty)`), implemented by `World` and by `world.Grid` (the fallback and a test helper). Prediction collides a 12 px box anchored at the position: it contains the one point the server checks, so prediction is never looser than validation. Checked by hand on 2026-10-06 under a virtual display: walking from the spawn, swimming the meadow pond at half speed, stopping at the world's edge, and crossing from meadow into lake all ran with no server flags.
+
+- [x] 3.1 **`client/render` package** (next to `client/anim`, importable by the editor):
   - a tile atlas that loads sheets and finds the source rect for a global tile index, including flips;
   - the shared camera (D33) in follow mode, tracking the local player (there's no camera today);
   - culled drawing of the visible cells per layer: ground (under, then tile) and decor;
   - `ysort` tiles emitted as sortable items, keyed by the bottom edge of their cell;
   - `overhead` drawn last;
   - background clear colour black instead of `rl.RayWhite`.
-- [ ] 3.2 **Y-sorting with players**: merge ysort tiles and players into one sort by foot position, replacing the players-only sort in `client/main.go`.
-- [ ] 3.3 **Load at startup**: if `world/` and `levels/` exist, the client loads the whole world (D18, from disk in this step); otherwise it falls back to today's blank grid.
-- [ ] 3.4 **Prediction against the world**: `PlayerController` takes a small `Collider` interface (`Blocks(tileX, tileY int, flag uint16) bool`) instead of `shared.CollisionLayer`, and walking tests the `ground` flag. Coordinates switch to signed and floored, fixing the `uint32` wraparound. Existing tests move to a fake collider.
-- [ ] 3.5 **Spawn point**: a `spawn` object in a level replaces the `shared.SpawnPoint` constant (100, 100). The server already creates new players there and validates their first move from it, and the client starts its prediction there, so both must read the same spawn from the world.
-- [ ] 3.6 **Speed from interaction**: prediction multiplies speed by the cell's interaction `speed_multiplier`. **Ship this in the same PR as 4.2**, or honest swimmers get flagged by the server.
+- [x] 3.2 **Y-sorting with players**: merge ysort tiles and players into one sort by foot position, replacing the players-only sort in `client/main.go`.
+- [x] 3.3 **Load at startup**: if `world/` and `levels/` exist, the client loads the whole world (D18, from disk in this step); otherwise it falls back to today's blank grid.
+- [x] 3.4 **Prediction against the world**: `PlayerController` takes a small `Collider` interface (`Blocks(tileX, tileY int, flag uint16) bool`) instead of `shared.CollisionLayer`, and walking tests the `ground` flag. Coordinates switch to signed and floored, fixing the `uint32` wraparound. Existing tests move to a fake collider.
+- [x] 3.5 **Spawn point**: a `spawn` object in a level replaces the `shared.SpawnPoint` constant (100, 100). The server already creates new players there and validates their first move from it, and the client starts its prediction there, so both must read the same spawn from the world.
+- [x] 3.6 **Speed from interaction**: prediction multiplies speed by the cell's interaction `speed_multiplier`. **Ship this in the same PR as 4.2**, or honest swimmers get flagged by the server.
 
 ### Step 4: server, real geometry for anti-cheat
 
-- [ ] 4.1 The server loads the world at startup (path flag, same defaults as the client) and compiles `blocking` and `interaction` from its own files (D32). It falls back to the blank grid if there are no levels.
-- [ ] 4.2 `MovementValidator` takes the same `Collider`. `CheckWallPhase` uses signed tile coordinates and tests the `ground` flag for walking and the `jump` flag for `MovementTypeJump`. The speed check allows the larger multiplier of the start and end cells, to avoid false positives at water edges.
-- [ ] 4.3 Tests: wall-phase is caught across a level boundary; jumping a fence (ground+roll flags) is allowed but walking through it is caught; swimming at swim speed is clean while walking speed in water is flagged.
-- [ ] 4.4 Retire `shared.TileType` and `shared.CollisionLayer` once nothing uses them, or keep `CollisionLayer` only as a test helper that satisfies `Collider`. Update ARCHITECTURE.md's "Level loading" roadmap item and the `map/` cards.
+- [x] 4.1 The server loads the world at startup (path flag, same defaults as the client) and compiles `blocking` and `interaction` from its own files (D32). It falls back to the blank grid if there are no levels.
+- [x] 4.2 `MovementValidator` takes the same `Collider`. `CheckWallPhase` uses signed tile coordinates and tests the `ground` flag for walking and the `jump` flag for `MovementTypeJump`. The speed check allows the larger multiplier of the start and end cells, to avoid false positives at water edges.
+- [x] 4.3 Tests: wall-phase is caught across a level boundary; jumping a fence (ground+roll flags) is allowed but walking through it is caught; swimming at swim speed is clean while walking speed in water is flagged.
+- [ ] 4.4 Retire `shared.TileType` and `shared.CollisionLayer` once nothing uses them, or keep `CollisionLayer` only as a test helper that satisfies `Collider`. Update ARCHITECTURE.md's "Level loading" roadmap item and the `map/` cards. *Partly done 2026-10-06:* the client and server no longer use them (`world.Grid` is the test helper), and the docs and cards are updated. The types themselves stay for now, because `shared.Level` embeds them and the unwired `ServerLevelLoadedMsg` embeds `shared.Level`; removing them is a protocol change best made with step 6, which defines the real level-streaming messages.
 
 ### Step 5: `cmd/levelmaker` v1 (terrain painting + autotile)
 

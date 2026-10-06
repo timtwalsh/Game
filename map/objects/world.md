@@ -4,8 +4,8 @@ Pure-Go package (no raylib) holding the level/world model from
 `docs/LEVEL_MAKER_SPEC.md`: world definitions, levels, their two-file
 format, the blob-47 autotile solver, the cell-property compiler, and a
 `World` that answers queries across level edges. Built 2026-10-05 as build
-order step 1. **Nothing imports it yet**: the client and server still use
-the placeholder `shared.CollisionLayer` (steps 3 and 4 switch them over).
+order step 1; since 2026-10-06 (steps 3-4) the client and server load
+the world through it and collide/validate against it.
 
 ## Why this shape
 
@@ -41,6 +41,14 @@ dense per-layer slices indexed `y*W+x` (D2), not per-cell structs.
   tile (strictest wins), surface/interaction = topmost tile that declares
   one, else terrain; overrides win; empty/unknown ground blocks all (D30).
   `shared/world/props.go`
+- **Game-side loading (2026-10-06)** — `Collider` (`Blocks(tx, ty,
+  flag)`, `SpeedMultiplier(tx, ty)`), implemented by `World` and by
+  `Grid` (open W x H, blocked outside; the fallback and a test helper).
+  `World.Spawn()` (first `spawn` object in an exterior level, world
+  pixels). `LoadMap(root)` → `Map{World, Collider, Spawn}`: the world, or
+  the open 100x100 `Grid` at `shared.SpawnPoint` when there are no files;
+  an error when they're present but broken. `LoadWorld` recompiles every
+  level's properties (D32). `shared/world/collider.go`
 - **World** — `LoadWorld(dir)`, `LoadDir(root)` (ok=false when there's no
   `world/`+`levels/`), `Add` (rejects overlap/duplicate name),
   `CheckPlacement`, `LevelAt`, `Neighbours` (by geometry; isolated levels
@@ -68,8 +76,10 @@ dense per-layer slices indexed `y*W+x` (D2), not per-cell structs.
   `cmd/blobtemplate` draws the template and placeholders from it, and its
   `TestCommittedPlaceholders` fails until `assets/tiles/` is regenerated.
 - **Blocking flag bits:** stored in grid files; never renumber, only add.
-- **Hits** `cmd/blobtemplate` (imports it). **Does not hit** `client/`,
-  `server/` or `animaker/` yet.
+- **Hits** `cmd/blobtemplate`, `client/` (prediction, `client/render`) and
+  `server/` (validation, spawn) — all import it. A change to `Compile`,
+  the blocking flags or `SpeedMultiplier` changes what the anti-cheat
+  flags; read `server-anticheat.md` first. **Does not hit** `animaker/`.
 
 ## See
 

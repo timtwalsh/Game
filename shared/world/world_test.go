@@ -165,3 +165,22 @@ func TestSolveBordersReportsChangedNeighbours(t *testing.T) {
 		t.Errorf("b's border underlay = %d, want water centre", got)
 	}
 }
+
+func TestLoadWorldRecompilesProperties(t *testing.T) {
+	d := testDefs(t)
+	dir := t.TempDir()
+	l := paint(t, "a", Point{}, "w")
+	SolveAll(l, LevelSource{l}, d)
+	Compile(l, d)
+	l.Props.Blocking[0] = BlockAll // a tampered or stale compiled grid
+	if err := SaveLevel(dir, l); err != nil {
+		t.Fatal(err)
+	}
+	w, err := LoadWorld(dir, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Blocks(0, 0, BlockGround) {
+		t.Error("loaded level kept the stored blocking grid instead of recompiling it")
+	}
+}

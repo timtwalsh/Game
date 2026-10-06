@@ -26,9 +26,13 @@ each side.
   `ServerPlayerStateMsg`, `ServerPlayerStatesMsg`, `ServerAttackResultMsg`,
   `ServerChatMsg`, `ServerMovementRejectedMsg`, `ServerBannedMsg`.
   `shared/protocol.go:45-84`. Only `"PlayerStates"` is actually sent today.
-- World model: `Vec2`, `TileType` (+ `IsPassable`), `CollisionLayer`
-  (byte grid + `Get`/`Set`/`IsBlocked`), `VisualLayer`, `GameObject`,
-  `Level`. `shared/types.go:6-104`.
+- World model: `Vec2`, `GameObject` (also used by `shared/world` for
+  level objects). The old `TileType` (+ `IsPassable`), `CollisionLayer`
+  (byte grid + `Get`/`Set`/`IsBlocked`), `VisualLayer` and `Level` are
+  unused by client and server since 2026-10-06 (see `world.md`), kept only
+  because `ServerLevelLoadedMsg` embeds `Level`. `SuspicionEvent` is
+  server-internal (never sent); its `TileX/TileY` are signed `int`.
+  `shared/types.go:6-104`.
 - Tunables both sides must agree on: `TileSize`, `MaxSpeed`,
   `SpeedTolerance`, `NetworkTickRate`, and the `Suspicion*` weights/
   thresholds. `shared/types.go:106-119`. These are compiled into both

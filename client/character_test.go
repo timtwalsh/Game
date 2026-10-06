@@ -3,6 +3,7 @@ package main
 import (
 	"game/client/anim"
 	"game/shared"
+	"game/shared/world"
 	"testing"
 )
 
@@ -103,7 +104,7 @@ func TestUnknownStateShowsIdle(t *testing.T) {
 func TestPlayersMissingFromABroadcastAreDropped(t *testing.T) {
 	c := &Client{
 		playerID:      1,
-		controller:    NewPlayerController(shared.Vec2{}, shared.NewCollisionLayer(10, 10)),
+		controller:    NewPlayerController(shared.Vec2{}, world.NewGrid(10, 10)),
 		remotePlayers: map[uint64]*PlayerInterpolation{},
 	}
 	c.applyPlayerStates([]shared.PlayerState{{PlayerID: 1}, {PlayerID: 2}, {PlayerID: 3}})

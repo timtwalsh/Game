@@ -12,7 +12,7 @@ here: the game itself and a standalone sprite-animation editor. See
 | See *why* a tech decision was made (Go vs Rust vs C++, GC tuning) | [docs/IMPLEMENTATION_NOTES.md](docs/IMPLEMENTATION_NOTES.md) |
 | Look up a wire message format, and whether it's actually wired up | [docs/PROTOCOL_REFERENCE.md](docs/PROTOCOL_REFERENCE.md) |
 | Read the animation-editor tool's design | [docs/ANI_MAKER_SPEC.md](docs/ANI_MAKER_SPEC.md) |
-| Read the level maker / world file format / autotile design (step 1, `shared/world`, built; the rest is proposal) | [docs/LEVEL_MAKER_SPEC.md](docs/LEVEL_MAKER_SPEC.md) |
+| Read the level maker / world file format / autotile design (steps 1-4 built: `shared/world`, art templates, game-side loading; the editor itself is next) | [docs/LEVEL_MAKER_SPEC.md](docs/LEVEL_MAKER_SPEC.md) |
 | Design or build UI/HUD/menus/dialogue — principles, targets, system plan, prioritised task list | [docs/UI_UX.md](docs/UI_UX.md) |
 | Edit client-side prediction/rendering/input | [client/](client/) |
 | Edit server authority, movement validation, anti-cheat | [server/](server/) |

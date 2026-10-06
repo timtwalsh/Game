@@ -2,6 +2,7 @@ package main
 
 import (
 	"game/shared"
+	"game/shared/world"
 	"math"
 	"time"
 )
@@ -82,10 +83,12 @@ type PlayerController struct {
 	LastPosition      shared.Vec2
 	Velocity          shared.Vec2
 	Direction         uint8
-	Collision         shared.CollisionLayer
+	// Collision is the same map the server validates against (loaded from
+	// the same files), so prediction only goes where the server agrees.
+	Collision world.Collider
 }
 
-func NewPlayerController(pos shared.Vec2, collision shared.CollisionLayer) *PlayerController {
+func NewPlayerController(pos shared.Vec2, collision world.Collider) *PlayerController {
 	return &PlayerController{
 		Position:          pos,
 		PredictedPosition: pos,
@@ -105,7 +108,12 @@ func (pc *PlayerController) UpdatePrediction(input *PlayerInput, dt time.Duratio
 	deltaSec := float32(dt.Seconds())
 	movement := input.GetMovementVector()
 
-	speed := shared.MaxSpeed * shared.TileSize
+	// The speed multiplier (swimming...) comes from the tile under the
+	// position's top-left point - the point the server checks - at the start
+	// of the step. The server allows the larger multiplier of a move's two
+	// ends, so this never outruns it.
+	mult := pc.Collision.SpeedMultiplier(world.TileOf(pc.PredictedPosition.X), world.TileOf(pc.PredictedPosition.Y))
+	speed := shared.MaxSpeed * shared.TileSize * mult
 	distance := speed * deltaSec
 
 	if movement.X != 0 || movement.Y != 0 {
@@ -145,10 +153,28 @@ func (pc *PlayerController) RenderPosition(alpha float32) shared.Vec2 {
 	}
 }
 
+// playerHull is the size of the player's collision box, in pixels. The box
+// spans [x, x+playerHull) on each axis from the position, so it contains the
+// position itself: the one point the server checks (CheckWallPhase).
+// Prediction is therefore never more permissive than the server. It's a
+// little smaller than a tile so one-tile gaps don't need pixel-perfect
+// lining up.
+const playerHull = 12
+
+// CanMoveTo reports whether the player's collision box at (x, y) touches no
+// tile that blocks walking.
 func (pc *PlayerController) CanMoveTo(x, y float32) bool {
-	tileX := uint32(x / shared.TileSize)
-	tileY := uint32(y / shared.TileSize)
-	return !pc.Collision.IsBlocked(tileX, tileY)
+	const inside = playerHull - 1.0/64 // the box's far edge, just inside it
+	x0, y0 := world.TileOf(x), world.TileOf(y)
+	x1, y1 := world.TileOf(x+inside), world.TileOf(y+inside)
+	for ty := y0; ty <= y1; ty++ {
+		for tx := x0; tx <= x1; tx++ {
+			if pc.Collision.Blocks(tx, ty, world.BlockGround) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (pc *PlayerController) ServerCorrection(serverPos shared.Vec2) {
